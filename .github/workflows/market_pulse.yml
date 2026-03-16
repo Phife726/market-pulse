@@ -5,6 +5,9 @@ on:
     - cron: '0 10 * * 1-5'
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-market-pulse:
     runs-on: ubuntu-latest
