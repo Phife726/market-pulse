@@ -1,0 +1,44 @@
+competitors:
+  - name: Avient
+    active: true
+  - name: Clariant
+    active: true
+  - name: Ampacet
+    active: true
+  - name: PolyOne
+    active: true
+
+customers:
+  - name: Magna
+    active: true
+  - name: Ford
+    active: true
+  - name: Stellantis
+    active: true
+  - name: Lear Corporation
+    active: true
+
+suppliers:
+  - name: LyondellBasell
+    active: true
+  - name: BASF
+    active: true
+  - name: ExxonMobil
+    active: true
+  - name: Dow
+    active: true
+
+markets:
+  - name: Automotive Compounds
+    active: true
+  - name: Packaging
+    active: true
+  - name: Wire and Cable
+    active: true
+  - name: Building and Construction
+    active: true
+
+discovery:
+  results_per_entity: 2
+  lookback_hours: 24
+  min_article_length: 500
