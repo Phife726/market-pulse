@@ -1,6 +1,7 @@
 import logging
 import os
 import smtplib
+import ssl
 import socket
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
@@ -239,10 +240,17 @@ def send_email(html_content: str) -> None:
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+        if smtp_port == 465:
+            context = smtplib.ssl.create_default_context()
+            smtp_cls = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30, context=context)
+        else:
+            smtp_cls = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+
+        with smtp_cls as server:
+            if smtp_port != 465:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
             server.login(smtp_user, smtp_pass)
             server.sendmail(sender_email, recipients, msg.as_string())
 
