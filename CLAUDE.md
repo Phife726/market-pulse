@@ -43,13 +43,13 @@ The pipeline is two sequential scripts sharing a Supabase database:
 **`delivery_engine.py`** — Fetch → Format → Send
 1. Queries the `todays_intelligence` view (last 24 hours, ordered by `sentiment_score` ascending)
 2. Groups items by `alert_tier`: CRITICAL (1–3), ROUTINE (4–7), STRATEGIC (8–10)
-3. Renders HTML email (BLUF format) and sends via SMTP — Resend (`smtp.resend.com`) on port 587 with STARTTLS. Port 465 is blocked on Azure-hosted runners.
+3. Renders HTML email (BLUF format) and sends via SMTP — Resend (`smtp.resend.com`) on port 465 with `SMTP_SSL`. Port 587/STARTTLS times out on GitHub Actions runners; always use 465.
 
 **Database** (`schema.sql`) — Single table `daily_intelligence` with a `todays_intelligence` view. The view adds an `alert_tier` column derived from `sentiment_score`. The unique index on `url_hash` is the deduplication gate.
 
 **`targets.yaml`** — The only file non-technical editors need to touch. Add/remove entities here; no Python changes required. Top-level keys:
-- `results_per_entity` / `lookback_hours` / `min_article_length` — discovery tuning
-- `entities` — list of `{name, type, active}` where `type` is `competitor | customer | supplier | market`; set `active: false` to pause an entity without deleting it
+- `discovery.results_per_entity` / `lookback_hours` / `min_article_length` — discovery tuning
+- Category sections (`competitors`, `customers`, `suppliers`, `markets`) each contain a list of `{name, active}`; set `active: false` to pause an entity without deleting it
 
 ## Tests
 
@@ -60,3 +60,9 @@ The pipeline is two sequential scripts sharing a Supabase database:
 - `source_url` is injected into the LLM prompt so the model returns the canonical URL deterministically.
 - `SUPABASE_KEY` must be the **Service Role** key (not anon) to bypass Row Level Security.
 - `MAX_DAILY_SCRAPES = 20` must never be raised without confirming free-tier quota headroom across Serper, Firecrawl, and OpenAI.
+- Monday delivery uses a 72-hour lookback (vs. 24 h on other days) to capture Friday news over the weekend — this logic lives in `fetch_todays_intelligence()`.
+
+## Python Conventions
+- Type hints on all function signatures; `Optional[T]` for nullable returns.
+- Structured logging with `%s` placeholders — never f-strings in `logger.*()` calls.
+- Specific exception handling — never bare `except:` or broad `except Exception` without logging `exc`.
