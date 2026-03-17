@@ -11,7 +11,10 @@ create table if not exists daily_intelligence (
     url_hash text not null,
     entities_mentioned jsonb not null default '[]'::jsonb,
     category text not null,
-    trigger_entity text not null
+    trigger_entity text not null,
+    source_publication text,
+    sentiment_rationale text,
+    raw_content text
 );
 
 -- Unique index to prevent duplicate entries for normalized article URLs.
@@ -27,6 +30,18 @@ create index if not exists idx_daily_intelligence_category
 create index if not exists idx_daily_intelligence_sentiment_score
     on daily_intelligence (sentiment_score);
 
+-- Stores one executive summary row per pipeline run date.
+create table if not exists daily_summaries (
+    id uuid primary key default gen_random_uuid(),
+    created_at timestamptz not null default now(),
+    run_date date not null,
+    executive_summary text not null,
+    macro_sentiment text not null
+);
+
+create unique index if not exists idx_daily_summaries_run_date_unique
+    on daily_summaries (run_date);
+
 create or replace view todays_intelligence as
 select
     id,
@@ -39,6 +54,8 @@ select
     entities_mentioned,
     category,
     trigger_entity,
+    source_publication,
+    sentiment_rationale,
     case
         when sentiment_score between 1 and 3 then 'CRITICAL'
         when sentiment_score between 8 and 10 then 'STRATEGIC'

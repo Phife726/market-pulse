@@ -3,7 +3,7 @@ import os
 import smtplib
 import ssl
 import socket
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -31,16 +31,65 @@ def _get_supabase() -> Client:
 # ---------------------------------------------------------------------------
 
 def fetch_todays_intelligence() -> list[dict]:
-    """Fetch all rows from the todays_intelligence view (last 24 h, with alert_tier)."""
+    """Fetch intelligence records, extending lookback to 72 h on Mondays."""
     try:
         supabase = _get_supabase()
-        result = supabase.table("todays_intelligence").select("*").execute()
-        records: list[dict] = result.data or []
-        logger.info("Fetched %d intelligence record(s) for today.", len(records))
+        is_monday = datetime.now().weekday() == 0
+        lookback_hours = 72 if is_monday else 24
+        if is_monday:
+            logger.info("Monday detected — extending lookback to 72 hours.")
+
+        cutoff = (datetime.utcnow() - timedelta(hours=lookback_hours)).isoformat()
+
+        result = (
+            supabase.table("daily_intelligence")
+            .select("*")
+            .gte("created_at", cutoff)
+            .order("sentiment_score", desc=False)
+            .execute()
+        )
+
+        # Compute alert_tier client-side (mirrors the DB view logic)
+        records = []
+        for row in result.data or []:
+            score = row.get("sentiment_score", 5)
+            if score <= 3:
+                row["alert_tier"] = "CRITICAL"
+            elif score >= 8:
+                row["alert_tier"] = "STRATEGIC"
+            else:
+                row["alert_tier"] = "ROUTINE"
+            records.append(row)
+
+        logger.info("Fetched %d intelligence record(s) (lookback: %dh).", len(records), lookback_hours)
         return records
     except Exception as exc:
         logger.error("Failed to fetch intelligence from Supabase: %s", exc)
         return []
+
+
+def fetch_macro_summary() -> dict | None:
+    """Fetch today's macro summary from daily_summaries table.
+
+    Returns the row dict on success, or None if not found or on error.
+    """
+    try:
+        today = datetime.utcnow().date().isoformat()
+        supabase = _get_supabase()
+        result = (
+            supabase.table("daily_summaries")
+            .select("executive_summary, macro_sentiment")
+            .eq("run_date", today)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+        logger.warning("No macro summary found for today (%s).", today)
+        return None
+    except Exception as exc:
+        logger.error("Failed to fetch macro summary: %s", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +134,21 @@ def _render_section(label: str, colour: str, bg: str, items: list[dict]) -> str:
         americhem_impact = item.get("americhem_impact", "")
         category = item.get("category", "").upper()
         score = item.get("sentiment_score", "")
+        source_publication = item.get("source_publication", "")
+        sentiment_rationale = item.get("sentiment_rationale", "")
+
+        rationale_html = (
+            f'<p style="margin:0 0 8px 0;font-size:12px;color:#757575;'
+            f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
+            f'Score rationale: {sentiment_rationale}</p>'
+            if sentiment_rationale else ""
+        )
+
+        publication_html = (
+            f'<span style="display:inline-block;font-size:11px;color:#9E9E9E;'
+            f'font-family:Arial,sans-serif;margin-left:8px;">via {source_publication}</span>'
+            if source_publication else ""
+        )
 
         rows.append(
             f'<tr><td style="padding:8px 0 16px 0;">'
@@ -103,7 +167,10 @@ def _render_section(label: str, colour: str, bg: str, items: list[dict]) -> str:
             f'<p style="margin:8px 0 10px 0;font-size:13px;color:#333333;'
             f'font-family:Arial,sans-serif;line-height:1.5;">{americhem_impact}</p>'
 
-            # Category badge + score badge
+            # Sentiment rationale (italic, small)
+            + rationale_html +
+
+            # Category badge + score badge + publication
             f'<span style="display:inline-block;font-size:11px;font-weight:700;'
             f'color:{colour};background-color:#FFFFFF;border:1px solid {colour};'
             f'border-radius:3px;padding:2px 7px;font-family:Arial,sans-serif;'
@@ -111,6 +178,8 @@ def _render_section(label: str, colour: str, bg: str, items: list[dict]) -> str:
 
             f'<span style="display:inline-block;font-size:11px;color:#757575;'
             f'font-family:Arial,sans-serif;">Score: {score}/10</span>'
+
+            + publication_html +
 
             f'</td></tr>'
             f'</table>'
@@ -120,7 +189,7 @@ def _render_section(label: str, colour: str, bg: str, items: list[dict]) -> str:
     return "\n".join(rows)
 
 
-def generate_html_email(data: list[dict]) -> str:
+def generate_html_email(data: list[dict], macro_summary: dict | None = None) -> str:
     """Build an Outlook-safe, inline-CSS HTML email from today's intelligence records."""
     critical  = [r for r in data if r.get("alert_tier") == "CRITICAL"]
     strategic = [r for r in data if r.get("alert_tier") == "STRATEGIC"]
@@ -135,6 +204,27 @@ def generate_html_email(data: list[dict]) -> str:
 
     today_str = datetime.now().strftime("%B %d, %Y")
     total = len(data)
+
+    exec_block = ""
+    if macro_summary:
+        sentiment = macro_summary.get("macro_sentiment", "")
+        summary_text = macro_summary.get("executive_summary", "")
+        exec_block = f"""
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:16px;">
+                      <tr>
+                        <td style="background-color:#E8EAF6;border-left:4px solid #3949AB;
+                                    padding:16px 20px;border-radius:0 4px 4px 0;">
+                          <p style="margin:0 0 6px 0;font-size:11px;font-weight:700;letter-spacing:1px;
+                                     color:#3949AB;font-family:Arial,sans-serif;text-transform:uppercase;">
+                            Executive Summary &nbsp;&middot;&nbsp;
+                            <span style="background-color:#3949AB;color:#FFFFFF;padding:2px 8px;
+                                          border-radius:3px;font-size:10px;">{sentiment}</span>
+                          </p>
+                          <p style="margin:0;font-size:13px;color:#1A237E;font-family:Arial,sans-serif;
+                                     line-height:1.6;">{summary_text}</p>
+                        </td>
+                      </tr>
+                    </table>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -181,6 +271,7 @@ def generate_html_email(data: list[dict]) -> str:
                 <tr>
                   <td style="padding:8px 32px 24px 32px;">
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      {exec_block}
                       {section_html}
                     </table>
                   </td>
@@ -216,6 +307,24 @@ def generate_html_email(data: list[dict]) -> str:
 </html>"""
 
     return html
+
+
+def _generate_no_news_email() -> str:
+    """Return a minimal HTML email for days with no processed articles."""
+    today_str = datetime.now().strftime("%B %d, %Y")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<body style="font-family:Arial,sans-serif;padding:24px;color:#333;">
+  <h2 style="color:#1A237E;">AmI Market-Pulse: Daily Intelligence</h2>
+  <p style="color:#666;font-size:13px;">{today_str}</p>
+  <p>No significant market events were detected in today's monitoring window.
+  All target entities were checked — no articles met the relevance threshold.</p>
+  <hr style="border:0;border-top:1px solid #eee;margin:24px 0;">
+  <p style="font-size:11px;color:#999;text-align:center;">
+    Generated by the AmI (Americhem Intelligence) Pipeline.
+  </p>
+</body>
+</html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -271,10 +380,14 @@ def send_email(html_content: str) -> None:
 
 def execute_pipeline() -> None:
     data = fetch_todays_intelligence()
+    macro_summary = fetch_macro_summary()
+
     if not data:
-        logger.warning("No intelligence records found for today — skipping email.")
+        logger.warning("No intelligence records found — sending no-news notification.")
+        send_email(_generate_no_news_email())
         return
-    html = generate_html_email(data)
+
+    html = generate_html_email(data, macro_summary)
     send_email(html)
 
 

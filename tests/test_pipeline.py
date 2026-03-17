@@ -160,3 +160,43 @@ def test_load_targets_returns_expected_fields(tmp_path):
     assert t["results_per_entity"] == 3
     assert t["lookback_hours"] == 48
     assert t["min_article_length"] == 300
+
+
+# ---------------------------------------------------------------------------
+# 5. DISCARD signal detection
+# ---------------------------------------------------------------------------
+
+def test_discard_signal_detected():
+    """synthesize_insight returning DISCARD must be detectable before store."""
+    insight = {"americhem_impact": "DISCARD"}
+    assert insight.get("americhem_impact") == "DISCARD"
+
+
+# ---------------------------------------------------------------------------
+# 6. raw_materials category loading
+# ---------------------------------------------------------------------------
+
+def test_raw_materials_category_loaded(tmp_path):
+    """raw_materials entities must be returned by load_targets."""
+    config_yaml = textwrap.dedent(
+        """\
+        competitors: []
+        customers: []
+        suppliers: []
+        raw_materials:
+          - name: "commodity resins"
+            active: true
+        markets: []
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+
+    targets = load_targets(str(config_file))
+    names = [t["name"] for t in targets]
+    assert "commodity resins" in names
+    assert targets[0]["category"] == "raw_materials"

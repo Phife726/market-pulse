@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 from typing import Optional
 
@@ -51,7 +52,7 @@ def load_targets(config_path: str) -> list[dict]:
     lookback_hours: int = discovery.get("lookback_hours", 24)
     min_article_length: int = discovery.get("min_article_length", 500)
 
-    entity_categories = ("competitors", "customers", "suppliers", "markets")
+    entity_categories = ("competitors", "customers", "suppliers", "raw_materials", "markets")
     targets: list[dict] = []
 
     for category in entity_categories:
@@ -210,22 +211,57 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
 # 7. LLM synthesis via OpenAI
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """You are an expert market intelligence analyst for AmI (Americhem Intelligence).
-Your job is to analyze news articles and extract structured intelligence relevant to Americhem,
-a specialty polymer and color masterbatch company serving automotive, packaging, wire and cable,
-and building and construction end markets.
+_SYSTEM_PROMPT = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
+a global manufacturer of custom color masterbatch, functional additives, and engineered compounds
+serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
-You MUST respond with valid JSON only — no prose, no markdown fences. The JSON must contain
-exactly these keys:
-- headline (string): A concise, factual headline summarizing the article (max 15 words).
-- americhem_impact (string): A BLUF (Bottom Line Up Front) sentence explaining the direct
-  relevance or risk to Americhem's business. Be specific about supply chain, pricing, competition,
-  or demand implications.
-- sentiment_score (integer 1-10): Market sentiment from Americhem's perspective.
-  1-3 = critical threat / negative, 4-7 = routine / neutral, 8-10 = strategic opportunity.
-- source_url (string): The exact URL provided by the user — copy it verbatim.
-- entities_mentioned (array of strings): Named companies, materials, or markets referenced
-  in the article that are relevant to Americhem."""
+Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
+four rules below before generating any output.
+
+RULE 1 — ENTITY DISAMBIGUATION:
+Before scoring, verify that the named entity in this article is the correct one.
+- If the article mentions "Dow" verify it refers to Dow Chemical / Dow Inc., not the Dow Jones index.
+- If the article mentions "Magna" verify it refers to Magna International, not the Magna Carta.
+- If the article mentions "Celanese" verify it is the chemical company, not an unrelated brand.
+- If the entity is a false match (wrong Dow, wrong Magna, unrelated brand), output ONLY this JSON:
+  {"americhem_impact": "DISCARD"}
+
+RULE 2 — THREAT MATRIX CALIBRATION:
+Anchor sentiment_score strictly to supply chain and commercial physics:
+- Score 1–3 (CRITICAL): Plant fires, force majeures, port strikes, raw material shortages,
+  supplier bankruptcy. These are immediate, physical supply chain threats.
+- Score 4–7 (ROUTINE): Quarterly earnings, standard M&A, executive changes, general market
+  trends, long-term R&D announcements. Cap all R&D and innovation articles at 6.
+- Score 8–10 (STRATEGIC): Competitor bankruptcy or major capacity loss, large raw material
+  price drops that benefit Americhem, significant OEM customer capacity expansion.
+
+RULE 3 — RIGOROUS OPTIONALITY:
+Do not invent generic impacts. If the article does not contain specific metrics, pricing data,
+or direct supply chain/demand shifts for Americhem, you MUST write exactly:
+"No direct impact. Monitoring required."
+Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
+
+RULE 4 — DOMAIN RELEVANCE FIREWALL:
+Americhem is a plastics and specialty chemicals manufacturer. If the article does not explicitly
+discuss plastics, polymers, masterbatch, compounding, specialty chemicals, colorants, additives,
+or upstream chemical supply chains, it is noise. Examples of noise: HR policy, software updates,
+general airline or logistics news, unrelated financial markets. If the article fails this domain
+test, output ONLY this JSON:
+{"americhem_impact": "DISCARD"}
+
+If the article passes all four rules, extract data into this strict JSON schema.
+Output ONLY the JSON object — no preamble, no markdown, no explanation.
+
+{
+  "headline": "<concise factual summary, max 12 words>",
+  "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
+  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 3.>",
+  "sentiment_score": <integer 1-10 per Rule 2>,
+  "sentiment_rationale": "<max 10 words explaining exactly why this score was assigned>",
+  "source_url": "<MUST EXACTLY MATCH the URL provided in the user prompt>",
+  "entities_mentioned": ["<companies, chemicals, or regions mentioned>"]
+}"""
+
 
 def synthesize_insight(
     article_text: str,
@@ -270,6 +306,10 @@ def synthesize_insight(
         logger.error("Failed to parse OpenAI JSON response: %s — raw: %s", exc, raw_content[:200])
         return None
 
+    # Return DISCARD signal early before required-keys validation
+    if insight.get("americhem_impact") == "DISCARD":
+        return insight
+
     # Validate required keys
     required_keys = {"headline", "americhem_impact", "sentiment_score", "source_url", "entities_mentioned"}
     missing = required_keys - insight.keys()
@@ -288,6 +328,10 @@ def synthesize_insight(
     # Ensure entities_mentioned is a list
     if not isinstance(insight["entities_mentioned"], list):
         insight["entities_mentioned"] = []
+
+    # Normalize new optional fields to empty string if missing
+    insight.setdefault("source_publication", "")
+    insight.setdefault("sentiment_rationale", "")
 
     return insight
 
@@ -310,7 +354,91 @@ def store_insight(payload: dict) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 9. Main pipeline
+# 9. Macro summary generation
+# ---------------------------------------------------------------------------
+
+def generate_macro_summary(articles: list[dict]) -> bool:
+    """Generate a macro executive summary from today's stored articles.
+
+    Calls gpt-4o-mini with all article headlines and impacts, then upserts
+    a single row into daily_summaries keyed on today's run_date.
+
+    Args:
+        articles: List of insight payload dicts stored during this run.
+
+    Returns:
+        True on success, False on any failure.
+    """
+    if not articles:
+        logger.warning("No articles to summarize — skipping macro summary generation.")
+        return False
+
+    client = _get_openai()
+
+    article_digest = "\n".join(
+        f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
+        f"(Score {a.get('sentiment_score', '')}/10): {a.get('americhem_impact', '')}"
+        for a in articles
+    )
+
+    user_prompt = (
+        f"Today's market intelligence digest for Americhem ({len(articles)} articles):\n\n"
+        f"{article_digest}\n\n"
+        f"Generate a JSON object with exactly two keys:\n"
+        f"- executive_summary: A 3-sentence macro summary of today's most important market movements "
+        f"and their implications for Americhem's supply chain and commercial position.\n"
+        f"- macro_sentiment: One word or short phrase describing overall market tone "
+        f"(e.g. Stable, Bearish, Volatile, Cautiously Optimistic, Bullish).\n"
+        f"Output ONLY the JSON object."
+    )
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "You are a senior market intelligence analyst. Output only valid JSON."},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+        )
+    except Exception as exc:
+        logger.error("OpenAI macro summary call failed: %s", exc)
+        return False
+
+    raw = completion.choices[0].message.content or ""
+
+    try:
+        summary = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("Failed to parse macro summary JSON: %s — raw: %s", exc, raw[:200])
+        return False
+
+    if "executive_summary" not in summary or "macro_sentiment" not in summary:
+        logger.error("Macro summary missing required keys: %s", list(summary.keys()))
+        return False
+
+    run_date = datetime.utcnow().date().isoformat()
+
+    try:
+        supabase = _get_supabase()
+        supabase.table("daily_summaries").upsert(
+            {
+                "run_date": run_date,
+                "executive_summary": summary["executive_summary"],
+                "macro_sentiment": summary["macro_sentiment"],
+            },
+            on_conflict="run_date",
+        ).execute()
+        logger.info("Macro summary stored — sentiment: %s", summary["macro_sentiment"])
+        return True
+    except Exception as exc:
+        logger.error("Supabase upsert failed for daily_summaries: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# 10. Main pipeline
 # ---------------------------------------------------------------------------
 
 def execute_pipeline() -> None:
@@ -322,10 +450,12 @@ def execute_pipeline() -> None:
         "urls_discovered": 0,
         "urls_skipped_duplicate": 0,
         "urls_skipped_too_short": 0,
+        "urls_skipped_discard": 0,
         "scrapes_attempted": 0,
         "insights_stored": 0,
         "errors": 0,
     }
+    stored_articles_buffer: list[dict] = []
 
     for target in targets:
         entity_name: str = target["name"]
@@ -343,6 +473,7 @@ def execute_pipeline() -> None:
                     "MAX_DAILY_SCRAPES (%d) reached — stopping pipeline early.", MAX_DAILY_SCRAPES
                 )
                 _log_stats(stats)
+                generate_macro_summary(stored_articles_buffer)
                 return
 
             normalized = normalize_url(raw_url)
@@ -368,6 +499,12 @@ def execute_pipeline() -> None:
                 time.sleep(1.5)
                 continue
 
+            if insight.get("americhem_impact") == "DISCARD":
+                logger.info("DISCARD — false positive or domain mismatch: %s", normalized)
+                stats["urls_skipped_discard"] += 1
+                time.sleep(1.5)
+                continue
+
             payload = {
                 "headline": insight["headline"],
                 "americhem_impact": insight["americhem_impact"],
@@ -377,6 +514,8 @@ def execute_pipeline() -> None:
                 "entities_mentioned": insight["entities_mentioned"],
                 "category": category,
                 "trigger_entity": entity_name,
+                "source_publication": insight.get("source_publication", ""),
+                "sentiment_rationale": insight.get("sentiment_rationale", ""),
             }
 
             if store_insight(payload):
@@ -384,21 +523,24 @@ def execute_pipeline() -> None:
                     "Stored [score=%d] %s", insight["sentiment_score"], insight["headline"]
                 )
                 stats["insights_stored"] += 1
+                stored_articles_buffer.append(payload)
             else:
                 stats["errors"] += 1
 
             time.sleep(1.5)
 
     _log_stats(stats)
+    generate_macro_summary(stored_articles_buffer)
 
 
 def _log_stats(stats: dict) -> None:
     logger.info(
         "Pipeline complete — discovered: %d | duplicates skipped: %d | "
-        "too short: %d | scrapes attempted: %d | stored: %d | errors: %d",
+        "too short: %d | discards: %d | scrapes attempted: %d | stored: %d | errors: %d",
         stats["urls_discovered"],
         stats["urls_skipped_duplicate"],
         stats["urls_skipped_too_short"],
+        stats.get("urls_skipped_discard", 0),
         stats["scrapes_attempted"],
         stats["insights_stored"],
         stats["errors"],

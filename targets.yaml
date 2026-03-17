@@ -1,3 +1,23 @@
+# ============================================================
+# Market-Pulse Control Panel
+# ============================================================
+# To monitor a new entity: add a line with name and active: true
+# To pause an entity:      set active: false
+# No Python changes required — just edit this file and commit.
+#
+# Categories:
+#   competitors   — direct market competitors
+#   customers     — Americhem's key accounts
+#   suppliers     — raw material and chemical suppliers
+#   raw_materials — commodity/specialty material keyword searches
+#   markets       — broad industry/segment keyword searches
+#
+# discovery settings control how Serper.dev queries are constructed:
+#   results_per_entity  — articles fetched per entity per run
+#   lookback_hours      — how far back to search
+#   min_article_length  — minimum chars to pass to LLM (filters stubs)
+# ============================================================
+
 competitors:
   - name: Avient
     active: true
@@ -28,6 +48,20 @@ suppliers:
   - name: AdvanSix
     active: true
 
+raw_materials:
+  - name: "commodity resins polypropylene polyethylene"
+    active: true
+  - name: "engineered resins nylon polycarbonate"
+    active: true
+  - name: "colorants pigments masterbatch"
+    active: true
+  - name: "UV stabilizers HALS"
+    active: true
+  - name: "flame retardants polymer additives"
+    active: true
+  - name: "titanium dioxide TiO2 supply"
+    active: true
+
 markets:
   - name: Automotive Compounds
     active: true
@@ -36,6 +70,12 @@ markets:
   - name: Medical Devices
     active: true
   - name: Building and Construction
+    active: true
+  - name: "custom color masterbatch market"
+    active: true
+  - name: "polymer compounding market"
+    active: true
+  - name: "plastics recycling circularity"
     active: true
 
 discovery:
