@@ -200,3 +200,67 @@ def test_raw_materials_category_loaded(tmp_path):
     names = [t["name"] for t in targets]
     assert "commodity resins" in names
     assert targets[0]["category"] == "raw_materials"
+
+
+# ---------------------------------------------------------------------------
+# 7. recommended_action soft default
+# ---------------------------------------------------------------------------
+
+def _make_openai_mock_no_action(sentiment_score: int) -> MagicMock:
+    """Return a mock OpenAI client whose response omits recommended_action."""
+    content = json.dumps(
+        {
+            "headline": "Test Headline",
+            "americhem_impact": "Test impact on Americhem.",
+            "sentiment_score": sentiment_score,
+            "source_url": "https://news.com/article",
+            "entities_mentioned": ["Avient"],
+        }
+    )
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+    return mock_client
+
+
+def _make_openai_mock_invalid_action(sentiment_score: int) -> MagicMock:
+    """Return a mock OpenAI client whose response has an invalid recommended_action."""
+    content = json.dumps(
+        {
+            "headline": "Test Headline",
+            "americhem_impact": "Test impact on Americhem.",
+            "sentiment_score": sentiment_score,
+            "recommended_action": "Do something weird",
+            "source_url": "https://news.com/article",
+            "entities_mentioned": ["Avient"],
+        }
+    )
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+    return mock_client
+
+
+@pytest.mark.parametrize("mock_fn", [_make_openai_mock_no_action, _make_openai_mock_invalid_action])
+def test_recommended_action_default(mock_fn):
+    """Missing or invalid recommended_action must soft-default to 'Monitor', not discard the article."""
+    with patch("ingestion_engine._get_openai", return_value=mock_fn(5)):
+        result = synthesize_insight(
+            article_text="Some article text about the market.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+
+    assert result is not None, "synthesize_insight must not return None for missing recommended_action"
+    assert result["recommended_action"] == "Monitor"

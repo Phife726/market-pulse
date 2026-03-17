@@ -167,6 +167,26 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
       </tr>"""
 
 
+def _sentiment_word(score: int) -> tuple[str, str]:
+    """Map a sentiment score to a (word, hex_color) pair for display.
+
+    Args:
+        score: Integer sentiment score in the range 1–10.
+
+    Returns:
+        Tuple of (sentiment_word, hex_color_string).
+    """
+    if score <= 3:
+        return ("Negative", "#DC2626")
+    if score <= 4:
+        return ("Cautionary", "#D97706")
+    if score <= 6:
+        return ("Neutral", "#6B7280")
+    if score <= 8:
+        return ("Positive", "#16A34A")
+    return ("Opportunity", "#15803D")
+
+
 def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     """Return the HTML for a single article card.
 
@@ -187,6 +207,9 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     source_publication  = item.get("source_publication", "")
     sentiment_rationale = item.get("sentiment_rationale", "")
 
+    recommended_action  = item.get("recommended_action", "")
+    sentiment_word, sentiment_color = _sentiment_word(int(score) if score else 5)
+
     source_pub_html = (
         f'<span style="font-size:11px;color:#9CA3AF;'
         f'font-family:Arial,sans-serif;">via {source_publication}</span>'
@@ -198,6 +221,14 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
         f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
         f'Score rationale: {sentiment_rationale}</p>'
         if sentiment_rationale else ""
+    )
+
+    action_html = (
+        f'<p style="margin:0 0 10px 0;padding:6px 10px;background-color:#F9FAFB;'
+        f'border-left:3px solid {accent};font-size:12px;font-weight:600;'
+        f'font-family:Arial,sans-serif;color:{accent};">'
+        f'&#9654; ACTION: {recommended_action}</p>'
+        if recommended_action and recommended_action != "No action" else ""
     )
 
     return f"""
@@ -225,6 +256,7 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
                         &nbsp;{americhem_impact}
                       </p>
                       {rationale_html}
+                      {action_html}
                       <table width="100%" cellpadding="0" cellspacing="0" border="0">
                         <tr>
                           <td>
@@ -239,9 +271,13 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
                             &nbsp;{source_pub_html}
                           </td>
                           <td align="right"
-                              style="font-size:11px;color:#9CA3AF;
-                                     font-family:Arial,sans-serif;">
-                            Score: {score}/10
+                              style="font-size:11px;font-family:Arial,sans-serif;">
+                            <span style="color:{sentiment_color};font-weight:600;">
+                              {sentiment_word}
+                            </span>
+                            <span style="color:#9CA3AF;">
+                              &nbsp;&#9679;&nbsp;Score: {score}/10
+                            </span>
                           </td>
                         </tr>
                       </table>
@@ -376,7 +412,7 @@ def generate_html_email(
                           <img src="{_LOGO_URL}"
                                alt="Americhem"
                                width="140"
-                               style="display:block;height:auto;max-height:40px;background-color:#ffffff;padding:3px 8px;border-radius:3px;">
+                               style="display:block;height:auto;max-height:40px;filter:brightness(0) invert(1);">
                         </td>
                         <td style="width:1%;white-space:nowrap;padding-right:16px;">
                           <div style="width:1px;height:32px;
