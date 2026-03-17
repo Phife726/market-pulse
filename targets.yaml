@@ -5,27 +5,27 @@ competitors:
     active: true
   - name: Ampacet
     active: true
-  - name: PolyOne
+  - name: RTP Company
     active: true
 
 customers:
-  - name: Magna
+  - name: Shaw Industries
     active: true
-  - name: Ford
+  - name: Advanced Composites
     active: true
-  - name: Stellantis
+  - name: Cornerstone Building Brands
     active: true
-  - name: Lear Corporation
+  - name: Bemis Company
     active: true
 
 suppliers:
-  - name: LyondellBasell
+  - name: Oxy Vinyls
     active: true
   - name: BASF
     active: true
-  - name: ExxonMobil
+  - name: Modern Dispersions
     active: true
-  - name: Dow
+  - name: AdvanSix
     active: true
 
 markets:
@@ -33,7 +33,7 @@ markets:
     active: true
   - name: Packaging
     active: true
-  - name: Wire and Cable
+  - name: Medical Devices
     active: true
   - name: Building and Construction
     active: true
