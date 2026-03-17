@@ -376,7 +376,7 @@ def generate_html_email(
                           <img src="{_LOGO_URL}"
                                alt="Americhem"
                                width="140"
-                               style="display:block;height:auto;max-height:40px;filter:brightness(0) invert(1);">
+                               style="display:block;height:auto;max-height:40px;background-color:#ffffff;padding:3px 8px;border-radius:3px;">
                         </td>
                         <td style="width:1%;white-space:nowrap;padding-right:16px;">
                           <div style="width:1px;height:32px;
