@@ -31,7 +31,7 @@ suppliers:
 markets:
   - name: Automotive Compounds
     active: true
-  - name: Packaging
+  - name: Nonwoven Fabrics
     active: true
   - name: Medical Devices
     active: true
