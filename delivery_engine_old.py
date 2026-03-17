@@ -623,7 +623,7 @@ def send_email(html_content: str) -> None:
 # ---------------------------------------------------------------------------
 
 def execute_pipeline() -> None:
-    """Orchestrate the delivery: fetch data → generate HTML → send email.
+    """Orchestrate the delivery: fetch data — generate HTML — send email.
 
     Sends a no-news notification when no records are found so stakeholders
     know the pipeline ran successfully even on quiet market days.
