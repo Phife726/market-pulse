@@ -592,10 +592,17 @@ def send_email(html_content: str) -> None:
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
+        if smtp_port == 465:
+            _ctx = smtplib.ssl.create_default_context()
+            _conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30, context=_ctx)
+        else:
+            _conn = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+
+        with _conn as server:
+            if smtp_port != 465:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
             server.login(smtp_user, smtp_pass)
             server.sendmail(sender_email, recipients, msg.as_string())
 
