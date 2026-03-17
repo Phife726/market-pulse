@@ -15,6 +15,7 @@ create table if not exists daily_intelligence (
     source_publication text,
     sentiment_rationale text,
     recommended_action text,
+    article_summary text,
     raw_content text
 );
 
@@ -48,6 +49,7 @@ select
     id,
     created_at,
     headline,
+    article_summary,
     americhem_impact,
     sentiment_score,
     source_url,
@@ -57,6 +59,7 @@ select
     trigger_entity,
     source_publication,
     sentiment_rationale,
+    recommended_action,
     case
         when sentiment_score between 1 and 3 then 'CRITICAL'
         when sentiment_score between 8 and 10 then 'STRATEGIC'
