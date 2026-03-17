@@ -1,7 +1,6 @@
 import logging
 import os
 import smtplib
-import ssl
 import socket
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
@@ -15,23 +14,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Americhem brand constants
+# ---------------------------------------------------------------------------
+
+_BRAND_NAVY       = "#1B3A6B"
+_BRAND_NAVY_DARK  = "#152E56"
+_BRAND_GREEN      = "#7FB069"
+_LOGO_URL = (
+    "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
+)
+
 
 # ---------------------------------------------------------------------------
 # Client factory
 # ---------------------------------------------------------------------------
 
 def _get_supabase() -> Client:
+    """Return an authenticated Supabase client using env credentials."""
     url = os.environ["SUPABASE_URL"]
     key = os.environ["SUPABASE_KEY"]
     return create_client(url, key)
 
 
 # ---------------------------------------------------------------------------
-# 1. Data fetch
+# 1. Data fetch — with Monday 72-hour lookback
 # ---------------------------------------------------------------------------
 
 def fetch_todays_intelligence() -> list[dict]:
-    """Fetch intelligence records, extending lookback to 72 h on Mondays."""
+    """Fetch intelligence records, extending lookback to 72 h on Mondays.
+
+    On Monday mornings the standard 24-hour window misses Friday news.
+    alert_tier is computed client-side to mirror the DB view logic.
+
+    Returns:
+        List of row dicts ordered by sentiment_score ascending (critical first).
+    """
     try:
         supabase = _get_supabase()
         is_monday = datetime.now().weekday() == 0
@@ -49,8 +67,7 @@ def fetch_todays_intelligence() -> list[dict]:
             .execute()
         )
 
-        # Compute alert_tier client-side (mirrors the DB view logic)
-        records = []
+        records: list[dict] = []
         for row in result.data or []:
             score = row.get("sentiment_score", 5)
             if score <= 3:
@@ -61,20 +78,27 @@ def fetch_todays_intelligence() -> list[dict]:
                 row["alert_tier"] = "ROUTINE"
             records.append(row)
 
-        logger.info("Fetched %d intelligence record(s) (lookback: %dh).", len(records), lookback_hours)
+        logger.info(
+            "Fetched %d intelligence record(s) (lookback: %dh).",
+            len(records),
+            lookback_hours,
+        )
         return records
+
     except Exception as exc:
         logger.error("Failed to fetch intelligence from Supabase: %s", exc)
         return []
 
 
 def fetch_macro_summary() -> dict | None:
-    """Fetch today's macro summary from daily_summaries table.
+    """Fetch today's executive summary row from daily_summaries.
 
-    Returns the row dict on success, or None if not found or on error.
+    Returns:
+        Dict with 'executive_summary' and 'macro_sentiment' keys, or None.
     """
     try:
-        today = datetime.utcnow().date().isoformat()
+        from datetime import date
+        today = date.today().isoformat()
         supabase = _get_supabase()
         result = (
             supabase.table("daily_summaries")
@@ -93,202 +117,336 @@ def fetch_macro_summary() -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# 2. HTML generation
+# 2. HTML generation helpers
 # ---------------------------------------------------------------------------
 
-# Tier configuration: (alert_tier value, emoji + label, hex colour, light bg)
-_TIERS = [
-    ("CRITICAL",  "🛑 CRITICAL DISRUPTIONS",     "#D32F2F", "#FFEBEE"),
-    ("STRATEGIC", "📈 STRATEGIC OPPORTUNITIES",  "#388E3C", "#E8F5E9"),
-    ("ROUTINE",   "📊 ROUTINE MONITORING",        "#555555", "#F5F5F5"),
-]
+def _render_exec_summary(macro_summary: dict | None) -> str:
+    """Return the HTML block for the executive summary section.
+
+    Args:
+        macro_summary: Dict with 'executive_summary' and 'macro_sentiment',
+                       or None if unavailable.
+
+    Returns:
+        HTML string — empty string if no summary available.
+    """
+    if not macro_summary:
+        return ""
+
+    sentiment    = macro_summary.get("macro_sentiment", "")
+    summary_text = macro_summary.get("executive_summary", "")
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 0 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="background-color:#EEF2FF;border-left:3px solid {_BRAND_NAVY};
+                          border-radius:0 6px 6px 0;padding:16px 20px;">
+                <p style="margin:0 0 8px 0;font-size:10px;font-weight:700;
+                           letter-spacing:1.5px;color:{_BRAND_NAVY};
+                           font-family:Arial,sans-serif;text-transform:uppercase;">
+                  Executive Summary &nbsp;
+                  <span style="background-color:{_BRAND_NAVY};color:#ffffff;
+                                padding:2px 10px;border-radius:20px;
+                                font-size:10px;font-weight:600;
+                                letter-spacing:0.5px;">{sentiment}</span>
+                </p>
+                <p style="margin:0;font-size:14px;color:#1a2a45;
+                           font-family:Georgia,'Times New Roman',serif;
+                           line-height:1.65;">{summary_text}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
 
 
-def _render_section(label: str, colour: str, bg: str, items: list[dict]) -> str:
-    """Return the HTML string for one alert-tier section."""
-    rows = []
+def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
+    """Return the HTML for a single article card.
 
-    # Section header
-    rows.append(
-        f'<tr><td style="padding:24px 0 8px 0;">'
-        f'<h2 style="margin:0;font-size:16px;font-weight:700;'
-        f'color:{colour};font-family:Arial,sans-serif;'
-        f'border-bottom:2px solid {colour};padding-bottom:8px;">'
-        f'{label}</h2>'
-        f'</td></tr>'
+    Args:
+        item:   Row dict from daily_intelligence.
+        accent: Hex color for accent bar and headline link.
+        bg:     Hex color for category badge background.
+        text:   Hex color for category badge text.
+
+    Returns:
+        HTML string for one card block.
+    """
+    headline            = item.get("headline", "No headline")
+    source_url          = item.get("source_url", "#")
+    americhem_impact    = item.get("americhem_impact", "")
+    category            = item.get("category", "").upper()
+    score               = item.get("sentiment_score", "")
+    source_publication  = item.get("source_publication", "")
+    sentiment_rationale = item.get("sentiment_rationale", "")
+
+    source_pub_html = (
+        f'<span style="font-size:11px;color:#9CA3AF;'
+        f'font-family:Arial,sans-serif;">via {source_publication}</span>'
+        if source_publication else ""
     )
 
+    rationale_html = (
+        f'<p style="margin:0 0 10px 0;font-size:12px;color:#6B7280;'
+        f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
+        f'Score rationale: {sentiment_rationale}</p>'
+        if sentiment_rationale else ""
+    )
+
+    return f"""
+            <tr>
+              <td style="padding:0 0 10px 0;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0"
+                       style="border:0.5px solid #E5E7EB;border-radius:6px;
+                              overflow:hidden;background-color:#ffffff;">
+                  <tr>
+                    <td style="background-color:{accent};height:3px;
+                                font-size:0;line-height:0;">&nbsp;</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:14px 16px;">
+                      <a href="{source_url}"
+                         style="font-size:14px;font-weight:700;color:{accent};
+                                font-family:Arial,sans-serif;text-decoration:none;
+                                line-height:1.4;display:block;margin-bottom:8px;">
+                        {headline}
+                      </a>
+                      <p style="margin:0 0 8px 0;font-size:13px;color:#374151;
+                                 font-family:Georgia,'Times New Roman',serif;
+                                 line-height:1.6;">
+                        <strong style="color:#111827;">Americhem impact:</strong>
+                        &nbsp;{americhem_impact}
+                      </p>
+                      {rationale_html}
+                      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                        <tr>
+                          <td>
+                            <span style="display:inline-block;font-size:10px;
+                                          font-weight:700;letter-spacing:0.8px;
+                                          text-transform:uppercase;padding:2px 8px;
+                                          border-radius:3px;background-color:{bg};
+                                          color:{text};border:1px solid {accent};
+                                          font-family:Arial,sans-serif;">
+                              {category}
+                            </span>
+                            &nbsp;{source_pub_html}
+                          </td>
+                          <td align="right"
+                              style="font-size:11px;color:#9CA3AF;
+                                     font-family:Arial,sans-serif;">
+                            Score: {score}/10
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>"""
+
+
+def _render_section(
+    tier: str,
+    label: str,
+    accent: str,
+    bg: str,
+    text: str,
+    items: list[dict],
+) -> str:
+    """Return HTML for one alert-tier section (header + cards).
+
+    Returns empty string if items list is empty (no empty sections rendered).
+    """
     if not items:
-        rows.append(
-            f'<tr><td style="padding:8px 0 16px 0;">'
-            f'<p style="margin:0;font-size:13px;color:#9E9E9E;'
-            f'font-family:Arial,sans-serif;font-style:italic;">'
-            f'No items in this category today.</p>'
-            f'</td></tr>'
-        )
-        return "\n".join(rows)
+        return ""
 
-    for item in items:
-        headline = item.get("headline", "")
-        source_url = item.get("source_url", "#")
-        americhem_impact = item.get("americhem_impact", "")
-        category = item.get("category", "").upper()
-        score = item.get("sentiment_score", "")
-        source_publication = item.get("source_publication", "")
-        sentiment_rationale = item.get("sentiment_rationale", "")
+    cards_html = "".join(
+        _render_card(item, accent, bg, text) for item in items
+    )
 
-        rationale_html = (
-            f'<p style="margin:0 0 8px 0;font-size:12px;color:#757575;'
-            f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
-            f'Score rationale: {sentiment_rationale}</p>'
-            if sentiment_rationale else ""
-        )
-
-        publication_html = (
-            f'<span style="display:inline-block;font-size:11px;color:#9E9E9E;'
-            f'font-family:Arial,sans-serif;margin-left:8px;">via {source_publication}</span>'
-            if source_publication else ""
-        )
-
-        rows.append(
-            f'<tr><td style="padding:8px 0 16px 0;">'
-
-            # Card container
-            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
-            f'<tr><td style="background-color:{bg};border-left:4px solid {colour};'
-            f'padding:14px 16px;border-radius:0 4px 4px 0;">'
-
-            # Headline as link
-            f'<a href="{source_url}" style="font-size:15px;font-weight:700;'
-            f'color:{colour};font-family:Arial,sans-serif;text-decoration:none;'
-            f'line-height:1.4;">{headline}</a>'
-
-            # Impact paragraph
-            f'<p style="margin:8px 0 10px 0;font-size:13px;color:#333333;'
-            f'font-family:Arial,sans-serif;line-height:1.5;">{americhem_impact}</p>'
-
-            # Sentiment rationale (italic, small)
-            + rationale_html +
-
-            # Category badge + score badge + publication
-            f'<span style="display:inline-block;font-size:11px;font-weight:700;'
-            f'color:{colour};background-color:#FFFFFF;border:1px solid {colour};'
-            f'border-radius:3px;padding:2px 7px;font-family:Arial,sans-serif;'
-            f'letter-spacing:0.5px;margin-right:6px;">{category}</span>'
-
-            f'<span style="display:inline-block;font-size:11px;color:#757575;'
-            f'font-family:Arial,sans-serif;">Score: {score}/10</span>'
-
-            + publication_html +
-
-            f'</td></tr>'
-            f'</table>'
-            f'</td></tr>'
-        )
-
-    return "\n".join(rows)
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:{text};
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      {label.upper()}
+                    </td>
+                    <td style="border-bottom:1px solid {accent};width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {cards_html}
+          </table>
+        </td>
+      </tr>"""
 
 
-def generate_html_email(data: list[dict], macro_summary: dict | None = None) -> str:
-    """Build an Outlook-safe, inline-CSS HTML email from today's intelligence records."""
+# ---------------------------------------------------------------------------
+# 3. Main email generator
+# ---------------------------------------------------------------------------
+
+def generate_html_email(
+    data: list[dict],
+    macro_summary: dict | None = None,
+) -> str:
+    """Build the full Americhem-branded BLUF HTML email.
+
+    Table-based layout with inline CSS for Outlook compatibility.
+    Logo loads from Americhem CDN; text fallback handles blocked images.
+
+    Args:
+        data:          List of intelligence rows (alert_tier must be set).
+        macro_summary: Optional dict with executive_summary and macro_sentiment.
+
+    Returns:
+        Complete HTML email string ready for SMTP transmission.
+    """
     critical  = [r for r in data if r.get("alert_tier") == "CRITICAL"]
     strategic = [r for r in data if r.get("alert_tier") == "STRATEGIC"]
     routine   = [r for r in data if r.get("alert_tier") == "ROUTINE"]
 
-    tier_map = {"CRITICAL": critical, "STRATEGIC": strategic, "ROUTINE": routine}
-
-    section_html = "\n".join(
-        _render_section(label, colour, bg, tier_map[tier])
-        for tier, label, colour, bg in _TIERS
+    sections_html = (
+        _render_section("CRITICAL",  "Critical Disruptions",    "#EF4444", "#FEF2F2", "#B91C1C", critical)
+        + _render_section("STRATEGIC", "Strategic Opportunities", "#22C55E", "#F0FDF4", "#15803D", strategic)
+        + _render_section("ROUTINE",   "Routine Monitoring",      "#A3A3A3", "#F5F5F5", "#525252", routine)
     )
 
-    today_str = datetime.now().strftime("%B %d, %Y")
-    total = len(data)
+    exec_html = _render_exec_summary(macro_summary)
 
-    exec_block = ""
+    today_str = datetime.now().strftime("%A, %B %d, %Y")
+    total     = len(data)
+    item_word = "item" if total == 1 else "items"
+
+    macro_badge_html = ""
     if macro_summary:
         sentiment = macro_summary.get("macro_sentiment", "")
-        summary_text = macro_summary.get("executive_summary", "")
-        exec_block = f"""
-                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:16px;">
-                      <tr>
-                        <td style="background-color:#E8EAF6;border-left:4px solid #3949AB;
-                                    padding:16px 20px;border-radius:0 4px 4px 0;">
-                          <p style="margin:0 0 6px 0;font-size:11px;font-weight:700;letter-spacing:1px;
-                                     color:#3949AB;font-family:Arial,sans-serif;text-transform:uppercase;">
-                            Executive Summary &nbsp;&middot;&nbsp;
-                            <span style="background-color:#3949AB;color:#FFFFFF;padding:2px 8px;
-                                          border-radius:3px;font-size:10px;">{sentiment}</span>
-                          </p>
-                          <p style="margin:0;font-size:13px;color:#1A237E;font-family:Arial,sans-serif;
-                                     line-height:1.6;">{summary_text}</p>
-                        </td>
-                      </tr>
-                    </table>"""
+        macro_badge_html = (
+            f'<span style="background-color:rgba(127,176,105,0.2);'
+            f'color:{_BRAND_GREEN};border:1px solid rgba(127,176,105,0.4);'
+            f'padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;'
+            f'font-family:Arial,sans-serif;letter-spacing:0.5px;">'
+            f'{sentiment}</span>'
+        )
 
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AmI Market-Pulse: Daily Intelligence</title>
+  <meta name="color-scheme" content="light">
+  <title>Americhem Market-Pulse: Daily Intelligence</title>
 </head>
-<body style="margin:0;padding:0;background-color:#EEEEEE;font-family:Arial,sans-serif;">
+<body style="margin:0;padding:0;background-color:#F3F4F6;
+             font-family:Arial,sans-serif;-webkit-text-size-adjust:100%;">
 
-  <!-- Outer wrapper -->
   <table width="100%" cellpadding="0" cellspacing="0" border="0"
-         style="background-color:#EEEEEE;padding:24px 0;">
+         style="background-color:#F3F4F6;padding:24px 0;">
     <tr>
       <td align="center">
-
-        <!-- Inner content table (600 px wide) -->
-        <table width="600" cellpadding="0" cellspacing="0" border="0"
-               style="background-color:#FFFFFF;border-radius:6px;
-                      box-shadow:0 2px 6px rgba(0,0,0,0.08);">
+        <table width="640" cellpadding="0" cellspacing="0" border="0"
+               style="max-width:640px;background-color:#ffffff;
+                      border:0.5px solid #E5E7EB;border-radius:8px;
+                      overflow:hidden;">
           <tr>
-            <td style="padding:0;">
+            <td>
 
-              <!-- ── HEADER ── -->
+              <!-- HEADER -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td style="background-color:#1A237E;padding:24px 32px;
-                              border-radius:6px 6px 0 0;">
-                    <h1 style="margin:0;font-size:20px;font-weight:700;
-                                color:#FFFFFF;font-family:Arial,sans-serif;
-                                letter-spacing:0.5px;">
-                      AmI Market-Pulse: Daily Intelligence
-                    </h1>
-                    <p style="margin:6px 0 0 0;font-size:13px;color:#C5CAE9;
-                               font-family:Arial,sans-serif;">
-                      {today_str} &nbsp;·&nbsp; {total} item{'s' if total != 1 else ''} today
-                    </p>
+                  <td style="background-color:{_BRAND_NAVY};
+                              padding:20px 32px 0 32px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="width:1%;white-space:nowrap;padding-right:16px;">
+                          <img src="{_LOGO_URL}"
+                               alt="Americhem"
+                               width="140"
+                               style="display:block;height:auto;max-height:40px;">
+                        </td>
+                        <td style="width:1%;white-space:nowrap;padding-right:16px;">
+                          <div style="width:1px;height:32px;
+                                      background-color:rgba(255,255,255,0.25);">
+                          </div>
+                        </td>
+                        <td>
+                          <p style="margin:0;font-size:11px;font-weight:700;
+                                     letter-spacing:1.5px;color:{_BRAND_GREEN};
+                                     font-family:Arial,sans-serif;
+                                     text-transform:uppercase;">
+                            Market Intelligence
+                          </p>
+                          <p style="margin:2px 0 0 0;font-size:18px;font-weight:700;
+                                     color:#ffffff;font-family:Arial,sans-serif;
+                                     line-height:1.2;">
+                            Market-Pulse: Daily Intelligence
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
-              </table>
-
-              <!-- ── BODY ── -->
-              <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td style="padding:8px 32px 24px 32px;">
+                  <td style="background-color:{_BRAND_GREEN};height:3px;
+                              font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td style="background-color:{_BRAND_NAVY_DARK};
+                              padding:10px 32px;">
                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                      {exec_block}
-                      {section_html}
+                      <tr>
+                        <td style="font-size:12px;color:rgba(255,255,255,0.65);
+                                    font-family:Arial,sans-serif;">
+                          {today_str} &nbsp;&middot;&nbsp;
+                          {total} {item_word} today
+                        </td>
+                        <td align="right">{macro_badge_html}</td>
+                      </tr>
                     </table>
                   </td>
                 </tr>
               </table>
 
-              <!-- ── FOOTER ── -->
+              <!-- BODY -->
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                {exec_html}
+                {sections_html}
+                <tr><td style="height:24px;"></td></tr>
+              </table>
+
+              <!-- FOOTER -->
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td style="background-color:#F5F5F5;padding:16px 32px;
-                              border-top:1px solid #E0E0E0;
-                              border-radius:0 0 6px 6px;">
-                    <p style="margin:0;font-size:11px;color:#9E9E9E;
-                               font-family:Arial,sans-serif;text-align:center;">
-                      Generated by the AmI (Americhem Intelligence) Pipeline.
-                      Powered by OpenAI &amp; Supabase.
-                    </p>
+                  <td style="border-top:0.5px solid #E5E7EB;
+                              background-color:#FAFAFA;padding:16px 32px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="font-size:11px;color:#9CA3AF;
+                                    font-family:Arial,sans-serif;">
+                          Generated by
+                          <strong style="color:{_BRAND_NAVY};">
+                            Americhem Market-Pulse
+                          </strong>
+                          &nbsp;&middot;&nbsp;
+                          Powered by OpenAI &amp; Supabase
+                        </td>
+                        <td align="right">
+                          <img src="{_LOGO_URL}"
+                               alt="Americhem"
+                               width="80"
+                               style="display:block;height:auto;opacity:0.4;">
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
@@ -296,51 +454,131 @@ def generate_html_email(data: list[dict], macro_summary: dict | None = None) -> 
             </td>
           </tr>
         </table>
-        <!-- /inner -->
-
       </td>
     </tr>
   </table>
-  <!-- /outer -->
 
-</body>
-</html>"""
-
-    return html
-
-
-def _generate_no_news_email() -> str:
-    """Return a minimal HTML email for days with no processed articles."""
-    today_str = datetime.now().strftime("%B %d, %Y")
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<body style="font-family:Arial,sans-serif;padding:24px;color:#333;">
-  <h2 style="color:#1A237E;">AmI Market-Pulse: Daily Intelligence</h2>
-  <p style="color:#666;font-size:13px;">{today_str}</p>
-  <p>No significant market events were detected in today's monitoring window.
-  All target entities were checked — no articles met the relevance threshold.</p>
-  <hr style="border:0;border-top:1px solid #eee;margin:24px 0;">
-  <p style="font-size:11px;color:#999;text-align:center;">
-    Generated by the AmI (Americhem Intelligence) Pipeline.
-  </p>
 </body>
 </html>"""
 
 
 # ---------------------------------------------------------------------------
-# 3. Email delivery
+# 4. No-news fallback email
+# ---------------------------------------------------------------------------
+
+def _generate_no_news_email() -> str:
+    """Return a minimal branded HTML email for days with no processed articles."""
+    today_str = datetime.now().strftime("%A, %B %d, %Y")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Americhem Market-Pulse</title></head>
+<body style="margin:0;padding:0;background-color:#F3F4F6;
+             font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="background-color:#F3F4F6;padding:24px 0;">
+    <tr>
+      <td align="center">
+        <table width="640" cellpadding="0" cellspacing="0" border="0"
+               style="max-width:640px;background-color:#ffffff;
+                      border:0.5px solid #E5E7EB;border-radius:8px;
+                      overflow:hidden;">
+          <tr>
+            <td>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="background-color:{_BRAND_NAVY};
+                              padding:20px 32px 18px;">
+                    <p style="margin:0;font-size:18px;font-weight:700;
+                               color:#ffffff;font-family:Arial,sans-serif;">
+                      Market-Pulse: Daily Intelligence
+                    </p>
+                    <p style="margin:4px 0 0 0;font-size:12px;
+                               color:rgba(255,255,255,0.6);
+                               font-family:Arial,sans-serif;">{today_str}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color:{_BRAND_GREEN};height:3px;
+                              font-size:0;line-height:0;">&nbsp;</td>
+                </tr>
+              </table>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:32px;">
+                    <p style="margin:0;font-size:15px;color:#374151;
+                               font-family:Georgia,'Times New Roman',serif;
+                               line-height:1.65;">
+                      No significant market events were detected in today's
+                      monitoring window. All target entities were checked &mdash;
+                      no articles met the relevance threshold.
+                    </p>
+                    <p style="margin:16px 0 0 0;font-size:13px;color:#9CA3AF;
+                               font-family:Arial,sans-serif;">
+                      The pipeline ran successfully. Normal delivery resumes
+                      when qualifying intelligence is detected.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="border-top:0.5px solid #E5E7EB;
+                              background-color:#FAFAFA;padding:14px 32px;">
+                    <p style="margin:0;font-size:11px;color:#9CA3AF;
+                               font-family:Arial,sans-serif;">
+                      Generated by
+                      <strong style="color:{_BRAND_NAVY};">
+                        Americhem Market-Pulse
+                      </strong>
+                      &nbsp;&middot;&nbsp; Powered by OpenAI &amp; Supabase
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# 5. Email delivery
 # ---------------------------------------------------------------------------
 
 def send_email(html_content: str) -> None:
-    """Send the HTML digest via SMTP (STARTTLS on port 587)."""
-    smtp_server   = os.environ["SMTP_SERVER"]
-    smtp_port     = int(os.environ["SMTP_PORT"])
-    smtp_user     = os.environ["SMTP_USER"]
-    smtp_pass     = os.environ["SMTP_PASS"]
-    sender_email  = os.environ["SENDER_EMAIL"]
-    recipients    = [e.strip() for e in os.environ["RECIPIENT_EMAILS"].split(",") if e.strip()]
+    """Send the HTML digest via SMTP with STARTTLS.
 
-    subject = f"AmI Market-Pulse \u2014 {datetime.now().strftime('%B %d, %Y')}"
+    Reads all connection parameters from environment variables.
+    RECIPIENT_EMAILS is a comma-separated string split at send time.
+
+    Args:
+        html_content: Complete HTML email string.
+
+    Raises:
+        smtplib.SMTPAuthenticationError: On bad SMTP credentials.
+        smtplib.SMTPException:           On SMTP-level failures.
+        socket.timeout:                  If SMTP server is unreachable.
+    """
+    smtp_server  = os.environ["SMTP_SERVER"]
+    smtp_port    = int(os.environ["SMTP_PORT"])
+    smtp_user    = os.environ["SMTP_USER"]
+    smtp_pass    = os.environ["SMTP_PASS"]
+    sender_email = os.environ["SENDER_EMAIL"]
+    recipients   = [
+        e.strip()
+        for e in os.environ["RECIPIENT_EMAILS"].split(",")
+        if e.strip()
+    ]
+
+    subject = (
+        f"Americhem Market-Pulse \u2014 "
+        f"{datetime.now().strftime('%B %d, %Y')}"
+    )
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -357,17 +595,23 @@ def send_email(html_content: str) -> None:
             server.sendmail(sender_email, recipients, msg.as_string())
 
         logger.info(
-            "Email sent — subject: '%s' | recipients: %d", subject, len(recipients)
+            "Email sent — subject: '%s' | recipients: %d",
+            subject,
+            len(recipients),
         )
 
     except smtplib.SMTPAuthenticationError as exc:
-        logger.error("SMTP authentication failed (check SMTP_USER / SMTP_PASS): %s", exc)
+        logger.error(
+            "SMTP authentication failed (check SMTP_USER / SMTP_PASS): %s", exc
+        )
         raise
     except smtplib.SMTPException as exc:
         logger.error("SMTP error while sending email: %s", exc)
         raise
     except socket.timeout:
-        logger.error("SMTP connection timed out to %s:%s", smtp_server, smtp_port)
+        logger.error(
+            "SMTP connection timed out to %s:%s", smtp_server, smtp_port
+        )
         raise
     except Exception as exc:
         logger.error("Unexpected error sending email: %s", exc)
@@ -375,17 +619,35 @@ def send_email(html_content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Entrypoint
+# 6. Entrypoint
 # ---------------------------------------------------------------------------
 
 def execute_pipeline() -> None:
-    data = fetch_todays_intelligence()
+    """Orchestrate the delivery: fetch data — generate HTML — send email.
+
+    Sends a no-news notification when no records are found so stakeholders
+    know the pipeline ran successfully even on quiet market days.
+    """
+    data          = fetch_todays_intelligence()
     macro_summary = fetch_macro_summary()
 
     if not data:
-        logger.warning("No intelligence records found — sending no-news notification.")
-        send_email(_generate_no_news_email())
+        logger.warning(
+            "No intelligence records for today — sending no-news notification."
+        )
+        html = _generate_no_news_email()
+        send_email(html)
         return
+
+    critical_count  = sum(1 for r in data if r.get("alert_tier") == "CRITICAL")
+    strategic_count = sum(1 for r in data if r.get("alert_tier") == "STRATEGIC")
+    routine_count   = sum(1 for r in data if r.get("alert_tier") == "ROUTINE")
+    logger.info(
+        "Rendering email — critical: %d | strategic: %d | routine: %d",
+        critical_count,
+        strategic_count,
+        routine_count,
+    )
 
     html = generate_html_email(data, macro_summary)
     send_email(html)
