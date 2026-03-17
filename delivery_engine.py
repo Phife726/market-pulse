@@ -91,25 +91,30 @@ def fetch_todays_intelligence() -> list[dict]:
 
 
 def fetch_macro_summary() -> dict | None:
-    """Fetch today's executive summary row from daily_summaries.
+    """Fetch the most recent executive summary from daily_summaries.
 
     Returns:
         Dict with 'executive_summary' and 'macro_sentiment' keys, or None.
     """
     try:
         from datetime import date
-        today = date.today().isoformat()
+
+        # Query a short window and select the newest row to avoid timing races
+        # between ingestion upsert and delivery read in the same workflow run.
+        min_run_date = (date.today() - timedelta(days=1)).isoformat()
         supabase = _get_supabase()
         result = (
             supabase.table("daily_summaries")
-            .select("executive_summary, macro_sentiment")
-            .eq("run_date", today)
+            .select("run_date, executive_summary, macro_sentiment")
+            .gte("run_date", min_run_date)
+            .order("run_date", desc=True)
             .limit(1)
             .execute()
         )
         if result.data:
             return result.data[0]
-        logger.warning("No macro summary found for today (%s).", today)
+
+        logger.warning("No macro summary found for run_date >= %s.", min_run_date)
         return None
     except Exception as exc:
         logger.error("Failed to fetch macro summary: %s", exc)

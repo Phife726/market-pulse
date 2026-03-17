@@ -242,12 +242,13 @@ or direct supply chain/demand shifts for Americhem, you MUST write exactly:
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
 RULE 4 — DOMAIN RELEVANCE FIREWALL:
-Americhem is a plastics and specialty chemicals manufacturer. If the article does not explicitly
-discuss plastics, polymers, masterbatch, compounding, specialty chemicals, colorants, additives,
-or upstream chemical supply chains, it is noise. Examples of noise: HR policy, software updates,
-general airline or logistics news, unrelated financial markets. If the article fails this domain
-test, output ONLY this JSON:
-{"americhem_impact": "DISCARD"}
+Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
+absolutely zero connection to plastics, polymers, chemicals, materials, manufacturing,
+composites, packaging, or supply chain dynamics.
+Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
+financial instruments (stock tips, crypto), or general HR policy.
+When relevance is uncertain, do NOT discard. Set sentiment_score to 5 and set americhem_impact
+to exactly: "No direct impact. Monitoring required."
 
 If the article passes all four rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.
