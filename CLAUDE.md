@@ -43,11 +43,17 @@ The pipeline is two sequential scripts sharing a Supabase database:
 **`delivery_engine.py`** — Fetch → Format → Send
 1. Queries the `todays_intelligence` view (last 24 hours, ordered by `sentiment_score` ascending)
 2. Groups items by `alert_tier`: CRITICAL (1–3), ROUTINE (4–7), STRATEGIC (8–10)
-3. Renders HTML email (BLUF format) and sends via SMTP (Resend)
+3. Renders HTML email (BLUF format) and sends via SMTP — Resend (`smtp.resend.com`) on port 587 with STARTTLS. Port 465 is blocked on Azure-hosted runners.
 
 **Database** (`schema.sql`) — Single table `daily_intelligence` with a `todays_intelligence` view. The view adds an `alert_tier` column derived from `sentiment_score`. The unique index on `url_hash` is the deduplication gate.
 
-**`targets.yaml`** — The only file non-technical editors need to touch. Add/remove entities here; no Python changes required.
+**`targets.yaml`** — The only file non-technical editors need to touch. Add/remove entities here; no Python changes required. Top-level keys:
+- `results_per_entity` / `lookback_hours` / `min_article_length` — discovery tuning
+- `entities` — list of `{name, type, active}` where `type` is `competitor | customer | supplier | market`; set `active: false` to pause an entity without deleting it
+
+## Tests
+
+`tests/test_pipeline.py` covers: URL normalization (query params/fragments stripped), SHA-256 hash collision (UTM-polluted vs. clean URL must hash identically), sentiment score clamping to [1, 10], and `load_targets()` filtering inactive entities. All external API clients (OpenAI, Supabase, Serper, Firecrawl) are mocked — no live calls in the test suite.
 
 ## Key Invariants
 - URL normalization (strip query params) MUST happen before hashing — this is the sole deduplication mechanism.
