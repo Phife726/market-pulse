@@ -14,6 +14,7 @@ create table if not exists daily_intelligence (
     trigger_entity text not null,
     source_publication text,
     sentiment_rationale text,
+    recommended_action text,
     raw_content text
 );
 
