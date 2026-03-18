@@ -264,3 +264,20 @@ def test_recommended_action_default(mock_fn):
 
     assert result is not None, "synthesize_insight must not return None for missing recommended_action"
     assert result["recommended_action"] == "Monitor"
+
+
+# ---------------------------------------------------------------------------
+# 8. article_summary soft default
+# ---------------------------------------------------------------------------
+
+def test_article_summary_default():
+    """Missing article_summary must soft-default to empty string, not discard the article."""
+    with patch("ingestion_engine._get_openai", return_value=_make_openai_mock(5)):
+        result = synthesize_insight(
+            article_text="Some article text about the market.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None, "synthesize_insight must not return None for missing article_summary"
+    assert result["article_summary"] == ""

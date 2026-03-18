@@ -263,6 +263,7 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
 {
   "headline": "<concise factual summary, max 12 words>",
   "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
+  "article_summary": "<2-3 sentences, max 50 words. What happened, who is involved, key numbers. Factual only — no Americhem framing.>",
   "americhem_impact": "<BLUF So What for Americhem. Apply Rule 3. Never generic.>",
   "sentiment_score": <integer 1-10 per Rule 2>,
   "sentiment_rationale": "<max 10 words explaining exactly why this score was assigned>",
@@ -346,6 +347,7 @@ def synthesize_insight(
     # Normalize new optional fields to empty string if missing
     insight.setdefault("source_publication", "")
     insight.setdefault("sentiment_rationale", "")
+    insight.setdefault("article_summary", "")
 
     # Validate recommended_action — soft default to "Monitor" if missing or invalid
     if insight.get("recommended_action") not in _VALID_ACTIONS:
