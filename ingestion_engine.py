@@ -537,6 +537,7 @@ def execute_pipeline() -> None:
                 "source_publication": insight.get("source_publication", ""),
                 "sentiment_rationale": insight.get("sentiment_rationale", ""),
                 "recommended_action": insight.get("recommended_action", "Monitor"),
+                "article_summary": insight.get("article_summary", ""),
             }
 
             if store_insight(payload):
