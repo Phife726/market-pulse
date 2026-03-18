@@ -206,6 +206,7 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     score               = item.get("sentiment_score", "")
     source_publication  = item.get("source_publication", "")
     sentiment_rationale = item.get("sentiment_rationale", "")
+    article_summary     = item.get("article_summary", "")
 
     recommended_action  = item.get("recommended_action", "")
     sentiment_word, sentiment_color = _sentiment_word(int(score) if score else 5)
@@ -214,6 +215,13 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
         f'<span style="font-size:11px;color:#9CA3AF;'
         f'font-family:Arial,sans-serif;">via {source_publication}</span>'
         if source_publication else ""
+    )
+
+    summary_html = (
+        f'<p style="margin:0 0 8px 0;font-size:12px;color:#6B7280;'
+        f'font-family:Arial,sans-serif;line-height:1.5;">'
+        f'{article_summary}</p>'
+        if article_summary else ""
     )
 
     rationale_html = (
@@ -249,6 +257,7 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
                                 line-height:1.4;display:block;margin-bottom:8px;">
                         {headline}
                       </a>
+                      {summary_html}
                       <p style="margin:0 0 8px 0;font-size:13px;color:#374151;
                                  font-family:Georgia,'Times New Roman',serif;
                                  line-height:1.6;">

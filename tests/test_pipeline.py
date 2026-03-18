@@ -281,3 +281,44 @@ def test_article_summary_default():
         )
     assert result is not None, "synthesize_insight must not return None for missing article_summary"
     assert result["article_summary"] == ""
+
+
+# ---------------------------------------------------------------------------
+# 9. _render_card() article_summary rendering
+# ---------------------------------------------------------------------------
+
+from delivery_engine import _render_card
+
+
+def test_render_card_shows_summary():
+    """_render_card must include article_summary text when the field is populated."""
+    item = {
+        "headline": "Test Headline",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Some impact.",
+        "category": "competitors",
+        "sentiment_score": 5,
+        "source_publication": "Reuters",
+        "sentiment_rationale": "Neutral article.",
+        "recommended_action": "Monitor",
+        "article_summary": "BASF announced a new plant in Germany. The facility will produce 50kt of polymer annually. Production starts Q1 2027.",
+    }
+    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    assert "BASF announced a new plant in Germany" in html
+
+
+def test_render_card_omits_summary_when_empty():
+    """_render_card must not emit an empty <p> tag when article_summary is absent."""
+    item = {
+        "headline": "Test Headline",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Some impact.",
+        "category": "competitors",
+        "sentiment_score": 5,
+        "source_publication": "Reuters",
+        "sentiment_rationale": "Neutral article.",
+        "recommended_action": "Monitor",
+        "article_summary": "",
+    }
+    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    assert '<p style="margin:0 0 8px 0;font-size:12px;color:#6B7280' not in html
