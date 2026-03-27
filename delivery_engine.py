@@ -1,7 +1,9 @@
 import logging
 import os
+import random
 import smtplib
 import socket
+import time
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -24,6 +26,14 @@ _BRAND_GREEN      = "#7FB069"
 _LOGO_URL = (
     "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
 )
+
+# ---------------------------------------------------------------------------
+# SMTP retry constants
+# ---------------------------------------------------------------------------
+
+_MAX_SMTP_ATTEMPTS    = 5
+_SMTP_BASE_DELAY_S    = 2.0
+_TRANSIENT_SMTP_CODES = {421, 450, 451, 452}
 
 
 # ---------------------------------------------------------------------------
@@ -610,8 +620,9 @@ def send_email(html_content: str) -> None:
         html_content: Complete HTML email string.
 
     Raises:
-        smtplib.SMTPAuthenticationError: On bad SMTP credentials.
-        smtplib.SMTPException:           On SMTP-level failures.
+        smtplib.SMTPAuthenticationError: On bad SMTP credentials (not retried).
+        smtplib.SMTPException:           On SMTP-level failures after all retries.
+        smtplib.SMTPConnectError:        After all retry attempts on transient 421/45x errors.
         socket.timeout:                  If SMTP server is unreachable.
     """
     smtp_server  = os.environ["SMTP_SERVER"]
@@ -636,43 +647,62 @@ def send_email(html_content: str) -> None:
     msg["To"]      = ", ".join(recipients)
     msg.attach(MIMEText(html_content, "html"))
 
-    try:
-        if smtp_port == 465:
-            _ctx = smtplib.ssl.create_default_context()
-            _conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30, context=_ctx)
-        else:
-            _conn = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+    for attempt in range(1, _MAX_SMTP_ATTEMPTS + 1):
+        try:
+            if smtp_port == 465:
+                _ctx = smtplib.ssl.create_default_context()
+                _conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30, context=_ctx)
+            else:
+                _conn = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
 
-        with _conn as server:
-            if smtp_port != 465:
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-            server.login(smtp_user, smtp_pass)
-            server.sendmail(sender_email, recipients, msg.as_string())
+            with _conn as server:
+                if smtp_port != 465:
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(sender_email, recipients, msg.as_string())
 
-        logger.info(
-            "Email sent — subject: '%s' | recipients: %d",
-            subject,
-            len(recipients),
-        )
+            logger.info(
+                "Email sent — subject: '%s' | recipients: %d",
+                subject,
+                len(recipients),
+            )
+            return
 
-    except smtplib.SMTPAuthenticationError as exc:
-        logger.error(
-            "SMTP authentication failed (check SMTP_USER / SMTP_PASS): %s", exc
-        )
-        raise
-    except smtplib.SMTPException as exc:
-        logger.error("SMTP error while sending email: %s", exc)
-        raise
-    except socket.timeout:
-        logger.error(
-            "SMTP connection timed out to %s:%s", smtp_server, smtp_port
-        )
-        raise
-    except Exception as exc:
-        logger.error("Unexpected error sending email: %s", exc)
-        raise
+        except smtplib.SMTPAuthenticationError as exc:
+            # Not transient — bad credentials will not improve with retries.
+            logger.error(
+                "SMTP authentication failed (check SMTP_USER / SMTP_PASS): %s", exc
+            )
+            raise
+
+        except (smtplib.SMTPConnectError, smtplib.SMTPResponseException) as exc:
+            # SMTPAuthenticationError is a subclass of SMTPResponseException,
+            # so it must be caught first (above) to avoid being treated as transient.
+            if exc.args[0] in _TRANSIENT_SMTP_CODES and attempt < _MAX_SMTP_ATTEMPTS:
+                delay = _SMTP_BASE_DELAY_S * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Transient SMTP error %s (attempt %d/%d) — retrying in %.1fs",
+                    exc.args[0],
+                    attempt,
+                    _MAX_SMTP_ATTEMPTS,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            logger.error("SMTP error while sending email: %s", exc)
+            raise
+
+        except socket.timeout:
+            logger.error(
+                "SMTP connection timed out to %s:%s", smtp_server, smtp_port
+            )
+            raise
+
+        except Exception as exc:
+            logger.error("Unexpected error sending email: %s", exc)
+            raise
 
 
 # ---------------------------------------------------------------------------

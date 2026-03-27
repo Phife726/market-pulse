@@ -322,3 +322,65 @@ def test_render_card_omits_summary_when_empty():
     }
     html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
     assert '<p style="margin:0 0 8px 0;font-size:12px;color:#6B7280' not in html
+
+
+# ---------------------------------------------------------------------------
+# 10. send_email() SMTP retry behaviour
+# ---------------------------------------------------------------------------
+
+import smtplib as _smtplib
+import time as _time
+from unittest.mock import MagicMock
+
+from delivery_engine import send_email as _send_email
+
+
+def _smtp_env(monkeypatch) -> None:
+    """Inject minimal SMTP env vars required by send_email()."""
+    monkeypatch.setenv("SMTP_SERVER", "smtp.resend.com")
+    monkeypatch.setenv("SMTP_PORT", "465")
+    monkeypatch.setenv("SMTP_USER", "resend")
+    monkeypatch.setenv("SMTP_PASS", "re_test_key")
+    monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
+    monkeypatch.setenv("RECIPIENT_EMAILS", "user@test.com")
+
+
+def test_send_email_retries_on_421_then_succeeds(monkeypatch):
+    """send_email() must retry after a transient 421 and succeed on the second attempt."""
+    _smtp_env(monkeypatch)
+    monkeypatch.setattr(_time, "sleep", lambda s: None)  # no actual sleeping
+
+    attempt = {"count": 0}
+
+    def fake_smtp_ssl(*args, **kwargs):
+        attempt["count"] += 1
+        if attempt["count"] == 1:
+            raise _smtplib.SMTPConnectError(421, b"Too many connected clients")
+        mock_server = MagicMock()
+        mock_server.__enter__ = lambda s: s
+        mock_server.__exit__ = MagicMock(return_value=False)
+        return mock_server
+
+    monkeypatch.setattr(_smtplib, "SMTP_SSL", fake_smtp_ssl)
+
+    _send_email("<html>test</html>")  # must not raise
+    assert attempt["count"] == 2
+
+
+def test_send_email_raises_immediately_on_auth_failure(monkeypatch):
+    """send_email() must not retry on SMTPAuthenticationError — raise on first attempt."""
+    _smtp_env(monkeypatch)
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    attempt = {"count": 0}
+
+    def fake_smtp_ssl(*args, **kwargs):
+        attempt["count"] += 1
+        raise _smtplib.SMTPAuthenticationError(535, b"Bad credentials")
+
+    monkeypatch.setattr(_smtplib, "SMTP_SSL", fake_smtp_ssl)
+
+    with pytest.raises(_smtplib.SMTPAuthenticationError):
+        _send_email("<html>test</html>")
+
+    assert attempt["count"] == 1  # must NOT have retried
