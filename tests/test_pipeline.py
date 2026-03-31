@@ -9,9 +9,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ingestion_engine import (
+    _TextExtractor,
+    _scrape_fallback,
     compute_url_hash,
     load_targets,
     normalize_url,
+    scrape_article,
     synthesize_insight,
 )
 
@@ -384,3 +387,146 @@ def test_send_email_raises_immediately_on_auth_failure(monkeypatch):
         _send_email("<html>test</html>")
 
     assert attempt["count"] == 1  # must NOT have retried
+
+
+# ---------------------------------------------------------------------------
+# 11. _TextExtractor — visible text extraction
+# ---------------------------------------------------------------------------
+
+def test_text_extractor_strips_tags():
+    """_TextExtractor must return visible text with HTML tags removed."""
+    html = "<html><body><p>Hello <b>World</b></p></body></html>"
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    text = extractor.get_text()
+    assert "Hello" in text
+    assert "World" in text
+    assert "<" not in text
+
+
+def test_text_extractor_skips_script_and_style():
+    """_TextExtractor must ignore script/style/noscript/nav/footer/header/aside/form content."""
+    html = (
+        "<html><head><style>body{color:red}</style></head>"
+        "<body><script>alert(1)</script><p>Article text here.</p>"
+        "<footer>Copyright 2026</footer>"
+        "<aside>Subscribe now</aside>"
+        "<form>Enter email</form></body></html>"
+    )
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    text = extractor.get_text()
+    assert "Article text here." in text
+    assert "alert" not in text
+    assert "body{color:red}" not in text
+    assert "Copyright 2026" not in text
+    assert "Subscribe now" not in text
+    assert "Enter email" not in text
+
+
+# ---------------------------------------------------------------------------
+# 12. _scrape_fallback — direct-HTTP fallback
+# ---------------------------------------------------------------------------
+
+def test_scrape_fallback_returns_text_on_success():
+    """_scrape_fallback must return extracted text when the HTTP request succeeds."""
+    mock_resp = MagicMock()
+    mock_resp.text = "<html><body><p>Chemical plant update with details.</p></body></html>"
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("ingestion_engine.requests.get", return_value=mock_resp):
+        result = _scrape_fallback("https://example.com/article")
+
+    assert result is not None
+    assert "Chemical plant update" in result
+
+
+def test_scrape_fallback_returns_none_on_request_error():
+    """_scrape_fallback must return None when the HTTP request fails."""
+    import requests as _req
+    with patch("ingestion_engine.requests.get", side_effect=_req.exceptions.ConnectionError("refused")):
+        result = _scrape_fallback("https://example.com/article")
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 13. scrape_article — 402 triggers fallback
+# ---------------------------------------------------------------------------
+
+def _make_http_error(status_code: int) -> MagicMock:
+    """Return a requests.HTTPError mock with the given status code."""
+    import requests as _req
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    err = _req.exceptions.HTTPError(response=mock_resp)
+    return err
+
+
+def test_scrape_article_uses_fallback_on_402(monkeypatch):
+    """scrape_article must invoke the fallback when Firecrawl returns HTTP 402."""
+    import requests as _req
+
+    # Firecrawl returns 402
+    firecrawl_resp = MagicMock()
+    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+
+    # Fallback returns long enough text
+    fallback_text = "A" * 600
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+
+    with patch("ingestion_engine.requests.post", return_value=firecrawl_resp), \
+         patch("ingestion_engine._scrape_fallback", return_value=fallback_text) as mock_fallback:
+        result = scrape_article("https://example.com/article", min_length=500)
+
+    mock_fallback.assert_called_once_with("https://example.com/article")
+    assert result == fallback_text
+
+
+def test_scrape_article_returns_none_when_fallback_content_too_short(monkeypatch):
+    """scrape_article must return None when fallback text is below min_length."""
+    import requests as _req
+
+    firecrawl_resp = MagicMock()
+    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+
+    with patch("ingestion_engine.requests.post", return_value=firecrawl_resp), \
+         patch("ingestion_engine._scrape_fallback", return_value="too short"):
+        result = scrape_article("https://example.com/article", min_length=500)
+
+    assert result is None
+
+
+def test_scrape_article_returns_none_when_fallback_fails(monkeypatch):
+    """scrape_article must return None when both Firecrawl (402) and fallback fail."""
+    import requests as _req
+
+    firecrawl_resp = MagicMock()
+    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+
+    with patch("ingestion_engine.requests.post", return_value=firecrawl_resp), \
+         patch("ingestion_engine._scrape_fallback", return_value=None):
+        result = scrape_article("https://example.com/article", min_length=500)
+
+    assert result is None
+
+
+def test_scrape_article_no_fallback_on_non_402_error(monkeypatch):
+    """scrape_article must NOT invoke the fallback for non-402 Firecrawl errors."""
+    import requests as _req
+
+    firecrawl_resp = MagicMock()
+    firecrawl_resp.raise_for_status.side_effect = _make_http_error(500)
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+
+    with patch("ingestion_engine.requests.post", return_value=firecrawl_resp), \
+         patch("ingestion_engine._scrape_fallback") as mock_fallback:
+        result = scrape_article("https://example.com/article", min_length=500)
+
+    mock_fallback.assert_not_called()
+    assert result is None
