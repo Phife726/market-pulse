@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
 from typing import Optional
 
@@ -19,6 +20,73 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MAX_DAILY_SCRAPES = 20
+
+
+# ---------------------------------------------------------------------------
+# Fallback HTML-to-text extractor (stdlib only — no extra dependencies)
+# ---------------------------------------------------------------------------
+
+class _TextExtractor(HTMLParser):
+    """Minimal HTML-to-text extractor built on the stdlib html.parser.
+
+    Skips noise tags (scripts, styles, nav, footer, header) and joins the
+    visible text chunks with newlines.
+    """
+
+    _SKIP_TAGS: frozenset[str] = frozenset(
+        {"script", "style", "noscript", "nav", "footer", "header", "aside", "form"}
+    )
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._parts: list[str] = []
+        self._skip_depth: int = 0
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in self._SKIP_TAGS:
+            self._skip_depth = max(0, self._skip_depth - 1)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            text = data.strip()
+            if text:
+                self._parts.append(text)
+
+    def get_text(self) -> str:
+        return "\n".join(self._parts)
+
+
+def _scrape_fallback(url: str) -> Optional[str]:
+    """Direct-request fallback scraper for when Firecrawl is unavailable.
+
+    Makes a plain GET request and extracts visible text using the stdlib HTML
+    parser.  Returns the extracted text string, or None on any failure.
+    """
+    try:
+        resp = requests.get(
+            url,
+            timeout=20,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MarketPulse/1.0)"},
+            allow_redirects=True,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Fallback scraper request failed for URL %s: %s", url, exc)
+        return None
+
+    extractor = _TextExtractor()
+    try:
+        extractor.feed(resp.text)
+    except Exception as exc:
+        logger.warning("Fallback HTML parsing failed for URL %s: %s", url, exc)
+        return None
+
+    text = extractor.get_text()
+    return text if text else None
 
 # ---------------------------------------------------------------------------
 # Clients (initialized once at module level so they can be patched in tests)
@@ -167,7 +235,13 @@ def url_already_processed(url_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def scrape_article(url: str, min_length: int) -> Optional[str]:
-    """Fetch article markdown from Firecrawl. Returns None if below min_length."""
+    """Fetch article text, trying Firecrawl first then a direct-HTTP fallback.
+
+    Firecrawl returns clean markdown.  If Firecrawl is unavailable due to quota
+    exhaustion (HTTP 402), the function retries with a lightweight direct-GET
+    scraper so the pipeline keeps running.  Returns None when the content is
+    below *min_length* or when all scraping attempts fail.
+    """
     api_key = os.environ["FIRECRAWL_API_KEY"]
     endpoint = "https://api.firecrawl.dev/v1/scrape"
 
@@ -187,9 +261,23 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
         logger.error("Firecrawl request timed out for URL: %s", url)
         return None
     except requests.exceptions.HTTPError as exc:
-        logger.error(
-            "Firecrawl HTTP error for URL %s: %s", url, exc.response.status_code
-        )
+        status = exc.response.status_code
+        if status == 402:
+            logger.warning(
+                "Firecrawl quota exceeded (402) — attempting fallback scrape: %s", url
+            )
+            text = _scrape_fallback(url)
+            if text is None or len(text) < min_length:
+                logger.info(
+                    "Fallback content too short or unavailable (%d chars, min %d): %s",
+                    len(text) if text else 0,
+                    min_length,
+                    url,
+                )
+                return None
+            logger.info("Fallback scrape succeeded (%d chars): %s", len(text), url)
+            return text
+        logger.error("Firecrawl HTTP error for URL %s: %s", url, status)
         return None
     except requests.exceptions.RequestException as exc:
         logger.error("Firecrawl request failed for URL %s: %s", url, exc)
