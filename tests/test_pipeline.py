@@ -1,5 +1,5 @@
 """
-Smoke tests for ingestion_engine.py.
+Smoke tests for ingestion_engine.py and delivery_engine.py.
 No live API calls — all external clients are mocked.
 """
 import json
@@ -24,8 +24,6 @@ from ingestion_engine import (
 # ---------------------------------------------------------------------------
 
 def _make_openai_mock(sentiment_score: int | float) -> MagicMock:
-    """Return a mock OpenAI client whose chat.completions.create returns a
-    well-formed JSON payload with the given sentiment_score."""
     content = json.dumps(
         {
             "headline": "Test Headline",
@@ -37,16 +35,12 @@ def _make_openai_mock(sentiment_score: int | float) -> MagicMock:
     )
     mock_message = MagicMock()
     mock_message.content = content
-
     mock_choice = MagicMock()
     mock_choice.message = mock_message
-
     mock_completion = MagicMock()
     mock_completion.choices = [mock_choice]
-
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = mock_completion
-
     return mock_client
 
 
@@ -55,26 +49,22 @@ def _make_openai_mock(sentiment_score: int | float) -> MagicMock:
 # ---------------------------------------------------------------------------
 
 def test_url_normalization():
-    """Query parameters and fragments must both be stripped."""
     result = normalize_url("https://news.com/a?utm=1#sec")
     assert result == "https://news.com/a"
 
 
 def test_url_normalization_preserves_path():
-    """Normalisation must not alter the scheme, host, or path."""
     result = normalize_url("https://news.com/section/article-slug")
     assert result == "https://news.com/section/article-slug"
 
 
 # ---------------------------------------------------------------------------
-# 2. Hash collision: UTM-polluted URL must hash identically to the clean URL
+# 2. Hash collision
 # ---------------------------------------------------------------------------
 
 def test_compute_url_hash_collision():
-    """A UTM-polluted URL and its clean counterpart must produce the same hash."""
     clean = "https://news.com/article"
     polluted = "https://news.com/article?utm_source=newsletter&utm_medium=email&utm_campaign=weekly"
-
     assert compute_url_hash(normalize_url(clean)) == compute_url_hash(normalize_url(polluted))
 
 
@@ -85,12 +75,11 @@ def test_compute_url_hash_collision():
 @pytest.mark.parametrize(
     "raw_score, expected",
     [
-        (0,  1),   # below floor → clamp to 1
-        (15, 10),  # above ceiling → clamp to 10
+        (0,  1),
+        (15, 10),
     ],
 )
 def test_sentiment_clamp(raw_score: int, expected: int):
-    """Out-of-range scores returned by the LLM must be clamped to [1, 10]."""
     with patch("ingestion_engine._get_openai", return_value=_make_openai_mock(raw_score)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
@@ -98,17 +87,15 @@ def test_sentiment_clamp(raw_score: int, expected: int):
             trigger_entity="Avient",
             category="competitors",
         )
-
-    assert result is not None, "synthesize_insight returned None unexpectedly"
+    assert result is not None
     assert result["sentiment_score"] == expected
 
 
 # ---------------------------------------------------------------------------
-# 4. load_targets: inactive entities must be excluded
+# 4. load_targets
 # ---------------------------------------------------------------------------
 
 def test_load_targets_filters_inactive(tmp_path):
-    """Entities with active: false must never appear in the returned target list."""
     config_yaml = textwrap.dedent(
         """\
         competitors:
@@ -127,16 +114,13 @@ def test_load_targets_filters_inactive(tmp_path):
     )
     config_file = tmp_path / "targets.yaml"
     config_file.write_text(config_yaml)
-
     targets = load_targets(str(config_file))
     names = [t["name"] for t in targets]
-
     assert "ActiveCorp" in names
     assert "InactiveCorp" not in names
 
 
 def test_load_targets_returns_expected_fields(tmp_path):
-    """Each returned target dict must include the five expected keys."""
     config_yaml = textwrap.dedent(
         """\
         competitors:
@@ -153,9 +137,7 @@ def test_load_targets_returns_expected_fields(tmp_path):
     )
     config_file = tmp_path / "targets.yaml"
     config_file.write_text(config_yaml)
-
     targets = load_targets(str(config_file))
-
     assert len(targets) == 1
     t = targets[0]
     assert t["name"] == "Avient"
@@ -166,21 +148,19 @@ def test_load_targets_returns_expected_fields(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 5. DISCARD signal detection
+# 5. DISCARD signal
 # ---------------------------------------------------------------------------
 
 def test_discard_signal_detected():
-    """synthesize_insight returning DISCARD must be detectable before store."""
     insight = {"americhem_impact": "DISCARD"}
     assert insight.get("americhem_impact") == "DISCARD"
 
 
 # ---------------------------------------------------------------------------
-# 6. raw_materials category loading
+# 6. raw_materials category
 # ---------------------------------------------------------------------------
 
 def test_raw_materials_category_loaded(tmp_path):
-    """raw_materials entities must be returned by load_targets."""
     config_yaml = textwrap.dedent(
         """\
         competitors: []
@@ -198,7 +178,6 @@ def test_raw_materials_category_loaded(tmp_path):
     )
     config_file = tmp_path / "targets.yaml"
     config_file.write_text(config_yaml)
-
     targets = load_targets(str(config_file))
     names = [t["name"] for t in targets]
     assert "commodity resins" in names
@@ -210,7 +189,6 @@ def test_raw_materials_category_loaded(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _make_openai_mock_no_action(sentiment_score: int) -> MagicMock:
-    """Return a mock OpenAI client whose response omits recommended_action."""
     content = json.dumps(
         {
             "headline": "Test Headline",
@@ -232,7 +210,6 @@ def _make_openai_mock_no_action(sentiment_score: int) -> MagicMock:
 
 
 def _make_openai_mock_invalid_action(sentiment_score: int) -> MagicMock:
-    """Return a mock OpenAI client whose response has an invalid recommended_action."""
     content = json.dumps(
         {
             "headline": "Test Headline",
@@ -256,7 +233,6 @@ def _make_openai_mock_invalid_action(sentiment_score: int) -> MagicMock:
 
 @pytest.mark.parametrize("mock_fn", [_make_openai_mock_no_action, _make_openai_mock_invalid_action])
 def test_recommended_action_default(mock_fn):
-    """Missing or invalid recommended_action must soft-default to 'Monitor', not discard the article."""
     with patch("ingestion_engine._get_openai", return_value=mock_fn(5)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
@@ -264,8 +240,7 @@ def test_recommended_action_default(mock_fn):
             trigger_entity="Avient",
             category="competitors",
         )
-
-    assert result is not None, "synthesize_insight must not return None for missing recommended_action"
+    assert result is not None
     assert result["recommended_action"] == "Monitor"
 
 
@@ -274,7 +249,6 @@ def test_recommended_action_default(mock_fn):
 # ---------------------------------------------------------------------------
 
 def test_article_summary_default():
-    """Missing article_summary must soft-default to empty string, not discard the article."""
     with patch("ingestion_engine._get_openai", return_value=_make_openai_mock(5)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
@@ -282,7 +256,7 @@ def test_article_summary_default():
             trigger_entity="Avient",
             category="competitors",
         )
-    assert result is not None, "synthesize_insight must not return None for missing article_summary"
+    assert result is not None
     assert result["article_summary"] == ""
 
 
@@ -294,7 +268,6 @@ from delivery_engine import _render_card
 
 
 def test_render_card_shows_summary():
-    """_render_card must include article_summary text when the field is populated."""
     item = {
         "headline": "Test Headline",
         "source_url": "https://news.com/article",
@@ -311,7 +284,6 @@ def test_render_card_shows_summary():
 
 
 def test_render_card_omits_summary_when_empty():
-    """_render_card must not emit an empty <p> tag when article_summary is absent."""
     item = {
         "headline": "Test Headline",
         "source_url": "https://news.com/article",
@@ -333,13 +305,11 @@ def test_render_card_omits_summary_when_empty():
 
 import smtplib as _smtplib
 import time as _time
-from unittest.mock import MagicMock
 
 from delivery_engine import send_email as _send_email
 
 
 def _smtp_env(monkeypatch) -> None:
-    """Inject minimal SMTP env vars required by send_email()."""
     monkeypatch.setenv("SMTP_SERVER", "smtp.resend.com")
     monkeypatch.setenv("SMTP_PORT", "465")
     monkeypatch.setenv("SMTP_USER", "resend")
@@ -349,9 +319,8 @@ def _smtp_env(monkeypatch) -> None:
 
 
 def test_send_email_retries_on_421_then_succeeds(monkeypatch):
-    """send_email() must retry after a transient 421 and succeed on the second attempt."""
     _smtp_env(monkeypatch)
-    monkeypatch.setattr(_time, "sleep", lambda s: None)  # no actual sleeping
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
 
     attempt = {"count": 0}
 
@@ -365,13 +334,11 @@ def test_send_email_retries_on_421_then_succeeds(monkeypatch):
         return mock_server
 
     monkeypatch.setattr(_smtplib, "SMTP_SSL", fake_smtp_ssl)
-
-    _send_email("<html>test</html>")  # must not raise
+    _send_email("<html>test</html>")
     assert attempt["count"] == 2
 
 
 def test_send_email_raises_immediately_on_auth_failure(monkeypatch):
-    """send_email() must not retry on SMTPAuthenticationError — raise on first attempt."""
     _smtp_env(monkeypatch)
     monkeypatch.setattr(_time, "sleep", lambda s: None)
 
@@ -530,3 +497,42 @@ def test_scrape_article_no_fallback_on_non_402_error(monkeypatch):
 
     mock_fallback.assert_not_called()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 14. _render_card() — "Monitor" action suppression
+# ---------------------------------------------------------------------------
+
+def test_render_card_suppresses_monitor_action():
+    """Cards with recommended_action='Monitor' must NOT render the ACTION line."""
+    item = {
+        "headline": "Test Headline",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Some impact.",
+        "category": "competitors",
+        "sentiment_score": 5,
+        "source_publication": "Reuters",
+        "sentiment_rationale": "Neutral article.",
+        "recommended_action": "Monitor",
+        "article_summary": "",
+    }
+    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    assert "&#9654; ACTION:" not in html
+
+
+def test_render_card_shows_escalation_action():
+    """Cards with recommended_action='Escalate to leadership' MUST render the ACTION line."""
+    item = {
+        "headline": "Plant fire halts BASF production",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Direct feedstock disruption risk.",
+        "category": "suppliers",
+        "sentiment_score": 2,
+        "source_publication": "Reuters",
+        "sentiment_rationale": "Severe supply disruption.",
+        "recommended_action": "Escalate to leadership",
+        "article_summary": "",
+    }
+    html = _render_card(item, accent="#EF4444", bg="#FEF2F2", text="#B91C1C")
+    assert "&#9654; ACTION:" in html
+    assert "Escalate to leadership" in html
