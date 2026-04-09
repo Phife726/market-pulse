@@ -353,7 +353,67 @@ def store_insight(payload: dict) -> bool:
 
 
 def generate_macro_summary(articles: list[dict]) -> bool:
-    return True
+    """Generate a macro executive summary from today's stored articles.
+
+    Calls gpt-4o-mini with all article headlines and impacts, then upserts
+    a single row into daily_summaries keyed on today's run_date.
+    """
+    if not articles:
+        logger.warning("No articles to summarize — skipping macro summary generation.")
+        return False
+
+    client = _get_openai()
+
+    article_digest = "\n".join(
+        f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
+        f"(Score {a.get('sentiment_score', '')}/10): {a.get('americhem_impact', '')}"
+        for a in articles
+    )
+
+    user_prompt = (
+        f"Today's market intelligence digest for Americhem ({len(articles)} articles):\n\n"
+        f"{article_digest}\n\n"
+        f"Generate a JSON object with exactly two keys:\n"
+        f"- executive_summary: A 3-sentence macro summary of today's most important market movements "
+        f"and their implications for Americhem's supply chain and commercial position.\n"
+        f"- macro_sentiment: One word or short phrase describing overall market tone "
+        f"(e.g. Stable, Bearish, Volatile, Cautiously Optimistic, Bullish).\n"
+        f"Output ONLY the JSON object."
+    )
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-mini",
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "You are a senior market intelligence analyst. Output only valid JSON."},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.3,
+        )
+        parsed = json.loads(completion.choices[0].message.content)
+        executive_summary = parsed["executive_summary"]
+        macro_sentiment = parsed["macro_sentiment"]
+    except Exception as exc:
+        logger.error("Failed to generate macro summary from OpenAI: %s", exc)
+        return False
+
+    try:
+        from datetime import date
+        supabase = _get_supabase()
+        supabase.table("daily_summaries").upsert(
+            {
+                "run_date": date.today().isoformat(),
+                "executive_summary": executive_summary,
+                "macro_sentiment": macro_sentiment,
+            },
+            on_conflict="run_date",
+        ).execute()
+        logger.info("Macro summary upserted — sentiment: %s", macro_sentiment)
+        return True
+    except Exception as exc:
+        logger.error("Failed to upsert macro summary to Supabase: %s", exc)
+        return False
 
 
 def _log_stats(stats: dict) -> None:

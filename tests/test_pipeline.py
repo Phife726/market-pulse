@@ -536,3 +536,51 @@ def test_render_card_shows_escalation_action():
     html = _render_card(item, accent="#EF4444", bg="#FEF2F2", text="#B91C1C")
     assert "&#9654; ACTION:" in html
     assert "Escalate to leadership" in html
+
+
+# ---------------------------------------------------------------------------
+# 15. generate_macro_summary()
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import generate_macro_summary
+
+
+def test_generate_macro_summary_empty_articles():
+    """Should return False immediately when no articles are provided."""
+    result = generate_macro_summary([])
+    assert result is False
+
+
+def test_generate_macro_summary_success():
+    """Should call OpenAI, parse response, upsert to daily_summaries, return True."""
+    articles = [
+        {
+            "headline": "Polymer prices surge",
+            "category": "markets",
+            "sentiment_score": 2,
+            "americhem_impact": "Cost pressure on compounding margins.",
+        }
+    ]
+
+    mock_completion = MagicMock()
+    mock_completion.choices[0].message.content = json.dumps({
+        "executive_summary": "Polymer prices are surging.",
+        "macro_sentiment": "Bearish",
+    })
+
+    mock_openai = MagicMock()
+    mock_openai.chat.completions.create.return_value = mock_completion
+
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+
+    with patch("ingestion_engine._get_openai", return_value=mock_openai), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supabase):
+        result = generate_macro_summary(articles)
+
+    assert result is True
+    mock_supabase.table.assert_called_with("daily_summaries")
+    call_kwargs = mock_supabase.table.return_value.upsert.call_args[0][0]
+    assert call_kwargs["executive_summary"] == "Polymer prices are surging."
+    assert call_kwargs["macro_sentiment"] == "Bearish"
+    assert "run_date" in call_kwargs
