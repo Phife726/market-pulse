@@ -17,6 +17,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 MAX_DAILY_SCRAPES = 20
+OPENAI_MODEL = "gpt-5.4-nano"
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 
@@ -271,7 +272,7 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
     )
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
@@ -355,7 +356,7 @@ def store_insight(payload: dict) -> bool:
 def generate_macro_summary(articles: list[dict]) -> bool:
     """Generate a macro executive summary from today's stored articles.
 
-    Calls gpt-4o-mini with all article headlines and impacts, then upserts
+    Calls the configured OpenAI model with all article headlines and impacts, then upserts
     a single row into daily_summaries keyed on today's run_date.
     """
     if not articles:
@@ -383,7 +384,7 @@ def generate_macro_summary(articles: list[dict]) -> bool:
 
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": "You are a senior market intelligence analyst. Output only valid JSON."},

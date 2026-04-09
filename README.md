@@ -13,7 +13,7 @@ The pipeline is fully serverless, executing autonomously via GitHub Actions.
 1. **Discovery:** Queries the open web (via Serper.dev) for recent news matching Americhem's target entities.
 2. **Extraction:** Bypasses paywalls and extracts clean article markdown (via Firecrawl).
 3. **Normalization & Deduplication:** Strips URL tracking parameters and computes a SHA-256 hash to guarantee zero duplicate entries in the database.
-4. **Synthesis:** Passes the raw text to OpenAI (`gpt-4o-mini`) to extract strict JSON: the Americhem impact, a sentiment score (1-10), and the exact source URL.
+4. **Synthesis:** Passes the raw text to OpenAI (`gpt-5.4-nano`) to extract strict JSON: the Americhem impact, a sentiment score (1-10), and the exact source URL.
 5. **Storage:** Upserts the structured intelligence into a PostgreSQL database (Supabase).
 6. **Delivery:** Formats the last 24 hours of data into a BLUF (Bottom Line Up Front) HTML email and transmits it to stakeholders via verified SMTP (Resend).
 

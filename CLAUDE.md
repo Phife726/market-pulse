@@ -36,7 +36,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 2. Queries Serper.dev for recent article URLs per entity (`results_per_entity`, `lookback_hours` from `targets.yaml`)
 3. Strips URL query parameters, computes SHA-256 hash → skips if already in DB
 4. Extracts article markdown via Firecrawl; skips if below `min_article_length`
-5. Calls OpenAI `gpt-4o-mini` with article text; receives structured JSON: `headline`, `americhem_impact`, `sentiment_score` (1–10), `source_url`, `entities_mentioned`, `category`
+5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON: `headline`, `americhem_impact`, `sentiment_score` (1–10), `source_url`, `entities_mentioned`, `category`
 6. Upserts row into `daily_intelligence` table (unique constraint on `url_hash`)
 7. Enforces `MAX_DAILY_SCRAPES = 20` hard cap to protect free-tier API quotas
 
