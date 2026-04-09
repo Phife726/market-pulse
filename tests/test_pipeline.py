@@ -12,6 +12,7 @@ from ingestion_engine import (
     _TextExtractor,
     _scrape_fallback,
     compute_url_hash,
+    generate_macro_summary,
     load_targets,
     normalize_url,
     scrape_article,
@@ -258,6 +259,58 @@ def test_article_summary_default():
         )
     assert result is not None
     assert result["article_summary"] == ""
+
+
+def test_synthesize_insight_uses_gpt_5_4_nano():
+    mock_client = _make_openai_mock(5)
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Some article text about the market.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+
+    assert result is not None
+    _, kwargs = mock_client.chat.completions.create.call_args
+    assert kwargs["model"] == "gpt-5.4-nano"
+
+
+def test_generate_macro_summary_uses_gpt_5_4_nano():
+    mock_message = MagicMock()
+    mock_message.content = json.dumps(
+        {
+            "executive_summary": "Summary text.",
+            "macro_sentiment": "Stable",
+        }
+    )
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client), patch(
+        "ingestion_engine._get_supabase", return_value=mock_supabase
+    ):
+        result = generate_macro_summary(
+            [
+                {
+                    "category": "competitors",
+                    "headline": "Headline",
+                    "sentiment_score": 5,
+                    "americhem_impact": "Impact.",
+                }
+            ]
+        )
+
+    assert result is True
+    _, kwargs = mock_client.chat.completions.create.call_args
+    assert kwargs["model"] == "gpt-5.4-nano"
 
 
 # ---------------------------------------------------------------------------
