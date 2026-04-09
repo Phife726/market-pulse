@@ -267,7 +267,8 @@ def test_article_summary_default():
 from delivery_engine import _render_card
 
 
-def test_render_card_shows_summary():
+def test_render_card_omits_article_summary():
+    """article_summary must never appear in card HTML regardless of content."""
     item = {
         "headline": "Test Headline",
         "source_url": "https://news.com/article",
@@ -277,26 +278,10 @@ def test_render_card_shows_summary():
         "source_publication": "Reuters",
         "sentiment_rationale": "Neutral article.",
         "recommended_action": "Monitor",
-        "article_summary": "BASF announced a new plant in Germany. The facility will produce 50kt of polymer annually. Production starts Q1 2027.",
+        "article_summary": "BASF announced a new plant in Germany.",
     }
     html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
-    assert "BASF announced a new plant in Germany" in html
-
-
-def test_render_card_omits_summary_when_empty():
-    item = {
-        "headline": "Test Headline",
-        "source_url": "https://news.com/article",
-        "americhem_impact": "Some impact.",
-        "category": "competitors",
-        "sentiment_score": 5,
-        "source_publication": "Reuters",
-        "sentiment_rationale": "Neutral article.",
-        "recommended_action": "Monitor",
-        "article_summary": "",
-    }
-    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
-    assert '<p style="margin:0 0 8px 0;font-size:12px;color:#6B7280' not in html
+    assert "BASF announced a new plant in Germany." not in html
 
 
 # ---------------------------------------------------------------------------
@@ -584,3 +569,21 @@ def test_generate_macro_summary_success():
     assert call_kwargs["executive_summary"] == "Polymer prices are surging."
     assert call_kwargs["macro_sentiment"] == "Bearish"
     assert "run_date" in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# 16. _render_card() — article_summary must not appear in rendered HTML
+# ---------------------------------------------------------------------------
+
+def test_render_card_excludes_article_summary():
+    """article_summary must not appear in rendered card HTML."""
+    item = {
+        "headline": "Test headline",
+        "source_url": "https://example.com",
+        "americhem_impact": "Some impact.",
+        "category": "markets",
+        "sentiment_score": 5,
+        "article_summary": "This is the article summary text.",
+    }
+    html = _render_card(item, "#000000", "#ffffff", "#000000")
+    assert "This is the article summary text." not in html
