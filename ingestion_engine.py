@@ -334,7 +334,7 @@ def _hydrate_seen_headlines() -> set[str]:
             .gte("created_at", cutoff)
             .execute()
         )
-        headlines = {row["headline"] for row in result.data or []}
+        headlines = {str(row["headline"]) for row in result.data or []}
         logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
         return headlines
     except Exception as exc:
@@ -391,7 +391,10 @@ def generate_macro_summary(articles: list[dict]) -> bool:
             ],
             temperature=0.3,
         )
-        parsed = json.loads(completion.choices[0].message.content)
+        content = completion.choices[0].message.content
+        if content is None:
+            raise ValueError("OpenAI returned empty content for macro summary")
+        parsed = json.loads(content)
         executive_summary = parsed["executive_summary"]
         macro_sentiment = parsed["macro_sentiment"]
     except Exception as exc:
