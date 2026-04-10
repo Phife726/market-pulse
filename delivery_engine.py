@@ -1,13 +1,10 @@
 import logging
 import os
 import random
-import smtplib
-import socket
 import time
 from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
+import requests
 from supabase import create_client, Client
 
 logging.basicConfig(
@@ -28,12 +25,13 @@ _LOGO_URL = (
 )
 
 # ---------------------------------------------------------------------------
-# SMTP retry constants
+# Email delivery retry constants
 # ---------------------------------------------------------------------------
 
-_MAX_SMTP_ATTEMPTS    = 5
-_SMTP_BASE_DELAY_S    = 2.0
-_TRANSIENT_SMTP_CODES = {421, 450, 451, 452}
+_MAX_EMAIL_ATTEMPTS    = 5
+_EMAIL_BASE_DELAY_S    = 2.0
+_RESEND_API_URL        = "https://api.resend.com/emails"
+_TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
 
 
 # ---------------------------------------------------------------------------
@@ -444,18 +442,16 @@ def _generate_no_news_email() -> str:
 # ---------------------------------------------------------------------------
 
 def send_email(html_content: str) -> None:
-    """Send the HTML digest via SMTP with exponential backoff retry.
+    """Send the HTML digest via the Resend HTTP API with exponential backoff retry.
+
+    Uses ``SMTP_PASS`` as the Resend API key so no secret changes are required.
 
     Raises:
-        smtplib.SMTPAuthenticationError: On bad SMTP credentials (not retried).
-        smtplib.SMTPException:           On SMTP-level failures after all retries.
-        smtplib.SMTPConnectError:        After all retry attempts on transient 421/45x errors.
-        socket.timeout:                  If SMTP server is unreachable.
+        requests.HTTPError: On a permanent (non-transient) HTTP error response.
+        requests.ConnectionError: If the Resend API is unreachable.
+        requests.Timeout: If the request times out.
     """
-    smtp_server  = os.environ["SMTP_SERVER"]
-    smtp_port    = int(os.environ["SMTP_PORT"])
-    smtp_user    = os.environ["SMTP_USER"]
-    smtp_pass    = os.environ["SMTP_PASS"]
+    api_key      = os.environ["SMTP_PASS"]
     sender_email = os.environ["SENDER_EMAIL"]
     recipients   = [
         e.strip()
@@ -468,27 +464,42 @@ def send_email(html_content: str) -> None:
         f"{datetime.now().strftime('%B %d, %Y')}"
     )
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = sender_email
-    msg["To"]      = ", ".join(recipients)
-    msg.attach(MIMEText(html_content, "html"))
+    payload = {
+        "from":    sender_email,
+        "to":      recipients,
+        "subject": subject,
+        "html":    html_content,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type":  "application/json",
+    }
 
-    for attempt in range(1, _MAX_SMTP_ATTEMPTS + 1):
+    for attempt in range(1, _MAX_EMAIL_ATTEMPTS + 1):
         try:
-            if smtp_port == 465:
-                _ctx = smtplib.ssl.create_default_context()
-                _conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30, context=_ctx)
-            else:
-                _conn = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+            resp = requests.post(
+                _RESEND_API_URL,
+                json=payload,
+                headers=headers,
+                timeout=30,
+            )
 
-            with _conn as server:
-                if smtp_port != 465:
-                    server.ehlo()
-                    server.starttls()
-                    server.ehlo()
-                server.login(smtp_user, smtp_pass)
-                server.sendmail(sender_email, recipients, msg.as_string())
+            if resp.status_code in _TRANSIENT_HTTP_CODES and attempt < _MAX_EMAIL_ATTEMPTS:
+                delay = _EMAIL_BASE_DELAY_S * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                logger.warning(
+                    "Transient HTTP %s from Resend (attempt %d/%d) — retrying in %.1fs",
+                    resp.status_code, attempt, _MAX_EMAIL_ATTEMPTS, delay,
+                )
+                time.sleep(delay)
+                continue
+
+            if not resp.ok:
+                logger.error(
+                    "Resend API returned HTTP %s — body: %s",
+                    resp.status_code,
+                    resp.text,
+                )
+                resp.raise_for_status()
 
             logger.info(
                 "Email sent — subject: '%s' | recipients: %d",
@@ -497,24 +508,15 @@ def send_email(html_content: str) -> None:
             )
             return
 
-        except smtplib.SMTPAuthenticationError as exc:
-            logger.error("SMTP authentication failed (check SMTP_USER / SMTP_PASS): %s", exc)
+        except requests.HTTPError as exc:
             raise
 
-        except (smtplib.SMTPConnectError, smtplib.SMTPResponseException) as exc:
-            if exc.args[0] in _TRANSIENT_SMTP_CODES and attempt < _MAX_SMTP_ATTEMPTS:
-                delay = _SMTP_BASE_DELAY_S * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                logger.warning(
-                    "Transient SMTP error %s (attempt %d/%d) — retrying in %.1fs",
-                    exc.args[0], attempt, _MAX_SMTP_ATTEMPTS, delay,
-                )
-                time.sleep(delay)
-                continue
-            logger.error("SMTP error while sending email: %s", exc)
+        except requests.ConnectionError as exc:
+            logger.error("Connection error reaching Resend API: %s", exc)
             raise
 
-        except socket.timeout:
-            logger.error("SMTP connection timed out to %s:%s", smtp_server, smtp_port)
+        except requests.Timeout:
+            logger.error("Request to Resend API timed out")
             raise
 
         except Exception as exc:

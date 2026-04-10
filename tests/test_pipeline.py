@@ -338,57 +338,63 @@ def test_render_card_omits_article_summary():
 
 
 # ---------------------------------------------------------------------------
-# 10. send_email() SMTP retry behaviour
+# 10. send_email() HTTP retry behaviour
 # ---------------------------------------------------------------------------
 
-import smtplib as _smtplib
 import time as _time
+
+import requests as _requests
 
 from delivery_engine import send_email as _send_email
 
 
-def _smtp_env(monkeypatch) -> None:
-    monkeypatch.setenv("SMTP_SERVER", "smtp.resend.com")
-    monkeypatch.setenv("SMTP_PORT", "465")
-    monkeypatch.setenv("SMTP_USER", "resend")
+def _email_env(monkeypatch) -> None:
     monkeypatch.setenv("SMTP_PASS", "re_test_key")
     monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
     monkeypatch.setenv("RECIPIENT_EMAILS", "user@test.com")
 
 
-def test_send_email_retries_on_421_then_succeeds(monkeypatch):
-    _smtp_env(monkeypatch)
+def test_send_email_retries_on_429_then_succeeds(monkeypatch):
+    _email_env(monkeypatch)
     monkeypatch.setattr(_time, "sleep", lambda s: None)
 
     attempt = {"count": 0}
 
-    def fake_smtp_ssl(*args, **kwargs):
+    def fake_post(*args, **kwargs):
         attempt["count"] += 1
+        resp = MagicMock()
         if attempt["count"] == 1:
-            raise _smtplib.SMTPConnectError(421, b"Too many connected clients")
-        mock_server = MagicMock()
-        mock_server.__enter__ = lambda s: s
-        mock_server.__exit__ = MagicMock(return_value=False)
-        return mock_server
+            resp.status_code = 429
+            resp.raise_for_status = MagicMock()
+        else:
+            resp.status_code = 200
+            resp.raise_for_status = MagicMock()
+        return resp
 
-    monkeypatch.setattr(_smtplib, "SMTP_SSL", fake_smtp_ssl)
+    monkeypatch.setattr(_requests, "post", fake_post)
     _send_email("<html>test</html>")
     assert attempt["count"] == 2
 
 
 def test_send_email_raises_immediately_on_auth_failure(monkeypatch):
-    _smtp_env(monkeypatch)
+    _email_env(monkeypatch)
     monkeypatch.setattr(_time, "sleep", lambda s: None)
 
     attempt = {"count": 0}
 
-    def fake_smtp_ssl(*args, **kwargs):
+    def fake_post(*args, **kwargs):
         attempt["count"] += 1
-        raise _smtplib.SMTPAuthenticationError(535, b"Bad credentials")
+        resp = MagicMock()
+        resp.status_code = 403
+        resp.ok = False
+        http_err = _requests.HTTPError()
+        http_err.response = resp
+        resp.raise_for_status = MagicMock(side_effect=http_err)
+        return resp
 
-    monkeypatch.setattr(_smtplib, "SMTP_SSL", fake_smtp_ssl)
+    monkeypatch.setattr(_requests, "post", fake_post)
 
-    with pytest.raises(_smtplib.SMTPAuthenticationError):
+    with pytest.raises(_requests.HTTPError):
         _send_email("<html>test</html>")
 
     assert attempt["count"] == 1  # must NOT have retried
