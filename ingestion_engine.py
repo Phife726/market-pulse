@@ -124,44 +124,87 @@ def _get_openai() -> OpenAI:
 
 
 def load_targets(config_path: str) -> list[dict]:
+    """Load active search targets from a YAML config file.
+
+    Supports two search modes:
+    - ``entity``: one Serper query per active company name under ``entities:``.
+    - ``concept``: one combined OR query for the whole group (``active: true``
+      required at group level).
+
+    Returns:
+        List of target dicts, each containing ``name``, ``category``,
+        ``query`` (pre-built Serper query string), and discovery settings.
+    """
     with open(config_path, "r") as fh:
         config = yaml.safe_load(fh)
     discovery = config.get("discovery", {})
     results_per_entity: int = discovery.get("results_per_entity", 2)
     lookback_hours: int = discovery.get("lookback_hours", 24)
     min_article_length: int = discovery.get("min_article_length", 500)
-    entity_categories = ("competitors", "customers", "suppliers", "raw_materials", "markets")
+
     targets: list[dict] = []
-    for category in entity_categories:
-        for entity in config.get(category, []):
-            if entity.get("active", False):
+    for group_name, group_cfg in config.items():
+        if group_name == "discovery" or not isinstance(group_cfg, dict):
+            continue
+        mode: str = group_cfg.get("search_mode", "entity")
+        include_all: list[str] = group_cfg.get("include_all", [])
+        exclude_any: list[str] = group_cfg.get("exclude_any", [])
+
+        if mode == "entity":
+            for entity in group_cfg.get("entities", []):
+                if not entity.get("active", False):
+                    continue
                 targets.append({
                     "name": entity["name"],
-                    "category": category,
+                    "category": group_name,
+                    "query": build_query(
+                        "entity",
+                        name=entity["name"],
+                        include_all=include_all,
+                        exclude_any=exclude_any,
+                    ),
                     "results_per_entity": results_per_entity,
                     "lookback_hours": lookback_hours,
                     "min_article_length": min_article_length,
                 })
+
+        elif mode == "concept":
+            if not group_cfg.get("active", False):
+                continue
+            targets.append({
+                "name": group_name,
+                "category": group_name,
+                "query": build_query(
+                    "concept",
+                    include_any=group_cfg.get("include_any", []),
+                    include_all=include_all,
+                    exclude_any=exclude_any,
+                ),
+                "results_per_entity": results_per_entity,
+                "lookback_hours": lookback_hours,
+                "min_article_length": min_article_length,
+            })
+
     logger.info("Loaded %d active targets from %s", len(targets), config_path)
     return targets
 
 
-def discover_urls(entity_name: str, lookback_hours: int, results_per_entity: int) -> list[tuple[str, str]]:
+def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> list[tuple[str, str]]:
     api_key = os.environ["SERPER_API_KEY"]
     endpoint = "https://google.serper.dev/news"
-    payload = {"q": entity_name, "num": results_per_entity, "tbs": f"qdr:h{lookback_hours}"}
+    payload = {"q": query, "num": results_per_entity, "tbs": f"qdr:h{lookback_hours}"}
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=15)
         response.raise_for_status()
     except requests.exceptions.Timeout:
-        logger.error("Serper.dev request timed out for entity '%s'", entity_name)
+        logger.error("Serper.dev request timed out for query '%s'", query[:80])
         return []
     except requests.exceptions.HTTPError as exc:
-        logger.error("Serper.dev HTTP error for entity '%s': %s", entity_name, exc.response.status_code)
+        logger.error("Serper.dev HTTP error for query '%s': %s", query[:80], exc.response.status_code)
         return []
     except requests.exceptions.RequestException as exc:
-        logger.error("Serper.dev request failed for entity '%s': %s", entity_name, exc)
+        logger.error("Serper.dev request failed for query '%s': %s", query[:80], exc)
         return []
     data = response.json()
     results = [
@@ -169,7 +212,7 @@ def discover_urls(entity_name: str, lookback_hours: int, results_per_entity: int
         for item in data.get("news", [])
         if "link" in item
     ]
-    logger.info("Discovered %d URL(s) for '%s'", len(results), entity_name)
+    logger.info("Discovered %d URL(s) for query '%s'", len(results), query[:80])
     return results
 
 
@@ -509,7 +552,7 @@ def execute_pipeline() -> None:
         results_per_entity = target["results_per_entity"]
         min_article_length = target["min_article_length"]
 
-        raw_results = discover_urls(entity_name, lookback_hours, results_per_entity)
+        raw_results = discover_urls(target["query"], lookback_hours, results_per_entity)
         stats["urls_discovered"] += len(raw_results)
 
         for raw_url, serper_title in raw_results:

@@ -98,16 +98,18 @@ def test_sentiment_clamp(raw_score: int, expected: int):
 # ---------------------------------------------------------------------------
 
 def test_load_targets_filters_inactive(tmp_path):
+    """Inactive entities in entity-mode groups must not appear in results."""
     config_yaml = textwrap.dedent(
         """\
         competitors:
-          - name: ActiveCorp
-            active: true
-          - name: InactiveCorp
-            active: false
-        customers: []
-        suppliers: []
-        markets: []
+          search_mode: entity
+          include_all: []
+          exclude_any: []
+          entities:
+            - name: ActiveCorp
+              active: true
+            - name: InactiveCorp
+              active: false
         discovery:
           results_per_entity: 2
           lookback_hours: 24
@@ -123,14 +125,16 @@ def test_load_targets_filters_inactive(tmp_path):
 
 
 def test_load_targets_returns_expected_fields(tmp_path):
+    """Entity-mode target dicts must contain name, category, query, and discovery fields."""
     config_yaml = textwrap.dedent(
         """\
         competitors:
-          - name: Avient
-            active: true
-        customers: []
-        suppliers: []
-        markets: []
+          search_mode: entity
+          include_all: []
+          exclude_any: []
+          entities:
+            - name: Avient
+              active: true
         discovery:
           results_per_entity: 3
           lookback_hours: 48
@@ -144,9 +148,92 @@ def test_load_targets_returns_expected_fields(tmp_path):
     t = targets[0]
     assert t["name"] == "Avient"
     assert t["category"] == "competitors"
+    assert t["query"] == '"Avient"'
     assert t["results_per_entity"] == 3
     assert t["lookback_hours"] == 48
     assert t["min_article_length"] == 300
+
+
+def test_load_targets_concept_group(tmp_path):
+    """Active concept-mode groups produce a single target with an OR query."""
+    config_yaml = textwrap.dedent(
+        """\
+        industry:
+          search_mode: concept
+          active: true
+          include_any:
+            - "plastics industry"
+            - "chemical industry"
+          include_all: []
+          exclude_any:
+            - tenders
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    assert len(targets) == 1
+    t = targets[0]
+    assert t["name"] == "industry"
+    assert t["category"] == "industry"
+    assert '("plastics industry" OR "chemical industry")' in t["query"]
+    assert '-"tenders"' in t["query"]
+
+
+def test_load_targets_inactive_concept_group(tmp_path):
+    """Concept-mode groups with active: false must not appear in results."""
+    config_yaml = textwrap.dedent(
+        """\
+        industry:
+          search_mode: concept
+          active: false
+          include_any:
+            - "plastics industry"
+          include_all: []
+          exclude_any: []
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    assert targets == []
+
+
+def test_load_targets_entity_excludes_applied_to_query(tmp_path):
+    """Group-level exclude_any must appear as -\"term\" in every entity query."""
+    config_yaml = textwrap.dedent(
+        """\
+        customers:
+          search_mode: entity
+          include_all: []
+          exclude_any:
+            - patents
+            - "securities analyst reports"
+          entities:
+            - name: Shaw Industries
+              active: true
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    assert len(targets) == 1
+    q = targets[0]["query"]
+    assert '"Shaw Industries"' in q
+    assert '-"patents"' in q
+    assert '-"securities analyst reports"' in q
 
 
 # ---------------------------------------------------------------------------
@@ -159,35 +246,7 @@ def test_discard_signal_detected():
 
 
 # ---------------------------------------------------------------------------
-# 6. raw_materials category
-# ---------------------------------------------------------------------------
-
-def test_raw_materials_category_loaded(tmp_path):
-    config_yaml = textwrap.dedent(
-        """\
-        competitors: []
-        customers: []
-        suppliers: []
-        raw_materials:
-          - name: "commodity resins"
-            active: true
-        markets: []
-        discovery:
-          results_per_entity: 2
-          lookback_hours: 24
-          min_article_length: 500
-        """
-    )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
-    names = [t["name"] for t in targets]
-    assert "commodity resins" in names
-    assert targets[0]["category"] == "raw_materials"
-
-
-# ---------------------------------------------------------------------------
-# 7. recommended_action soft default
+# 6. recommended_action soft default
 # ---------------------------------------------------------------------------
 
 def _make_openai_mock_no_action(sentiment_score: int) -> MagicMock:
