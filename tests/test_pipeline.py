@@ -11,6 +11,7 @@ import pytest
 from ingestion_engine import (
     _TextExtractor,
     _scrape_fallback,
+    build_query,
     compute_url_hash,
     generate_macro_summary,
     load_targets,
@@ -646,3 +647,63 @@ def test_render_card_excludes_article_summary():
     }
     html = _render_card(item, "#000000", "#ffffff", "#000000")
     assert "This is the article summary text." not in html
+
+
+# ---------------------------------------------------------------------------
+# 17. build_query()
+# ---------------------------------------------------------------------------
+
+def test_build_query_entity_mode_bare():
+    """Entity mode with no include_all or exclude_any produces a quoted name."""
+    result = build_query("entity", name="Shaw Industries")
+    assert result == '"Shaw Industries"'
+
+
+def test_build_query_entity_mode_with_excludes():
+    """Entity mode exclude_any terms become -\"term\" operators."""
+    result = build_query(
+        "entity",
+        name="Shaw Industries",
+        include_all=[],
+        exclude_any=["patents", "securities analyst reports"],
+    )
+    assert '"Shaw Industries"' in result
+    assert '-"patents"' in result
+    assert '-"securities analyst reports"' in result
+
+
+def test_build_query_concept_mode():
+    """Concept mode ORs all include_any terms and ANDs include_all."""
+    result = build_query(
+        "concept",
+        include_any=["plastics industry", "chemical industry", "compounding"],
+        include_all=["business"],
+        exclude_any=[],
+    )
+    assert '("plastics industry" OR "chemical industry" OR "compounding")' in result
+    assert '"business"' in result
+
+
+def test_build_query_filters_moody_internal_excludes():
+    """Moody's platform identifiers in exclude_any must be silently dropped."""
+    result = build_query(
+        "concept",
+        include_any=["plastics industry"],
+        include_all=[],
+        exclude_any=["source set 238658", "PR wires", "Targeted News Search", "tenders"],
+    )
+    assert "source set 238658" not in result
+    assert "PR wires" not in result
+    assert "Targeted News Search" not in result
+    assert '-"tenders"' in result   # real term must survive
+
+
+def test_build_query_concept_mode_no_include_all():
+    """Concept mode with empty include_all produces no spurious quoted terms."""
+    result = build_query(
+        "concept",
+        include_any=["automotive industry"],
+        include_all=[],
+        exclude_any=[],
+    )
+    assert result == '("automotive industry")'

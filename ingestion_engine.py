@@ -20,6 +20,56 @@ MAX_DAILY_SCRAPES = 20
 OPENAI_MODEL = "gpt-5.4-nano"
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
+_MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
+    "source set 238658",
+    "PR wires",
+    "Targeted News Search",
+    "US Federal News",
+    "specific Asia PR feed",
+    "specific processing feeds",
+    "Financial Times feeds",
+    "financial markups",
+})
+
+
+def build_query(
+    mode: str,
+    name: Optional[str] = None,
+    include_any: Optional[list[str]] = None,
+    include_all: Optional[list[str]] = None,
+    exclude_any: Optional[list[str]] = None,
+) -> str:
+    """Build a Serper.dev search query string from group field semantics.
+
+    Supports two modes:
+    - ``entity``: wraps ``name`` in quotes as the primary search term.
+    - ``concept``: ORs all ``include_any`` terms into a single combined query.
+
+    ``include_all`` terms are ANDed into every query. ``exclude_any`` terms
+    become ``-"term"`` operators; entries in ``_MOODY_INTERNAL_EXCLUDES``
+    (Moody's platform-level source identifiers) are silently dropped.
+
+    Returns:
+        A query string ready to pass as Serper's ``q`` parameter.
+    """
+    parts: list[str] = []
+
+    if mode == "entity":
+        parts.append(f'"{name}"')
+    elif mode == "concept":
+        if include_any:
+            or_terms = " OR ".join(f'"{t}"' for t in include_any)
+            parts.append(f"({or_terms})")
+
+    for term in (include_all or []):
+        parts.append(f'"{term}"')
+
+    for term in (exclude_any or []):
+        if term not in _MOODY_INTERNAL_EXCLUDES:
+            parts.append(f'-"{term}"')
+
+    return " ".join(parts)
+
 
 class _TextExtractor(HTMLParser):
     _SKIP_TAGS: frozenset[str] = frozenset(
