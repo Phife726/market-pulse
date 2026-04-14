@@ -1,84 +1,418 @@
 # ============================================================
-# Market-Pulse Control Panel
+# Market-Pulse Control Panel — Americhem
+# Moody's News Edge Replacement
 # ============================================================
-# To monitor a new entity: add a line with name and active: true
-# To pause an entity:      set active: false
-# No Python changes required — just edit this file and commit.
+# ENTITY MODE  — one Serper query per active company name
+# CONCEPT MODE — one combined OR query per group
 #
-# Categories:
-#   competitors   — direct market competitors
-#   customers     — Americhem's key accounts
-#   suppliers     — raw material and chemical suppliers
-#   raw_materials — commodity/specialty material keyword searches
-#   markets       — broad industry/segment keyword searches
+# To pause an entity:     set active: false (no Python change needed)
+# To add an entity:       append to entities: list
+# To add a concept group: new top-level key, search_mode: concept
 #
-# discovery settings control how Serper.dev queries are constructed:
-#   results_per_entity  — articles fetched per entity per run
-#   lookback_hours      — how far back to search
-#   min_article_length  — minimum chars to pass to LLM (filters stubs)
+# exclude_any: Moody's platform identifiers (e.g. "source set 238658",
+#   "PR wires") are silently ignored by ingestion_engine.py —
+#   only real search terms become -"term" operators.
 # ============================================================
-
-competitors:
-  - name: Avient
-    active: true
-  - name: Clariant
-    active: true
-  - name: Ampacet
-    active: true
-  - name: RTP Company
-    active: true
-
-customers:
-  - name: Shaw Industries
-    active: true
-  - name: Advanced Composites
-    active: true
-  - name: Cornerstone Building Brands
-    active: true
-  - name: Bemis Company
-    active: true
-
-suppliers:
-  - name: Oxy Vinyls
-    active: true
-  - name: BASF
-    active: true
-  - name: Modern Dispersions
-    active: true
-  - name: AdvanSix
-    active: true
-
-raw_materials:
-  - name: "commodity resins polypropylene polyethylene"
-    active: true
-  - name: "engineered resins nylon polycarbonate"
-    active: true
-  - name: "colorants pigments masterbatch"
-    active: true
-  - name: "UV stabilizers HALS"
-    active: true
-  - name: "flame retardants polymer additives"
-    active: true
-  - name: "titanium dioxide TiO2 supply"
-    active: true
-
-markets:
-  - name: Automotive Compounds
-    active: true
-  - name: Nonwoven Fabrics
-    active: true
-  - name: Medical Devices
-    active: true
-  - name: Building and Construction
-    active: true
-  - name: "custom color masterbatch market"
-    active: true
-  - name: "polymer compounding market"
-    active: true
-  - name: "plastics recycling circularity"
-    active: true
 
 discovery:
   results_per_entity: 2
   lookback_hours: 24
   min_article_length: 500
+
+# ── ENTITY MODE GROUPS ────────────────────────────────────────
+
+competitors:
+  search_mode: entity
+  include_all: []
+  exclude_any: []
+  entities:
+    - name: Audia Elastomers
+      active: true
+    - name: Aurora Fine Chemicals
+      active: true
+    - name: Liochem
+      active: true
+    - name: Polymax
+      active: true
+    - name: Primex Color Compounding
+      active: true
+    - name: Avient
+      active: true
+    - name: Standridge Color
+      active: true
+    - name: Ampacet
+      active: true
+    - name: Teknor Apex
+      active: true
+    - name: Mitsubishi Chemical
+      active: true
+    - name: Uniform Color
+      active: true
+    - name: Akro-Mils
+      active: true
+    - name: RTP Company
+      active: true
+    - name: Penn Color
+      active: true
+    - name: Techmer PM
+      active: true
+    - name: Kraiburg TPE
+      active: true
+    - name: Grafe Advanced Polymers
+      active: true
+
+customers:
+  search_mode: entity
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+  entities:
+    - name: Cavanaugh Building Corporation
+      active: true
+    - name: Closure Systems International
+      active: true
+    - name: Cocona
+      active: true
+    - name: CS Manufacturing
+      active: true
+    - name: Fiberon
+      active: true
+    - name: GAF Roofing
+      active: true
+    - name: Homeland Vinyl
+      active: true
+    - name: Inoac Automotive
+      active: true
+    - name: Integrated Fiber Solutions
+      active: true
+    - name: Marglen Industries
+      active: true
+    - name: Marquis Industries
+      active: true
+    - name: Mitchell Plastics
+      active: true
+    - name: Motus Integrated
+      active: true
+    - name: NYX Inc
+      active: true
+    - name: Plast-O-Foam
+      active: true
+    - name: Plastipak
+      active: true
+    - name: Polymer Process Development
+      active: true
+    - name: TruNorth Composites
+      active: true
+    - name: Kinderhook Industries
+      active: true
+    - name: Shaw Industries
+      active: true
+    - name: Advanced Composites
+      active: true
+    - name: Magna International
+      active: true
+    - name: Kimberly-Clark
+      active: true
+    - name: Ply Gem
+      active: true
+    - name: Mohawk Industries
+      active: true
+    - name: Pilkington
+      active: true
+    - name: AdvanSix
+      active: true
+    - name: Saint-Gobain Glass
+      active: true
+    - name: Performance Plastics
+      active: true
+    - name: Summit Polymers
+      active: true
+    - name: Yanfeng Global
+      active: true
+    - name: Asahi Glass
+      active: true
+    - name: Mannington Mills
+      active: true
+    - name: Koch Industries
+      active: true
+    - name: SABIC
+      active: true
+    - name: Farathane
+      active: true
+    - name: 3M
+      active: true
+    - name: Universal Fiber
+      active: true
+    - name: Associated Materials
+      active: true
+    - name: Bonar
+      active: true
+    - name: Ascend Performance Materials
+      active: true
+    - name: Radici Group
+      active: true
+    - name: Lexmark
+      active: true
+    - name: Fuyao Automotive Glass
+      active: true
+    - name: Tokai Rika
+      active: true
+    - name: Freudenberg
+      active: true
+    - name: Wilbert
+      active: true
+    - name: Indorama Ventures
+      active: true
+    - name: Mayco Industries
+      active: true
+
+suppliers:
+  search_mode: entity
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+  entities:
+    - name: AdvanSix Resin
+      active: true
+    - name: AM Stabilizers
+      active: true
+    - name: Amco Polymers
+      active: true
+    - name: Baerlocher
+      active: true
+    - name: BASF
+      active: true
+    - name: Cal-Chem
+      active: true
+    - name: Channel Prime Alliance
+      active: true
+    - name: DCL Corp
+      active: true
+    - name: Dynasol
+      active: true
+    - name: ExxonMobil Chemical
+      active: true
+    - name: Ferro Pigments
+      active: true
+    - name: Heucotech
+      active: true
+    - name: Huntsman Corporation
+      active: true
+    - name: Interspersal
+      active: true
+    - name: Milliken
+      active: true
+    - name: Mitsui Plastics
+      active: true
+    - name: Nycoa
+      active: true
+    - name: Shepherd Color
+      active: true
+    - name: Shintech
+      active: true
+    - name: Univar Solutions
+      active: true
+    - name: Chemours
+      active: true
+    - name: Nexeo Solutions
+      active: true
+    - name: Oxy Vinyls
+      active: true
+    - name: Clariant
+      active: true
+    - name: Sun Chemical
+      active: true
+    - name: Kronos Worldwide
+      active: true
+    - name: Kuraray
+      active: true
+    - name: Lanxess
+      active: true
+    - name: Cytec Industries
+      active: true
+    - name: Trinseo
+      active: true
+    - name: Barentz
+      active: true
+    - name: Orion Engineered Carbons
+      active: true
+    - name: Venator Materials
+      active: true
+    - name: BYK Additives
+      active: true
+    - name: Dow
+      active: true
+    - name: Cabot Corporation
+      active: true
+    - name: Formosa Plastics
+      active: true
+    - name: Chase Plastics
+      active: true
+    - name: Lubrizol
+      active: true
+    - name: Omya
+      active: true
+    - name: Galata Chemicals
+      active: true
+    - name: Honeywell
+      active: true
+
+# ── CONCEPT MODE GROUPS ───────────────────────────────────────
+
+industry:
+  search_mode: concept
+  active: true
+  include_any:
+    - "plastics industry"
+    - "chemical industry"
+    - "floriculture consumer goods"
+    - compounding
+    - extrusion
+  include_all: []
+  exclude_any:
+    - tenders
+
+economic:
+  search_mode: concept
+  active: true
+  include_any:
+    - "economic indicators"
+    - "labor market"
+    - "hiring layoffs"
+    - "economic forecast"
+    - "global economy"
+  include_all: []
+  exclude_any:
+    - Xinhua
+    - "Anadolu Agency"
+    - Mondaq
+
+healthcare:
+  search_mode: concept
+  active: true
+  include_any:
+    - "Beckman Coulter"
+    - "Aptar Pharma"
+    - Bespak
+    - "Companion Medical"
+    - "Credence Medsystems"
+    - "GE Healthcare"
+    - "medical grade plastics"
+    - "biocompatible plastics"
+    - "sterilizable plastics"
+    - "autoclavable plastics"
+    - "clean compounding"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+
+transportation:
+  search_mode: concept
+  active: true
+  include_any:
+    - "automotive industry"
+  include_all: []
+  exclude_any: []
+
+# NOTE: Moody's spec listed "automotive industry" here — confirmed copy-paste error.
+# Replaced with building/construction-specific terms.
+building_construction:
+  search_mode: concept
+  active: true
+  include_any:
+    - "building materials"
+    - "construction industry"
+    - "building products"
+    - "commercial construction"
+    - "residential construction"
+  include_all: []
+  exclude_any: []
+
+fibers:
+  search_mode: concept
+  active: true
+  include_any:
+    - "synthetic fiber"
+    - "performance fiber"
+    - polyester
+    - polyethylene
+    - polypropylene
+    - nylon
+    - acrylic
+  include_all:
+    - textiles
+  exclude_any: []
+
+packaging:
+  search_mode: concept
+  active: true
+  include_any:
+    - "packaging manufacturing"
+  include_all: []
+  exclude_any:
+    - "Pizza Hut"
+
+electronics:
+  search_mode: concept
+  active: true
+  include_any:
+    - "electronics industry"
+  include_all: []
+  exclude_any:
+    - "video game industry"
+    - "video games"
+
+# NOTE: Moody's spec uses "acetyl" — corrected to "acetal" (polyacetal/POM polymer).
+# PPE kept per spec; include_all: polymer suppresses personal-protective-equipment noise.
+# engineered_resins  = raw material supply/pricing context (include_all: polymer)
+# performance_compounds = processing/formulation context (include_all: compounding)
+engineered_resins:
+  search_mode: concept
+  active: true
+  include_any:
+    - acetal
+    - nylon
+    - PBT
+    - polycarbonate
+    - PEEK
+    - PEI
+    - PES
+    - PET
+    - polyolefin
+    - PPE
+    - PPS
+    - PSU
+    - TPE
+    - TPU
+    - thermoplastics
+  include_all:
+    - polymer
+  exclude_any:
+    - patents
+
+performance_compounds:
+  search_mode: concept
+  active: true
+  include_any:
+    - acetal
+    - nylon
+    - PBT
+    - polycarbonate
+    - PEEK
+    - PEI
+    - PES
+    - PET
+    - polyolefin
+    - PPE
+    - PPS
+    - PSU
+    - TPE
+    - TPU
+    - thermoplastics
+  include_all:
+    - compounding
+  exclude_any:
+    - patents
