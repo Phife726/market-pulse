@@ -16,7 +16,7 @@ from supabase import create_client, Client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-MAX_DAILY_SCRAPES = 20
+MAX_DAILY_SCRAPES = 150
 OPENAI_MODEL = "gpt-5.4-nano"
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
