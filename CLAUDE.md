@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Purpose
+
 Automated daily market intelligence pipeline (for Americhem) that replaces a Moody's News Edge subscription. Scrapes open-web news, applies LLM synthesis, and delivers a BLUF-formatted HTML email to stakeholders.
 
 ## Commands
@@ -32,6 +33,7 @@ The GitHub Actions workflow (`.github/workflows/market_pulse.yml`) runs ingestio
 The pipeline is two sequential scripts sharing a Supabase database:
 
 **`ingestion_engine.py`** — Scrape → Synthesize → Store
+
 1. Loads `targets.yaml` to get active entities (competitors, customers, suppliers, markets)
 2. Queries Serper.dev for recent article URLs per entity (`results_per_entity`, `lookback_hours` from `targets.yaml`)
 3. Strips URL query parameters, computes SHA-256 hash → skips if already in DB
@@ -41,6 +43,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 7. Enforces `MAX_DAILY_SCRAPES = 20` hard cap to protect free-tier API quotas
 
 **`delivery_engine.py`** — Fetch → Format → Send
+
 1. Queries the `todays_intelligence` view (last 24 hours, ordered by `sentiment_score` ascending)
 2. Groups items by `alert_tier`: CRITICAL (1–3), ROUTINE (4–7), STRATEGIC (8–10)
 3. Renders HTML email (BLUF format) and sends via SMTP — Resend (`smtp.resend.com`) on port 465 with `SMTP_SSL`. Port 587/STARTTLS times out on GitHub Actions runners; always use 465.
@@ -48,6 +51,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 **Database** (`schema.sql`) — Single table `daily_intelligence` with a `todays_intelligence` view. The view adds an `alert_tier` column derived from `sentiment_score`. The unique index on `url_hash` is the deduplication gate.
 
 **`targets.yaml`** — The only file non-technical editors need to touch. Add/remove entities here; no Python changes required. Top-level keys:
+
 - `discovery.results_per_entity` / `lookback_hours` / `min_article_length` — discovery tuning
 - Category sections (`competitors`, `customers`, `suppliers`, `markets`) each contain a list of `{name, active}`; set `active: false` to pause an entity without deleting it
 
@@ -56,6 +60,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 `tests/test_pipeline.py` covers: URL normalization (query params/fragments stripped), SHA-256 hash collision (UTM-polluted vs. clean URL must hash identically), sentiment score clamping to [1, 10], and `load_targets()` filtering inactive entities. All external API clients (OpenAI, Supabase, Serper, Firecrawl) are mocked — no live calls in the test suite.
 
 ## Key Invariants
+
 - URL normalization (strip query params) MUST happen before hashing — this is the sole deduplication mechanism.
 - `source_url` is injected into the LLM prompt so the model returns the canonical URL deterministically.
 - `SUPABASE_KEY` must be the **Service Role** key (not anon) to bypass Row Level Security.
@@ -63,6 +68,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 - Monday delivery uses a 72-hour lookback (vs. 24 h on other days) to capture Friday news over the weekend — this logic lives in `fetch_todays_intelligence()`.
 
 ## Python Conventions
+
 - Type hints on all function signatures; `Optional[T]` for nullable returns.
 - Structured logging with `%s` placeholders — never f-strings in `logger.*()` calls.
 - Specific exception handling — never bare `except:` or broad `except Exception` without logging `exc`.
