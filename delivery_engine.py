@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import random
@@ -5,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 
 import requests
+from openai import OpenAI
 from supabase import create_client, Client
 
 logging.basicConfig(
@@ -32,6 +34,17 @@ _MAX_EMAIL_ATTEMPTS    = 5
 _EMAIL_BASE_DELAY_S    = 2.0
 _RESEND_API_URL        = "https://api.resend.com/emails"
 _TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
+
+# ---------------------------------------------------------------------------
+# OpenAI client
+# ---------------------------------------------------------------------------
+
+OPENAI_MODEL = "gpt-5.4-nano"
+
+
+def _get_openai() -> OpenAI:
+    """Return an authenticated OpenAI client using env credentials."""
+    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 # ---------------------------------------------------------------------------

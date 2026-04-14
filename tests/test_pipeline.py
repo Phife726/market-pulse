@@ -377,7 +377,11 @@ def test_generate_macro_summary_uses_gpt_5_4_nano():
 # 9. _render_card() article_summary rendering
 # ---------------------------------------------------------------------------
 
-from delivery_engine import _render_card
+from delivery_engine import (
+    _render_card,
+    _get_openai as _delivery_get_openai,
+    OPENAI_MODEL as _DELIVERY_MODEL,
+)
 
 
 def test_render_card_omits_article_summary():
