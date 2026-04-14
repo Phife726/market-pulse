@@ -381,6 +381,13 @@ from delivery_engine import (
     _render_card,
     _get_openai as _delivery_get_openai,
     OPENAI_MODEL as _DELIVERY_MODEL,
+    _group_for_thematic,
+    _collect_thin_entries,
+    _collect_peripheral,
+    synthesize_thematic_paragraphs,
+    _render_peripheral_section,
+    _render_thematic_section,
+    generate_html_email,
 )
 
 
@@ -770,3 +777,349 @@ def test_build_query_concept_mode_no_include_all():
         exclude_any=[],
     )
     assert result == '("automotive industry")'
+
+
+# ===========================================================================
+# Thematic synthesis helpers — shared fixture
+# ===========================================================================
+
+def _make_article(
+    url_hash: str,
+    score: int,
+    category: str | None,
+    headline: str = "Test Headline",
+) -> dict:
+    return {
+        "url_hash": url_hash,
+        "sentiment_score": score,
+        "category": category,
+        "headline": headline,
+        "americhem_impact": "Some impact.",
+        "entities_mentioned": ["TestCorp"],
+        "source_url": "https://news.com/article",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — _group_for_thematic
+# ---------------------------------------------------------------------------
+
+def test_group_for_thematic_requires_two_plus():
+    """Categories with only one article must NOT appear in groups."""
+    items = [_make_article("a", 7, "competitors")]
+    groups = _group_for_thematic(items)
+    assert groups == {}
+
+
+def test_group_for_thematic_two_same_category():
+    """Two articles in the same category produce one group."""
+    items = [
+        _make_article("a", 7, "competitors"),
+        _make_article("b", 8, "competitors"),
+    ]
+    groups = _group_for_thematic(items)
+    assert "competitors" in groups
+    assert len(groups["competitors"]) == 2
+
+
+def test_group_for_thematic_excludes_critical():
+    """Score 1–3 articles must never appear in groups even if passed in."""
+    items = [
+        _make_article("a", 2, "suppliers"),
+        _make_article("b", 2, "suppliers"),
+    ]
+    groups = _group_for_thematic(items)
+    assert groups == {}
+
+
+def test_group_for_thematic_none_category_becomes_uncategorized():
+    """Articles with None or empty category must group under 'Uncategorized'."""
+    items = [
+        _make_article("a", 6, None),
+        _make_article("b", 5, ""),
+    ]
+    groups = _group_for_thematic(items)
+    assert "Uncategorized" in groups
+    assert len(groups["Uncategorized"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — _collect_thin_entries, _collect_peripheral
+# ---------------------------------------------------------------------------
+
+def test_collect_thin_entries_single_high_score():
+    """Single-article score 7–10 not in any group goes to thin entries."""
+    items = [_make_article("solo", 8, "customers")]
+    thin = _collect_thin_entries(items, {})
+    assert len(thin) == 1
+    assert thin[0]["url_hash"] == "solo"
+
+
+def test_collect_thin_entries_excludes_grouped():
+    """Articles already in a synthesis group must not appear in thin entries."""
+    art_a = _make_article("a", 8, "customers")
+    art_b = _make_article("b", 9, "customers")
+    groups = {"customers": [art_a, art_b]}
+    thin = _collect_thin_entries([art_a, art_b], groups)
+    assert thin == []
+
+
+def test_collect_thin_entries_excludes_low_score():
+    """Score 4–6 articles must not appear in thin entries even if ungrouped."""
+    items = [_make_article("low", 5, "markets")]
+    thin = _collect_thin_entries(items, {})
+    assert thin == []
+
+
+def test_collect_peripheral_single_low_score():
+    """Single-article score 4–6 not in any group goes to peripheral."""
+    items = [_make_article("p", 5, "markets")]
+    peripheral = _collect_peripheral(items, {})
+    assert len(peripheral) == 1
+    assert peripheral[0]["url_hash"] == "p"
+
+
+def test_collect_peripheral_excludes_grouped():
+    """Articles in a synthesis group must not appear in peripheral."""
+    art_a = _make_article("a", 5, "markets")
+    art_b = _make_article("b", 6, "markets")
+    groups = {"markets": [art_a, art_b]}
+    peripheral = _collect_peripheral([art_a, art_b], groups)
+    assert peripheral == []
+
+
+def test_collect_peripheral_excludes_high_score():
+    """Score 7–10 articles must not appear in peripheral even if ungrouped."""
+    items = [_make_article("high", 8, "markets")]
+    peripheral = _collect_peripheral(items, {})
+    assert peripheral == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — synthesize_thematic_paragraphs
+# ---------------------------------------------------------------------------
+
+def _make_synthesis_mock(paragraphs: dict) -> MagicMock:
+    mock_message = MagicMock()
+    mock_message.content = json.dumps(paragraphs)
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+    return mock_client
+
+
+def test_synthesize_thematic_paragraphs_returns_paragraphs():
+    """Returns dict of {category: paragraph} on success."""
+    groups = {
+        "competitors": [
+            _make_article("a", 8, "competitors"),
+            _make_article("b", 7, "competitors"),
+        ]
+    }
+    expected = {"competitors": "Avient and Techmer raised prices."}
+    mock_client = _make_synthesis_mock(expected)
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        result = synthesize_thematic_paragraphs(groups)
+
+    assert result == expected
+
+
+def test_synthesize_thematic_paragraphs_uses_json_response_format():
+    """Must call OpenAI with response_format={'type': 'json_object'}."""
+    groups = {
+        "suppliers": [
+            _make_article("a", 4, "suppliers"),
+            _make_article("b", 5, "suppliers"),
+        ]
+    }
+    mock_client = _make_synthesis_mock({"suppliers": "Supply chain tightening."})
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        synthesize_thematic_paragraphs(groups)
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    assert kwargs.get("response_format") == {"type": "json_object"}
+
+
+def test_synthesize_thematic_paragraphs_uses_openai_model():
+    """Must use OPENAI_MODEL constant, not a hardcoded string."""
+    from delivery_engine import OPENAI_MODEL
+    groups = {
+        "markets": [
+            _make_article("a", 6, "markets"),
+            _make_article("b", 6, "markets"),
+        ]
+    }
+    mock_client = _make_synthesis_mock({"markets": "Markets paragraph."})
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        synthesize_thematic_paragraphs(groups)
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    assert kwargs.get("model") == OPENAI_MODEL
+
+
+def test_synthesize_thematic_paragraphs_empty_groups():
+    """Returns {} immediately without calling OpenAI when groups is empty."""
+    mock_client = MagicMock()
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        result = synthesize_thematic_paragraphs({})
+
+    mock_client.chat.completions.create.assert_not_called()
+    assert result == {}
+
+
+def test_synthesize_thematic_paragraphs_graceful_degradation():
+    """Returns {} and logs error when OpenAI raises — does not re-raise."""
+    groups = {
+        "competitors": [
+            _make_article("a", 7, "competitors"),
+            _make_article("b", 8, "competitors"),
+        ]
+    }
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.side_effect = Exception("API timeout")
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        result = synthesize_thematic_paragraphs(groups)
+
+    assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — _render_peripheral_section
+# ---------------------------------------------------------------------------
+
+def test_render_peripheral_section_empty_returns_empty_string():
+    """Empty items list must return empty string (no section rendered)."""
+    assert _render_peripheral_section([]) == ""
+
+
+def test_render_peripheral_section_correct_bullet_count():
+    """Each item produces exactly one headline in the HTML output."""
+    items = [
+        _make_article("a", 5, "markets", "Headline A"),
+        _make_article("b", 4, "economic", "Headline B"),
+        _make_article("c", 6, "customers", "Headline C"),
+    ]
+    html = _render_peripheral_section(items)
+    assert html.count("Headline A") == 1
+    assert html.count("Headline B") == 1
+    assert html.count("Headline C") == 1
+
+
+def test_render_peripheral_section_includes_score():
+    """Each bullet must display the sentiment score."""
+    items = [_make_article("a", 5, "markets", "Some Headline")]
+    html = _render_peripheral_section(items)
+    assert "5/10" in html
+
+
+def test_render_peripheral_section_headline_is_linked():
+    """Each headline must reference the source_url."""
+    items = [_make_article("a", 5, "markets", "Linked Headline")]
+    html = _render_peripheral_section(items)
+    assert "https://news.com/article" in html
+    assert "Linked Headline" in html
+
+
+# ---------------------------------------------------------------------------
+# Task 6 — _render_thematic_section
+# ---------------------------------------------------------------------------
+
+def test_render_thematic_section_empty_returns_empty_string():
+    """Empty groups and thin_entries must return empty string."""
+    assert _render_thematic_section({}, [], {}) == ""
+
+
+def test_render_thematic_section_synthesis_paragraph_appears():
+    """Synthesis paragraph must appear in HTML when provided for a 2+ group."""
+    groups = {
+        "competitors": [
+            _make_article("a", 8, "competitors", "Avient Raises Prices"),
+            _make_article("b", 7, "competitors", "Techmer Price Hike"),
+        ]
+    }
+    synthesis = {"competitors": "Both competitors raised prices this quarter."}
+    html = _render_thematic_section(groups, [], synthesis)
+    assert "Both competitors raised prices this quarter." in html
+
+
+def test_render_thematic_section_bullets_only_when_no_synthesis():
+    """Category group renders with bullets only when synthesis dict is empty."""
+    groups = {
+        "competitors": [
+            _make_article("a", 8, "competitors", "Avient Headline"),
+            _make_article("b", 7, "competitors", "Techmer Headline"),
+        ]
+    }
+    html = _render_thematic_section(groups, [], {})
+    assert "Avient Headline" in html
+    assert "Techmer Headline" in html
+
+
+def test_render_thematic_section_thin_entry_appears():
+    """Thin entries (single-article 7–10) appear without a synthesis paragraph."""
+    thin = [_make_article("solo", 9, "customers", "Solo High Score Headline")]
+    html = _render_thematic_section({}, thin, {})
+    assert "Solo High Score Headline" in html
+
+
+def test_render_thematic_section_category_header_uppercase():
+    """Category name must appear as a section header in the HTML."""
+    groups = {
+        "Raw Material Supply Chain": [
+            _make_article("a", 4, "Raw Material Supply Chain"),
+            _make_article("b", 5, "Raw Material Supply Chain"),
+        ]
+    }
+    html = _render_thematic_section(groups, [], {})
+    assert "RAW MATERIAL SUPPLY CHAIN" in html.upper()
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — generate_html_email integration
+# ---------------------------------------------------------------------------
+
+def test_generate_html_email_all_critical_no_thematic_section(monkeypatch):
+    """When all articles score 1–3, Thematic Intelligence must not appear."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    data = [
+        {**_make_article(f"h{i}", 2, "suppliers", f"Critical Headline {i}")}
+        for i in range(3)
+    ]
+    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+        html = generate_html_email(data)
+    assert "THEMATIC INTELLIGENCE" not in html
+    assert "PERIPHERAL SIGNALS" not in html
+    assert "Critical Headline 0" in html
+
+
+def test_generate_html_email_routes_to_thematic_with_two_plus(monkeypatch):
+    """Two articles in same category produce a Thematic Intelligence section."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    mock_client = _make_synthesis_mock({"competitors": "Synthesis paragraph here."})
+    data = [
+        _make_article("a", 7, "competitors", "Avient Headline"),
+        _make_article("b", 8, "competitors", "Techmer Headline"),
+    ]
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        html = generate_html_email(data)
+    assert "THEMATIC INTELLIGENCE" in html
+    assert "Synthesis paragraph here." in html
+
+
+def test_generate_html_email_routes_single_low_to_peripheral(monkeypatch):
+    """Single score 4–6 article goes to Peripheral Signals, not Thematic."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    data = [_make_article("x", 5, "markets", "Peripheral Headline")]
+    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+        html = generate_html_email(data)
+    assert "PERIPHERAL SIGNALS" in html
+    assert "Peripheral Headline" in html
+    assert "THEMATIC INTELLIGENCE" not in html

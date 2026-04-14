@@ -128,7 +128,304 @@ def fetch_macro_summary() -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# 2. HTML generation helpers
+# 2. Thematic routing helpers
+# ---------------------------------------------------------------------------
+
+def _group_for_thematic(items: list[dict]) -> dict[str, list[dict]]:
+    """Group qualifying articles (score 4–10) by category for thematic synthesis.
+
+    Args:
+        items: Articles pre-filtered to scores 4–10. Score 1–3 articles are
+            silently skipped as a safety guard.
+
+    Returns:
+        Dict of {category: [articles]} containing only groups with 2+ articles.
+        Articles with a missing or null category are grouped under 'Uncategorized'.
+    """
+    from collections import defaultdict
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        score = item.get("sentiment_score") or 0
+        if score <= 3:
+            continue
+        category = item.get("category") or "Uncategorized"
+        buckets[category].append(item)
+    return {cat: arts for cat, arts in buckets.items() if len(arts) >= 2}
+
+
+def _collect_thin_entries(
+    items: list[dict],
+    groups: dict[str, list[dict]],
+) -> list[dict]:
+    """Return ungrouped score 7–10 articles for thin thematic rendering.
+
+    Args:
+        items: All non-critical articles (scores 4–10).
+        groups: The 2+ article groups from _group_for_thematic().
+
+    Returns:
+        Single-article items scoring 7–10 not captured in any group,
+        ordered by sentiment_score ascending.
+    """
+    grouped_hashes = {
+        art.get("url_hash") for arts in groups.values() for art in arts
+    }
+    thin = [
+        item for item in items
+        if item.get("url_hash") not in grouped_hashes
+        and (item.get("sentiment_score") or 0) >= 7
+    ]
+    return sorted(thin, key=lambda x: x.get("sentiment_score") or 0)
+
+
+def _collect_peripheral(
+    items: list[dict],
+    groups: dict[str, list[dict]],
+) -> list[dict]:
+    """Return ungrouped score 4–6 articles for the Peripheral Signals section.
+
+    Args:
+        items: All non-critical articles (scores 4–10).
+        groups: The 2+ article groups from _group_for_thematic().
+
+    Returns:
+        Single-article items scoring 4–6 not captured in any group,
+        ordered by sentiment_score ascending.
+    """
+    grouped_hashes = {
+        art.get("url_hash") for arts in groups.values() for art in arts
+    }
+    peripheral = [
+        item for item in items
+        if item.get("url_hash") not in grouped_hashes
+        and (item.get("sentiment_score") or 0) <= 6
+    ]
+    return sorted(peripheral, key=lambda x: x.get("sentiment_score") or 0)
+
+
+def synthesize_thematic_paragraphs(
+    groups: dict[str, list[dict]],
+) -> dict[str, str]:
+    """Generate one synthesis paragraph per category group via OpenAI.
+
+    Args:
+        groups: Dict of {category: [articles]} — only groups with 2+ articles.
+
+    Returns:
+        Dict of {category: synthesis_paragraph}. Returns {} on any error so the
+        caller can fall back to bullets-only rendering without blocking delivery.
+    """
+    if not groups:
+        return {}
+
+    lines: list[str] = []
+    for category, articles in groups.items():
+        lines.append(f"CATEGORY: {category}")
+        for art in articles:
+            score = art.get("sentiment_score", 5)
+            entities = art.get("entities_mentioned") or []
+            entity = entities[0] if entities else (art.get("category") or "Unknown")
+            impact = art.get("americhem_impact", "")
+            lines.append(f"- [{entity} | {score}/10] {impact}")
+        lines.append("")
+
+    grouped_text = "\n".join(lines).strip()
+
+    system_prompt = (
+        "You are a market intelligence analyst for Americhem, a specialty plastics compounder.\n\n"
+        "For each CATEGORY block below, write exactly one synthesis paragraph (2–3 sentences).\n"
+        "The paragraph must:\n"
+        "- Identify the shared trend or structural driver across the listed signals\n"
+        "- Explicitly state the implication for Americhem's supply chain, demand pipeline, or margin\n"
+        "- Be written for a senior executive who will act on it — no hedging, no filler\n\n"
+        "Return valid JSON with category names as keys and synthesis paragraphs as values.\n"
+        "Use the exact category names provided. Do not invent categories.\n"
+        "Only include categories that appear in the input."
+    )
+
+    try:
+        client = _get_openai()
+        completion = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": grouped_text},
+            ],
+        )
+        result: dict[str, str] = json.loads(completion.choices[0].message.content)
+        logger.info("Thematic synthesis complete — %d categories.", len(result))
+        return result
+    except Exception as exc:
+        logger.error(
+            "Thematic synthesis failed — falling back to bullets-only: %s", exc
+        )
+        return {}
+
+
+def _render_peripheral_section(items: list[dict]) -> str:
+    """Render the Peripheral Signals compact bullet list.
+
+    Args:
+        items: Score 4–6 articles not captured in any synthesis group.
+
+    Returns:
+        HTML string for the Peripheral Signals section, or empty string if
+        items is empty.
+    """
+    if not items:
+        return ""
+
+    bullets_html = ""
+    for item in items:
+        entities = item.get("entities_mentioned") or []
+        entity = entities[0] if entities else (item.get("category") or "Unknown")
+        score = item.get("sentiment_score", "")
+        headline = item.get("headline", "")
+        source_url = item.get("source_url", "#")
+        bullets_html += (
+            f'<tr><td style="padding:2px 0;">'
+            f'<span style="font-size:12px;font-family:Arial,sans-serif;color:#6B7280;">'
+            f'&bull;&nbsp;<strong style="color:#374151;">[{entity}: {score}/10]</strong>'
+            f'&nbsp;<a href="{source_url}" style="color:#374151;text-decoration:none;">'
+            f'{headline}</a>'
+            f'</span></td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:8px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:#9CA3AF;
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      PERIPHERAL SIGNALS
+                    </td>
+                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <p style="margin:0 0 8px 0;font-size:11px;color:#9CA3AF;
+                           font-family:Arial,sans-serif;font-style:italic;">
+                  Monitoring only &mdash; lower probability of direct impact
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {bullets_html}
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+
+def _render_thematic_section(
+    groups: dict[str, list[dict]],
+    thin_entries: list[dict],
+    synthesis: dict[str, str],
+) -> str:
+    """Render the Thematic Intelligence section.
+
+    Args:
+        groups: 2+ article groups from _group_for_thematic(), keyed by category.
+        thin_entries: Single-article items scoring 7–10 from _collect_thin_entries().
+        synthesis: LLM paragraphs from synthesize_thematic_paragraphs(). May be
+            empty dict — sections render bullets-only in that case.
+
+    Returns:
+        HTML string for the Thematic Intelligence section, or empty string if
+        both groups and thin_entries are empty.
+    """
+    if not groups and not thin_entries:
+        return ""
+
+    ordered_groups = sorted(
+        groups.items(),
+        key=lambda kv: min((a.get("sentiment_score") or 5) for a in kv[1]),
+    )
+
+    def _bullet(item: dict) -> str:
+        entities = item.get("entities_mentioned") or []
+        entity = entities[0] if entities else (item.get("category") or "Unknown")
+        score = item.get("sentiment_score", "")
+        headline = item.get("headline", "")
+        source_url = item.get("source_url", "#")
+        return (
+            f'<tr><td style="padding:2px 0;">'
+            f'<span style="font-size:12px;font-family:Arial,sans-serif;">'
+            f'&bull;&nbsp;'
+            f'<a href="{source_url}" style="color:{_BRAND_NAVY};text-decoration:none;'
+            f'font-weight:600;">[{entity}: {score}/10]</a>'
+            f'&nbsp;<span style="color:#374151;">{headline}</span>'
+            f'</span></td></tr>'
+        )
+
+    def _category_block(category: str, articles: list[dict], para: str) -> str:
+        para_html = (
+            f'<p style="margin:0 0 10px 0;font-size:13px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
+            f'{para}</p>'
+        ) if para else ""
+        sorted_articles = sorted(
+            articles, key=lambda x: x.get("sentiment_score") or 0
+        )
+        bullets = "".join(_bullet(a) for a in sorted_articles)
+        return (
+            f'<tr><td style="padding:0 0 18px 0;">'
+            f'<p style="margin:0 0 6px 0;font-size:11px;font-weight:700;'
+            f'letter-spacing:1px;text-transform:uppercase;color:{_BRAND_NAVY};'
+            f'font-family:Arial,sans-serif;">{category}</p>'
+            f'{para_html}'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+            f'{bullets}</table>'
+            f'</td></tr>'
+        )
+
+    categories_html = "".join(
+        _category_block(cat, arts, synthesis.get(cat, ""))
+        for cat, arts in ordered_groups
+    )
+
+    thin_sorted = sorted(thin_entries, key=lambda x: x.get("sentiment_score") or 0)
+    for item in thin_sorted:
+        category = item.get("category") or "Uncategorized"
+        categories_html += _category_block(category, [item], "")
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:{_BRAND_NAVY};
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      THEMATIC INTELLIGENCE
+                    </td>
+                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {categories_html}
+          </table>
+        </td>
+      </tr>"""
+
+
+# ---------------------------------------------------------------------------
+# 3. HTML generation helpers
 # ---------------------------------------------------------------------------
 
 def _render_exec_summary(macro_summary: dict | None) -> str:
@@ -313,14 +610,23 @@ def generate_html_email(
     data: list[dict],
     macro_summary: dict | None = None,
 ) -> str:
-    critical  = [r for r in data if r.get("alert_tier") == "CRITICAL"]
-    strategic = [r for r in data if r.get("alert_tier") == "STRATEGIC"]
-    routine   = [r for r in data if r.get("alert_tier") == "ROUTINE"]
+    # Zone 1: Critical (score 1–3) — always full cards
+    critical = [r for r in data if (r.get("sentiment_score") or 0) <= 3]
+
+    # Zones 2 & 3: Thematic + Peripheral (scores 4–10)
+    non_critical = [r for r in data if (r.get("sentiment_score") or 0) >= 4]
+    groups       = _group_for_thematic(non_critical)
+    thin_entries = _collect_thin_entries(non_critical, groups)
+    peripheral   = _collect_peripheral(non_critical, groups)
+    synthesis    = synthesize_thematic_paragraphs(groups)
 
     sections_html = (
-        _render_section("CRITICAL",  "Critical Disruptions",    "#EF4444", "#FEF2F2", "#B91C1C", critical)
-        + _render_section("STRATEGIC", "Strategic Opportunities", "#22C55E", "#F0FDF4", "#15803D", strategic)
-        + _render_section("ROUTINE",   "Routine Monitoring",      "#A3A3A3", "#F5F5F5", "#525252", routine)
+        _render_section(
+            "CRITICAL", "Critical Disruptions",
+            "#EF4444", "#FEF2F2", "#B91C1C", critical,
+        )
+        + _render_thematic_section(groups, thin_entries, synthesis)
+        + _render_peripheral_section(peripheral)
     )
 
     exec_html = _render_exec_summary(macro_summary)
