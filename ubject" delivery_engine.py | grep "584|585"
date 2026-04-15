@@ -1,5 +1,0 @@
-[33m743454b[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m)[m fix(pipeline): relax relevance firewall and harden macro summary fetch
-[33m6fe9ef8[m refactor: update docstring in execute_pipeline function for clarity
-[33m428d6a4[m refactor: enhance email generation and logging, improve docstrings, and update HTML structure
-[33m35998a3[m feat(v2): entity disambiguation, domain firewall, macro summary, enriched email
-[33mb4edf35[m Update CLAUDE.md to clarify email sending process and enhance targets.yaml description
