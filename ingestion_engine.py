@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 MAX_DAILY_SCRAPES = 150
 OPENAI_MODEL = "gpt-5.4-nano"
+PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
+FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
@@ -254,9 +257,20 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     endpoint = "https://api.firecrawl.dev/v1/scrape"
     payload = {"url": url, "formats": ["markdown"]}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    def _firecrawl_post() -> requests.Response:
+        return requests.post(endpoint, json=payload, headers=headers, timeout=30)
+
     try:
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=30)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
         response.raise_for_status()
+    except FutureTimeoutError:
+        logger.error(
+            "Firecrawl wall-clock timeout (%ds) for URL: %s",
+            FIRECRAWL_WALL_CLOCK_TIMEOUT, url,
+        )
+        return None
     except requests.exceptions.Timeout:
         logger.error("Firecrawl request timed out for URL: %s", url)
         return None
@@ -530,6 +544,7 @@ def _log_stats(stats: dict) -> None:
 
 
 def execute_pipeline() -> None:
+    pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
     seen_headlines: set[str] = _hydrate_seen_headlines()
     scrapes_attempted = 0
@@ -546,6 +561,13 @@ def execute_pipeline() -> None:
     stored_articles_buffer: list[dict] = []
 
     for target in targets:
+        if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
+            logger.warning(
+                "Pipeline deadline (%ds) reached before processing target '%s' — stopping early.",
+                PIPELINE_DEADLINE_SECONDS, target["name"],
+            )
+            break
+
         entity_name = target["name"]
         category = target["category"]
         lookback_hours = target["lookback_hours"]
@@ -556,6 +578,15 @@ def execute_pipeline() -> None:
         stats["urls_discovered"] += len(raw_results)
 
         for raw_url, serper_title in raw_results:
+            if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
+                logger.warning(
+                    "Pipeline deadline (%ds) reached mid-batch — stopping early.",
+                    PIPELINE_DEADLINE_SECONDS,
+                )
+                _log_stats(stats)
+                generate_macro_summary(stored_articles_buffer)
+                return
+
             if scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
                 _log_stats(stats)
