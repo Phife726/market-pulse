@@ -40,7 +40,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 4. Extracts article markdown via Firecrawl; skips if below `min_article_length`
 5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON: `headline`, `americhem_impact`, `sentiment_score` (1–10), `source_url`, `entities_mentioned`, `category`
 6. Upserts row into `daily_intelligence` table (unique constraint on `url_hash`)
-7. Enforces `MAX_DAILY_SCRAPES = 20` hard cap to protect free-tier API quotas
+7. Enforces `MAX_DAILY_SCRAPES = 150` hard cap (Serper, Firecrawl, and OpenAI are on paid-tier subscriptions)
 
 **`delivery_engine.py`** — Fetch → Format → Send
 
@@ -64,7 +64,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 - URL normalization (strip query params) MUST happen before hashing — this is the sole deduplication mechanism.
 - `source_url` is injected into the LLM prompt so the model returns the canonical URL deterministically.
 - `SUPABASE_KEY` must be the **Service Role** key (not anon) to bypass Row Level Security.
-- `MAX_DAILY_SCRAPES = 20` must never be raised without confirming free-tier quota headroom across Serper, Firecrawl, and OpenAI.
+- `MAX_DAILY_SCRAPES = 150` — all three APIs (Serper, Firecrawl, OpenAI) are on paid-tier subscriptions. Adjust only if subscription tiers change.
 - Monday delivery uses a 72-hour lookback (vs. 24 h on other days) to capture Friday news over the weekend — this logic lives in `fetch_todays_intelligence()`.
 
 ## Python Conventions

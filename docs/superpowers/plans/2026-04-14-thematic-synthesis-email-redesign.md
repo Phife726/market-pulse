@@ -39,9 +39,11 @@ from delivery_engine import _get_openai as _delivery_get_openai, OPENAI_MODEL as
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "not test_" --collect-only 2>&1 | head -5
 ```
+
 Expected: ImportError — `_get_openai` and `OPENAI_MODEL` don't exist in delivery_engine yet.
 
 **Step 2 — Implement**
@@ -74,9 +76,11 @@ def _get_openai() -> OpenAI:
 ```bash
 pytest tests/test_pipeline.py -k "not test_" --collect-only 2>&1 | head -5
 ```
+
 Expected: clean collection, no ImportError.
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add OpenAI client infrastructure to delivery_engine"
@@ -159,9 +163,11 @@ def test_group_for_thematic_none_category_becomes_uncategorized():
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_group_for_thematic" -v
 ```
+
 Expected: `ImportError` or `4 failed` — function doesn't exist yet.
 
 **Step 2 — Implement**
@@ -196,12 +202,15 @@ def _group_for_thematic(items: list[dict]) -> dict[str, list[dict]]:
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_group_for_thematic" -v
 ```
+
 Expected: `4 passed`
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add _group_for_thematic routing function"
@@ -275,9 +284,11 @@ def test_collect_peripheral_excludes_high_score():
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_collect_thin or test_collect_peripheral" -v
 ```
+
 Expected: `6 failed` — functions not implemented yet.
 
 **Step 2 — Implement**
@@ -336,12 +347,15 @@ def _collect_peripheral(
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_collect_thin or test_collect_peripheral" -v
 ```
+
 Expected: `6 passed`
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add _collect_thin_entries and _collect_peripheral routing helpers"
@@ -459,9 +473,11 @@ def test_synthesize_thematic_paragraphs_graceful_degradation():
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_synthesize_thematic" -v
 ```
+
 Expected: `5 failed` — function not implemented yet.
 
 **Step 2 — Implement**
@@ -530,12 +546,15 @@ def synthesize_thematic_paragraphs(
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_synthesize_thematic" -v
 ```
+
 Expected: `5 passed`
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add synthesize_thematic_paragraphs with graceful degradation"
@@ -593,9 +612,11 @@ def test_render_peripheral_section_headline_is_linked():
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_render_peripheral" -v
 ```
+
 Expected: `4 failed`
 
 **Step 2 — Implement**
@@ -670,12 +691,15 @@ def _render_peripheral_section(items: list[dict]) -> str:
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_render_peripheral" -v
 ```
+
 Expected: `4 passed`
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add _render_peripheral_section HTML renderer"
@@ -750,9 +774,11 @@ def test_render_thematic_section_category_header_uppercase():
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_render_thematic_section" -v
 ```
+
 Expected: `5 failed`
 
 **Step 2 — Implement**
@@ -862,12 +888,15 @@ def _render_thematic_section(
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_render_thematic_section" -v
 ```
+
 Expected: `5 passed`
 
 **Step 4 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: add _render_thematic_section HTML renderer"
@@ -934,9 +963,11 @@ def test_generate_html_email_routes_single_low_to_peripheral(monkeypatch):
 ```
 
 Run:
+
 ```bash
 pytest tests/test_pipeline.py -k "test_generate_html_email_routes or test_generate_html_email_all" -v
 ```
+
 Expected: `3 failed`
 
 **Step 2 — Implement**
@@ -1063,18 +1094,23 @@ def generate_html_email(
 ```
 
 **Step 3 — Run tests**
+
 ```bash
 pytest tests/test_pipeline.py -k "test_generate_html_email_routes or test_generate_html_email_all" -v
 ```
+
 Expected: `3 passed`
 
 **Step 4 — Run full test suite**
+
 ```bash
 pytest tests/test_pipeline.py -v
 ```
+
 Expected: all existing tests still pass + 3 new tests pass.
 
 **Step 5 — Commit**
+
 ```bash
 git add delivery_engine.py tests/test_pipeline.py
 git commit -m "feat: wire thematic synthesis pipeline into generate_html_email"
@@ -1089,18 +1125,23 @@ git commit -m "feat: wire thematic synthesis pipeline into generate_html_email"
 **Files:** `delivery_engine.py`
 
 **Step 1 — Check for stale references**
+
 ```bash
 grep -n "STRATEGIC\|ROUTINE\|Strategic Opportunities\|Routine Monitoring" delivery_engine.py
 ```
+
 Expected: none — these strings lived only in the old `generate_html_email()` call sites now replaced in Task 7.
 
 **Step 2 — Run full test suite one final time**
+
 ```bash
 pytest tests/test_pipeline.py -v
 ```
+
 Expected: all tests pass, zero failures.
 
 **Step 3 — Commit**
+
 ```bash
 git add delivery_engine.py
 git commit -m "chore: remove stale STRATEGIC/ROUTINE section references after thematic redesign"
