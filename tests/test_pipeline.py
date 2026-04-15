@@ -1123,3 +1123,69 @@ def test_generate_html_email_routes_single_low_to_peripheral(monkeypatch):
     assert "PERIPHERAL SIGNALS" in html
     assert "Peripheral Headline" in html
     assert "THEMATIC INTELLIGENCE" not in html
+
+
+# ---------------------------------------------------------------------------
+# Pipeline deadline early-exit
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import execute_pipeline
+
+
+def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch, tmp_path):
+    """When the pipeline deadline is exceeded mid-batch, _log_stats and
+    generate_macro_summary must be called before the function returns."""
+    import textwrap
+    import ingestion_engine
+
+    # Write a minimal targets.yaml with one active entity
+    config_yaml = textwrap.dedent(
+        """\
+        competitors:
+          search_mode: entity
+          include_all: []
+          exclude_any: []
+          entities:
+            - name: TestCorp
+              active: true
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    cfg_file = tmp_path / "targets.yaml"
+    cfg_file.write_text(config_yaml)
+
+    call_count = {"n": 0}
+
+    def fake_monotonic():
+        call_count["n"] += 1
+        # First call (pipeline_start assignment) returns 0; subsequent calls
+        # return a value past the deadline so the mid-batch check fires.
+        if call_count["n"] == 1:
+            return 0.0
+        return float(ingestion_engine.PIPELINE_DEADLINE_SECONDS + 1)
+
+    monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
+
+    # Provide one discovered URL so the inner loop is entered
+    monkeypatch.setattr(
+        ingestion_engine,
+        "discover_urls",
+        lambda *a, **kw: [("https://example.com/article", "Test Title")],
+    )
+
+    mock_log_stats = MagicMock()
+    mock_macro = MagicMock(return_value=True)
+    monkeypatch.setattr(ingestion_engine, "_log_stats", mock_log_stats)
+    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", mock_macro)
+    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
+
+    # Run from the tmp targets file
+    monkeypatch.chdir(tmp_path)
+
+    execute_pipeline()
+
+    mock_log_stats.assert_called_once()
+    mock_macro.assert_called_once()

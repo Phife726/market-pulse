@@ -258,20 +258,19 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     payload = {"url": url, "formats": ["markdown"]}
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    def _post() -> requests.Response:
+    def _firecrawl_post() -> requests.Response:
         return requests.post(endpoint, json=payload, headers=headers, timeout=30)
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            try:
-                response = executor.submit(_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
-            except FutureTimeoutError:
-                logger.error(
-                    "Firecrawl wall-clock timeout (%ds) for URL: %s",
-                    FIRECRAWL_WALL_CLOCK_TIMEOUT, url,
-                )
-                return None
+            response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
         response.raise_for_status()
+    except FutureTimeoutError:
+        logger.error(
+            "Firecrawl wall-clock timeout (%ds) for URL: %s",
+            FIRECRAWL_WALL_CLOCK_TIMEOUT, url,
+        )
+        return None
     except requests.exceptions.Timeout:
         logger.error("Firecrawl request timed out for URL: %s", url)
         return None
