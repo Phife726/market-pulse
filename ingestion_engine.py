@@ -23,6 +23,51 @@ PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside t
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
+_MP_CONFIG: Optional[dict] = None
+
+_FALLBACK_SEGMENT_LIST = (
+    "Healthcare | Fibers | Packaging | Industrial | Raw Materials / Supply Chain | "
+    "Regulatory / Sustainability | Competitive / Customer Signal | Broader Americhem"
+)
+
+
+def _load_mp_config() -> dict:
+    """Load market_pulse_config.yaml once; return cached result on repeat calls."""
+    global _MP_CONFIG
+    if _MP_CONFIG is None:
+        try:
+            with open("market_pulse_config.yaml", "r") as fh:
+                _MP_CONFIG = yaml.safe_load(fh) or {}
+        except Exception as exc:
+            logger.warning("Could not load market_pulse_config.yaml — using defaults: %s", exc)
+            _MP_CONFIG = {}
+    return _MP_CONFIG
+
+
+def _build_segment_rule(config: dict) -> str:
+    """Return RULE 4 text with segment labels and descriptions injected from config."""
+    segments = config.get("strategic_segments") or {}
+    if not segments:
+        segment_block = _FALLBACK_SEGMENT_LIST
+    else:
+        lines = []
+        for seg in segments.values():
+            if not isinstance(seg, dict):
+                continue
+            label = seg.get("label", "")
+            desc = (seg.get("description") or "").strip().replace("\n", " ")
+            if label:
+                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
+        segment_block = "\n".join(lines) if lines else _FALLBACK_SEGMENT_LIST
+
+    return f"""RULE 4 — STRATEGIC SEGMENT:
+Assign the single best-fit segment label from this list:
+
+{segment_block}
+
+Choose "Broader Americhem" only when the article spans multiple segments or addresses
+general plastics/compounding industry trends without a dominant segment fit."""
+
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "source set 238658",
     "PR wires",
@@ -304,12 +349,12 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     return markdown
 
 
-_SYSTEM_PROMPT = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
+_SYSTEM_PROMPT_BASE = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
 a global manufacturer of custom color masterbatch, functional additives, and engineered compounds
 serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
 Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-four rules below before generating any output.
+six rules below before generating any output.
 
 RULE 1 — ENTITY DISAMBIGUATION:
 Before scoring, verify that the named entity in this article is the correct one.
@@ -319,56 +364,83 @@ Before scoring, verify that the named entity in this article is the correct one.
 - If the entity is a false match (wrong Dow, wrong Magna, unrelated brand), output ONLY this JSON:
   {"americhem_impact": "DISCARD"}
 
-RULE 2 — THREAT MATRIX CALIBRATION:
-Anchor sentiment_score strictly to supply chain and commercial physics.
-Use the full 1–10 scale. Do NOT default to 5 unless the article is genuinely neutral.
+RULE 2 — SENTIMENT TAG (directional tone only — NOT importance):
+Assign exactly one tag based on the direction of impact for Americhem:
+- "Negative": adverse direction — threatens customers, suppliers, demand, margin, operations, or compliance
+- "Neutral": informational, mixed, or weakly directional signal
+- "Positive": favorable direction — demand growth, margin benefit, competitive advantage, supply opportunity
 
-- Score 1–2: Immediate physical supply chain threat (plant fire, port strike, supplier bankruptcy, force majeure)
-- Score 3:   Significant disruption risk — major price spike, force majeure warning, capacity cut >10%
-- Score 4:   Negative trend with indirect Americhem exposure (demand softness, margin pressure signals)
-- Score 5:   Genuinely neutral — no discernible positive or negative lean for Americhem
-- Score 6:   Mild positive — market growth or innovation in Americhem's end markets
-- Score 7:   Moderate positive — competitor weakness, OEM expansion, favorable regulation
-- Score 8–9: Clear commercial opportunity — large feedstock price drops, competitor capacity loss
-- Score 10:  Transformational opportunity — major OEM win potential or supply disruption benefiting Americhem
+IMPORTANT: sentiment_tag is direction only. A barely-relevant article can be Negative.
+A neutral article can have a high impact score. Do NOT conflate tone with importance.
 
-Alert tier mapping (read-only context — do NOT include in output):
-  CRITICAL  = score 1–3  |  ROUTINE = score 4–7  |  STRATEGIC = score 8–10
+Also assign sentiment_score (1–10, kept for compatibility) using the same directional logic:
+1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
 
-RULE 3 — RIGOROUS IMPACT STATEMENT:
+RULE 3 — AMERICHEM IMPACT SCORE (relevance and materiality, 1–10):
+Score how relevant and materially important this article is to Americhem's business,
+independent of sentiment direction.
+
+1–2: Barely related. Almost no connection to Americhem's markets or supply chain.
+3–4: Indirect exposure only. Weak or speculative connection.
+5–6: Moderately relevant. Affects an Americhem segment or supply chain with some certainty.
+7–8: Clearly relevant. Direct effect on Americhem's customers, suppliers, costs, or demand.
+9–10: High-priority strategic signal. Americhem should act or monitor closely.
+
+Score by weighting these factors:
+- Segment fit (30%): directly affects a configured segment below
+- Americhem exposure (25%): named customers, end-markets, suppliers, competitors, or geographies
+- Business materiality (20%): demand volume, margin, capacity, regulatory risk, or supply risk
+- Timeliness/novelty (15%): recent, emerging, disruptive event
+- Actionability (10%): Sales or GMM team can take a concrete step
+
+{rule4}
+
+RULE 5 — RIGOROUS IMPACT STATEMENT:
 Always write a specific So-What for Americhem even for routine items.
 Identify which business unit or cost line could be affected and in what direction.
 If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
 Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
-RULE 4 — DOMAIN RELEVANCE FIREWALL:
+RULE 6 — DOMAIN RELEVANCE FIREWALL:
 Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
 absolutely zero connection to plastics, polymers, chemicals, materials, manufacturing,
 composites, packaging, or supply chain dynamics.
 Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
 financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set sentiment_score to 5 and apply Rule 3.
+When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 5.
 
-If the article passes all four rules, extract data into this strict JSON schema.
+If the article passes all rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.
 
 {
   "headline": "<concise factual summary, max 12 words>",
   "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
   "article_summary": "<2-3 sentences, max 50 words. What happened, who is involved, key numbers. Factual only — no Americhem framing.>",
-  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 3. Never generic.>",
-  "sentiment_score": <integer 1-10 per Rule 2>,
-  "sentiment_rationale": "<max 10 words explaining exactly why this score was assigned>",
+  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 5. Never generic.>",
+  "sentiment_score": <integer 1-10 per Rule 2 directional scale, kept for compatibility>,
+  "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
+  "americhem_impact_score": <integer 1-10 per Rule 3>,
+  "impact_rationale": "<max 15 words explaining why this impact score was assigned>",
+  "strategic_segment": "<exactly one segment label from Rule 4>",
+  "sentiment_rationale": "<max 10 words explaining exactly why this sentiment was assigned>",
   "recommended_action": "<one of: No action | Monitor | Flag to procurement | Share with sales | Escalate to leadership>",
   "source_url": "<MUST EXACTLY MATCH the URL provided in the user prompt>",
   "entities_mentioned": ["<companies, chemicals, or regions mentioned>"]
 }"""
 
+
+def _build_system_prompt(config: dict) -> str:
+    """Assemble the full system prompt, injecting segment taxonomy from config."""
+    rule4 = _build_segment_rule(config)
+    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4)
+
 _VALID_ACTIONS: frozenset[str] = frozenset({
     "No action", "Monitor", "Flag to procurement",
     "Share with sales", "Escalate to leadership",
 })
+
+_VALID_SENTIMENT_TAGS: frozenset[str] = frozenset({"Negative", "Neutral", "Positive"})
 
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
@@ -377,12 +449,13 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
         f"Trigger entity: {trigger_entity}\nCategory: {category}\n"
         f"Source URL: {source_url}\n\nArticle text:\n{article_text}"
     )
+    system_prompt = _build_system_prompt(_load_mp_config())
     try:
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
@@ -408,6 +481,17 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
         insight["sentiment_score"] = max(1, min(10, score))
     except (ValueError, TypeError):
         insight["sentiment_score"] = 5
+    # Validate and default new relevance fields.
+    if insight.get("sentiment_tag") not in _VALID_SENTIMENT_TAGS:
+        insight["sentiment_tag"] = "Neutral"
+    try:
+        impact = int(insight["americhem_impact_score"])
+        insight["americhem_impact_score"] = max(1, min(10, impact))
+    except (ValueError, TypeError, KeyError):
+        insight["americhem_impact_score"] = 5
+    insight.setdefault("impact_rationale", "")
+    if not (insight.get("strategic_segment") or "").strip():
+        insight["strategic_segment"] = "Broader Americhem"
     if not isinstance(insight["entities_mentioned"], list):
         insight["entities_mentioned"] = []
     insight.setdefault("source_publication", "")
@@ -644,10 +728,19 @@ def execute_pipeline() -> None:
                 "sentiment_rationale": insight.get("sentiment_rationale", ""),
                 "recommended_action": insight.get("recommended_action", "Monitor"),
                 "article_summary": insight.get("article_summary", ""),
+                "sentiment_tag": insight.get("sentiment_tag", "Neutral"),
+                "americhem_impact_score": insight.get("americhem_impact_score", 5),
+                "impact_rationale": insight.get("impact_rationale", ""),
+                "strategic_segment": insight.get("strategic_segment", "Broader Americhem"),
             }
 
             if store_insight(payload):
-                logger.info("Stored [score=%d] %s", insight["sentiment_score"], insight["headline"])
+                logger.info(
+                    "Stored [impact=%d, sentiment=%s] %s",
+                    insight.get("americhem_impact_score", 5),
+                    insight.get("sentiment_tag", "Neutral"),
+                    insight["headline"],
+                )
                 stats["insights_stored"] += 1
                 stored_articles_buffer.append(payload)
                 seen_headlines.add(insight["headline"])
