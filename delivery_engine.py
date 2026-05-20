@@ -56,6 +56,15 @@ def _effective_impact(row: dict) -> int:
     return int(row.get("sentiment_score") or 5)
 
 
+def _config_int(cfg: dict, key: str, default: int) -> int:
+    """Read an int from a config sub-dict, coercing strings and warning on bad values."""
+    try:
+        return int(cfg.get(key, default))
+    except (TypeError, ValueError):
+        logger.warning("Invalid config value for reporting.%s; using %d", key, default)
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Email delivery retry constants
 # ---------------------------------------------------------------------------
@@ -664,7 +673,10 @@ def generate_html_email(
     macro_summary: dict | None = None,
 ) -> str:
     config = _load_mp_config()
-    visible_threshold: int = config.get("reporting", {}).get("visible_impact_threshold", 6)
+    reporting_cfg             = config.get("reporting", {})
+    visible_threshold: int    = _config_int(reporting_cfg, "visible_impact_threshold", 6)
+    max_per_segment: int      = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
+    max_total_visible: int    = _config_int(reporting_cfg, "max_total_visible_articles", 12)
 
     # Zone 1 — Critical: old-style rows (no americhem_impact_score) with sentiment_score <= 3.
     # New rows with low impact score are excluded from the report entirely (not shown as critical).
@@ -679,12 +691,38 @@ def generate_html_email(
 
     # Zone 2 — Thematic: articles at or above the visible impact threshold.
     thematic_candidates = [r for r in non_critical_all if _effective_impact(r) >= visible_threshold]
-    groups       = _group_for_thematic(thematic_candidates)
-    thin_entries = _collect_thin_entries(thematic_candidates, groups)
+    original_groups = _group_for_thematic(thematic_candidates)
+
+    # Apply per-segment cap (highest-impact articles first within each group).
+    groups = {
+        seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
+        for seg, arts in original_groups.items()
+    }
+
+    # Thin entries: articles never in any group (pass original_groups so capped-out
+    # articles are not re-admitted here).
+    thin_entries = _collect_thin_entries(thematic_candidates, original_groups)
+
+    # Apply total-visible cap across groups + thin_entries.
+    total_in_groups = sum(len(arts) for arts in groups.values())
+    if total_in_groups + len(thin_entries) > max_total_visible:
+        all_visible = sorted(
+            [a for arts in groups.values() for a in arts] + thin_entries,
+            key=lambda x: _effective_impact(x),
+            reverse=True,
+        )[:max_total_visible]
+        selected_hashes = {a.get("url_hash") for a in all_visible}
+        groups = {
+            seg: [a for a in arts if a.get("url_hash") in selected_hashes]
+            for seg, arts in groups.items()
+        }
+        groups = {seg: arts for seg, arts in groups.items() if arts}
+        thin_entries = [a for a in thin_entries if a.get("url_hash") in selected_hashes]
 
     # Zone 3 — Peripheral: ungrouped moderate-impact articles from the thematic pool
     # plus below-threshold OLD-style articles (new-style rows below threshold are excluded entirely).
-    peripheral_from_thematic = _collect_peripheral(thematic_candidates, groups)
+    # Use original_groups so capped-out articles don't leak into peripheral either.
+    peripheral_from_thematic = _collect_peripheral(thematic_candidates, original_groups)
     below_threshold_legacy = [
         r for r in non_critical_all
         if _effective_impact(r) < visible_threshold

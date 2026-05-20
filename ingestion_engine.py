@@ -23,6 +23,51 @@ PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside t
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
+_MP_CONFIG: Optional[dict] = None
+
+_FALLBACK_SEGMENT_LIST = (
+    "Healthcare | Fibers | Packaging | Industrial | Raw Materials / Supply Chain | "
+    "Regulatory / Sustainability | Competitive / Customer Signal | Broader Americhem"
+)
+
+
+def _load_mp_config() -> dict:
+    """Load market_pulse_config.yaml once; return cached result on repeat calls."""
+    global _MP_CONFIG
+    if _MP_CONFIG is None:
+        try:
+            with open("market_pulse_config.yaml", "r") as fh:
+                _MP_CONFIG = yaml.safe_load(fh) or {}
+        except Exception as exc:
+            logger.warning("Could not load market_pulse_config.yaml — using defaults: %s", exc)
+            _MP_CONFIG = {}
+    return _MP_CONFIG
+
+
+def _build_segment_rule(config: dict) -> str:
+    """Return RULE 4 text with segment labels and descriptions injected from config."""
+    segments = config.get("strategic_segments") or {}
+    if not segments:
+        segment_block = _FALLBACK_SEGMENT_LIST
+    else:
+        lines = []
+        for seg in segments.values():
+            if not isinstance(seg, dict):
+                continue
+            label = seg.get("label", "")
+            desc = (seg.get("description") or "").strip().replace("\n", " ")
+            if label:
+                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
+        segment_block = "\n".join(lines) if lines else _FALLBACK_SEGMENT_LIST
+
+    return f"""RULE 4 — STRATEGIC SEGMENT:
+Assign the single best-fit segment label from this list:
+
+{segment_block}
+
+Choose "Broader Americhem" only when the article spans multiple segments or addresses
+general plastics/compounding industry trends without a dominant segment fit."""
+
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "source set 238658",
     "PR wires",
@@ -304,12 +349,12 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     return markdown
 
 
-_SYSTEM_PROMPT = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
+_SYSTEM_PROMPT_BASE = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
 a global manufacturer of custom color masterbatch, functional additives, and engineered compounds
 serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
 Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-five rules below before generating any output.
+six rules below before generating any output.
 
 RULE 1 — ENTITY DISAMBIGUATION:
 Before scoring, verify that the named entity in this article is the correct one.
@@ -342,20 +387,13 @@ independent of sentiment direction.
 9–10: High-priority strategic signal. Americhem should act or monitor closely.
 
 Score by weighting these factors:
-- Segment fit (30%): directly affects Healthcare, Fibers, Packaging, Industrial, Raw Materials,
-  Regulatory/Sustainability, or Competitive segments
+- Segment fit (30%): directly affects a configured segment below
 - Americhem exposure (25%): named customers, end-markets, suppliers, competitors, or geographies
 - Business materiality (20%): demand volume, margin, capacity, regulatory risk, or supply risk
 - Timeliness/novelty (15%): recent, emerging, disruptive event
 - Actionability (10%): Sales or GMM team can take a concrete step
 
-RULE 4 — STRATEGIC SEGMENT:
-Assign the single best-fit segment label from this list:
-Healthcare | Fibers | Packaging | Industrial | Raw Materials / Supply Chain |
-Regulatory / Sustainability | Competitive / Customer Signal | Broader Americhem
-
-Choose "Broader Americhem" only when the article spans multiple segments or addresses
-general plastics/compounding industry trends without a dominant segment fit.
+{rule4}
 
 RULE 5 — RIGOROUS IMPACT STATEMENT:
 Always write a specific So-What for Americhem even for routine items.
@@ -391,6 +429,12 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
   "entities_mentioned": ["<companies, chemicals, or regions mentioned>"]
 }"""
 
+
+def _build_system_prompt(config: dict) -> str:
+    """Assemble the full system prompt, injecting segment taxonomy from config."""
+    rule4 = _build_segment_rule(config)
+    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4)
+
 _VALID_ACTIONS: frozenset[str] = frozenset({
     "No action", "Monitor", "Flag to procurement",
     "Share with sales", "Escalate to leadership",
@@ -405,12 +449,13 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
         f"Trigger entity: {trigger_entity}\nCategory: {category}\n"
         f"Source URL: {source_url}\n\nArticle text:\n{article_text}"
     )
+    system_prompt = _build_system_prompt(_load_mp_config())
     try:
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
@@ -670,7 +715,6 @@ def execute_pipeline() -> None:
                 time.sleep(1.5)
                 continue
 
-            visible_threshold = 6
             payload = {
                 "headline": insight["headline"],
                 "americhem_impact": insight["americhem_impact"],
@@ -688,7 +732,6 @@ def execute_pipeline() -> None:
                 "americhem_impact_score": insight.get("americhem_impact_score", 5),
                 "impact_rationale": insight.get("impact_rationale", ""),
                 "strategic_segment": insight.get("strategic_segment", "Broader Americhem"),
-                "include_in_report": insight.get("americhem_impact_score", 5) >= visible_threshold,
             }
 
             if store_insight(payload):
