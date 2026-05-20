@@ -1189,3 +1189,239 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
 
     mock_log_stats.assert_called_once()
     mock_macro.assert_called_once()
+
+
+# ===========================================================================
+# Relevance upgrade — new field validation in synthesize_insight()
+# ===========================================================================
+
+def _make_openai_mock_with_fields(**overrides) -> MagicMock:
+    """Return an OpenAI mock that outputs a minimal valid insight plus overrides."""
+    base = {
+        "headline": "Test Headline",
+        "americhem_impact": "Direct impact on compounding margins.",
+        "sentiment_score": 5,
+        "sentiment_tag": "Neutral",
+        "americhem_impact_score": 7,
+        "impact_rationale": "Directly affects masterbatch feedstock cost.",
+        "strategic_segment": "Raw Materials / Supply Chain",
+        "source_url": "https://news.com/article",
+        "entities_mentioned": ["Avient"],
+    }
+    base.update(overrides)
+    content = json.dumps(base)
+    mock_message = MagicMock()
+    mock_message.content = content
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+    return mock_client
+
+
+# ---------------------------------------------------------------------------
+# Sentiment tag validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_tag", ["NEGATIVE", "negative", "Bad", "", None, 42])
+def test_synthesize_insight_defaults_invalid_sentiment_tag(bad_tag):
+    """Any invalid sentiment_tag must be replaced with 'Neutral'."""
+    mock_client = _make_openai_mock_with_fields(sentiment_tag=bad_tag)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["sentiment_tag"] == "Neutral"
+
+
+@pytest.mark.parametrize("valid_tag", ["Negative", "Neutral", "Positive"])
+def test_synthesize_insight_preserves_valid_sentiment_tag(valid_tag):
+    """Valid sentiment_tag values must be preserved unchanged."""
+    mock_client = _make_openai_mock_with_fields(sentiment_tag=valid_tag)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["sentiment_tag"] == valid_tag
+
+
+# ---------------------------------------------------------------------------
+# americhem_impact_score clamping
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw_impact, expected",
+    [
+        (0,   1),
+        (-5,  1),
+        (11,  10),
+        (100, 10),
+    ],
+)
+def test_impact_score_clamped(raw_impact, expected):
+    """americhem_impact_score must be clamped to the 1–10 range."""
+    mock_client = _make_openai_mock_with_fields(americhem_impact_score=raw_impact)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["americhem_impact_score"] == expected
+
+
+@pytest.mark.parametrize("bad_value", [None, "high"])
+def test_impact_score_defaults_on_bad_value(bad_value):
+    """Non-convertible or missing americhem_impact_score defaults to 5."""
+    mock_client = _make_openai_mock_with_fields(americhem_impact_score=bad_value)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["americhem_impact_score"] == 5
+
+
+# ---------------------------------------------------------------------------
+# strategic_segment default
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("missing_value", [None, "", "  "])
+def test_strategic_segment_default(missing_value):
+    """Missing or blank strategic_segment defaults to 'Broader Americhem'."""
+    mock_client = _make_openai_mock_with_fields(strategic_segment=missing_value)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["strategic_segment"] == "Broader Americhem"
+
+
+def test_strategic_segment_preserved_when_valid():
+    """A valid strategic_segment value must be passed through unchanged."""
+    mock_client = _make_openai_mock_with_fields(strategic_segment="Healthcare")
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text="Article text.",
+            source_url="https://news.com/article",
+            trigger_entity="Avient",
+            category="competitors",
+        )
+    assert result is not None
+    assert result["strategic_segment"] == "Healthcare"
+
+
+# ---------------------------------------------------------------------------
+# Threshold filtering in generate_html_email()
+# ---------------------------------------------------------------------------
+
+def _make_new_article(
+    url_hash: str,
+    americhem_impact_score: int,
+    strategic_segment: str = "Raw Materials / Supply Chain",
+    sentiment_tag: str = "Neutral",
+    headline: str = "Test Headline",
+) -> dict:
+    """Build a fully-populated new-style article with all relevance fields."""
+    return {
+        "url_hash": url_hash,
+        "americhem_impact_score": americhem_impact_score,
+        "sentiment_tag": sentiment_tag,
+        "impact_rationale": "Direct feedstock cost effect.",
+        "strategic_segment": strategic_segment,
+        "headline": headline,
+        "americhem_impact": "Some impact.",
+        "entities_mentioned": ["TestCorp"],
+        "source_url": "https://news.com/article",
+        "category": "markets",
+        # No sentinel_score — new-style row
+    }
+
+
+def test_generate_html_email_filters_below_impact_threshold(monkeypatch):
+    """Articles with americhem_impact_score below the threshold must not appear in the email."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    low_impact = _make_new_article("low", americhem_impact_score=3, headline="Low Impact Headline")
+    high_impact = _make_new_article("high", americhem_impact_score=8, headline="High Impact Headline")
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email([low_impact, high_impact])
+
+    assert "High Impact Headline" in html
+    assert "Low Impact Headline" not in html
+
+
+def test_generate_html_email_groups_by_strategic_segment(monkeypatch):
+    """Two new-style articles with the same strategic_segment are grouped under that label."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    art_a = _make_new_article("a", 8, strategic_segment="Healthcare", headline="Healthcare Headline A")
+    art_b = _make_new_article("b", 7, strategic_segment="Healthcare", headline="Healthcare Headline B")
+
+    mock_client = _make_synthesis_mock({"Healthcare": "Healthcare synthesis paragraph."})
+    with patch("delivery_engine._get_openai", return_value=mock_client), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email([art_a, art_b])
+
+    assert "HEALTHCARE" in html.upper()
+    assert "Healthcare synthesis paragraph." in html
+
+
+# ---------------------------------------------------------------------------
+# _render_card() — sentiment_tag and americhem_impact_score display
+# ---------------------------------------------------------------------------
+
+def test_render_card_shows_impact_score_and_sentiment_tag():
+    """When americhem_impact_score and sentiment_tag are present, the card shows
+    'Impact: X/10' and the tag label, NOT the old 'Score: X/10' format."""
+    item = {
+        "headline": "Plant closure disrupts supply",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Feedstock shortfall for masterbatch lines.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+        "impact_rationale": "Direct feedstock cost increase.",
+        "strategic_segment": "Raw Materials / Supply Chain",
+        "source_publication": "Chemical Week",
+        "recommended_action": "Flag to procurement",
+        "category": "markets",
+    }
+    html = _render_card(item, accent="#EF4444", bg="#FEF2F2", text="#B91C1C")
+    assert "Impact: 8/10" in html
+    assert "Negative" in html
+    assert "Score:" not in html
+
+
+def test_render_card_falls_back_to_sentiment_score_for_old_rows():
+    """Old-style rows without new fields must render the legacy 'Score: X/10' display."""
+    item = {
+        "headline": "Old Article",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Some impact.",
+        "sentiment_score": 6,
+        "source_publication": "Reuters",
+        "recommended_action": "Monitor",
+        "category": "markets",
+    }
+    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    assert "Score: 6/10" in html
+    assert "Impact:" not in html

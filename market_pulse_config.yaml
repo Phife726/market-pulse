@@ -1,0 +1,79 @@
+# ============================================================
+# Market-Pulse Relevance Configuration
+# Controls strategic segment taxonomy and report thresholds.
+# Edit this file to tune what appears in the daily email.
+# ============================================================
+
+reporting:
+  # Minimum americhem_impact_score (1–10) for an article to appear in the email.
+  # Raise to 7 if the report feels noisy; lower to 5 if too sparse.
+  visible_impact_threshold: 6
+
+  # Articles scoring >= supporting_impact_threshold but < visible_impact_threshold
+  # are used to generate thematic summaries but are not shown as visible cards.
+  supporting_impact_threshold: 4
+
+  # Max visible articles per strategic segment (prevents one segment dominating).
+  max_visible_articles_per_segment: 3
+
+  # Hard cap on total visible articles across all segments.
+  max_total_visible_articles: 12
+
+# Strategic segment taxonomy.
+# Edit labels and descriptions freely — they are passed directly into the LLM prompt.
+# Do NOT reorder keys; add new segments at the bottom.
+strategic_segments:
+  healthcare:
+    label: Healthcare
+    description: >
+      Medical devices, pharmaceutical packaging, diagnostics equipment,
+      regulated healthcare polymer applications, biocompatible and sterilizable
+      plastics, clean-room compounding.
+
+  fibers:
+    label: Fibers
+    description: >
+      Synthetic fibers, textiles, nonwovens, filaments, yarn, performance
+      fabric, carpet fiber, geotextiles. Polyester, nylon, polypropylene,
+      and acrylic fiber chains.
+
+  packaging:
+    label: Packaging
+    description: >
+      Flexible and rigid packaging, consumer goods packaging, brand-owner
+      demand signals, food contact materials, sustainable packaging trends,
+      packaging legislation.
+
+  industrial:
+    label: Industrial
+    description: >
+      Industrial plastics, durable goods, wire and cable, building products,
+      construction materials, agricultural applications, automotive-adjacent
+      industrial components.
+
+  raw_materials_supply_chain:
+    label: Raw Materials / Supply Chain
+    description: >
+      Resin pricing, pigment and additive supply, feedstock disruptions,
+      logistics constraints, force majeure events, port or rail disruptions,
+      supplier capacity changes.
+
+  regulatory_sustainability:
+    label: Regulatory / Sustainability
+    description: >
+      PFAS regulation, recycled content mandates, extended producer
+      responsibility (EPR), carbon targets, circularity, chemical compliance,
+      sustainability reporting requirements.
+
+  competitive_customer_signal:
+    label: Competitive / Customer Signal
+    description: >
+      Competitor moves, customer expansions or contractions, M&A activity,
+      plant openings or closures, market-share shifts, OEM sourcing signals.
+
+  broader_americhem:
+    label: Broader Americhem
+    description: >
+      Relevant to Americhem's business but not clearly segment-specific.
+      Use when an article spans multiple segments or addresses general
+      plastics compounding industry trends.

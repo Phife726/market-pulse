@@ -16,7 +16,13 @@ create table if not exists daily_intelligence (
     sentiment_rationale text,
     recommended_action text,
     article_summary text,
-    raw_content text
+    raw_content text,
+    -- Relevance upgrade fields (migration 001)
+    sentiment_tag text check (sentiment_tag in ('Negative', 'Neutral', 'Positive')),
+    americhem_impact_score smallint check (americhem_impact_score between 1 and 10),
+    impact_rationale text,
+    strategic_segment text,
+    include_in_report boolean default true
 );
 
 -- Unique index to prevent duplicate entries for normalized article URLs.
@@ -31,6 +37,12 @@ create index if not exists idx_daily_intelligence_category
 
 create index if not exists idx_daily_intelligence_sentiment_score
     on daily_intelligence (sentiment_score);
+
+create index if not exists idx_daily_intelligence_impact_score
+    on daily_intelligence (americhem_impact_score);
+
+create index if not exists idx_daily_intelligence_strategic_segment
+    on daily_intelligence (strategic_segment);
 
 -- Stores one executive summary row per pipeline run date.
 create table if not exists daily_summaries (
@@ -52,6 +64,11 @@ select
     article_summary,
     americhem_impact,
     sentiment_score,
+    sentiment_tag,
+    americhem_impact_score,
+    impact_rationale,
+    strategic_segment,
+    include_in_report,
     source_url,
     url_hash,
     entities_mentioned,
@@ -67,4 +84,4 @@ select
     end as alert_tier
 from daily_intelligence
 where created_at >= now() - interval '24 hours'
-order by sentiment_score asc;
+order by coalesce(americhem_impact_score, sentiment_score) desc;

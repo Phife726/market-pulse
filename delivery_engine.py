@@ -4,8 +4,10 @@ import os
 import random
 import time
 from datetime import datetime, timedelta
+from typing import Optional
 
 import requests
+import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
@@ -25,6 +27,34 @@ _BRAND_GREEN      = "#7FB069"
 _LOGO_URL = (
     "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
 )
+
+# ---------------------------------------------------------------------------
+# Config loader
+# ---------------------------------------------------------------------------
+
+_MP_CONFIG: Optional[dict] = None
+
+
+def _load_mp_config() -> dict:
+    """Load market_pulse_config.yaml once; return cached result on repeat calls."""
+    global _MP_CONFIG
+    if _MP_CONFIG is None:
+        try:
+            with open("market_pulse_config.yaml", "r") as fh:
+                _MP_CONFIG = yaml.safe_load(fh) or {}
+        except Exception as exc:
+            logger.warning("Could not load market_pulse_config.yaml — using defaults: %s", exc)
+            _MP_CONFIG = {}
+    return _MP_CONFIG
+
+
+def _effective_impact(row: dict) -> int:
+    """Return routing score: americhem_impact_score preferred, sentiment_score fallback."""
+    score = row.get("americhem_impact_score")
+    if score is not None:
+        return int(score)
+    return int(row.get("sentiment_score") or 5)
+
 
 # ---------------------------------------------------------------------------
 # Email delivery retry constants
@@ -76,16 +106,16 @@ def fetch_todays_intelligence() -> list[dict]:
             supabase.table("daily_intelligence")
             .select("*")
             .gte("created_at", cutoff)
-            .order("sentiment_score", desc=False)
+            .order("americhem_impact_score", desc=True)
             .execute()
         )
 
         records: list[dict] = []
         for row in result.data or []:
-            score = row.get("sentiment_score", 5)
-            if score <= 3:
+            impact = _effective_impact(row)
+            if impact <= 3:
                 row["alert_tier"] = "CRITICAL"
-            elif score >= 8:
+            elif impact >= 8:
                 row["alert_tier"] = "STRATEGIC"
             else:
                 row["alert_tier"] = "ROUTINE"
@@ -132,40 +162,39 @@ def fetch_macro_summary() -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _group_for_thematic(items: list[dict]) -> dict[str, list[dict]]:
-    """Group qualifying articles (score 4–10) by category for thematic synthesis.
+    """Group qualifying articles by strategic segment (or category fallback) for thematic synthesis.
 
     Args:
         items: Articles pre-filtered to scores 4–10. Score 1–3 articles are
             silently skipped as a safety guard.
 
     Returns:
-        Dict of {category: [articles]} containing only groups with 2+ articles.
-        Articles with a missing or null category are grouped under 'Uncategorized'.
+        Dict of {segment: [articles]} containing only groups with 2+ articles.
+        Articles with missing segment and category are grouped under 'Uncategorized'.
     """
     from collections import defaultdict
     buckets: dict[str, list[dict]] = defaultdict(list)
     for item in items:
-        score = item.get("sentiment_score") or 0
-        if score <= 3:
+        if _effective_impact(item) <= 3:
             continue
-        category = item.get("category") or "Uncategorized"
-        buckets[category].append(item)
-    return {cat: arts for cat, arts in buckets.items() if len(arts) >= 2}
+        segment = item.get("strategic_segment") or item.get("category") or "Uncategorized"
+        buckets[segment].append(item)
+    return {seg: arts for seg, arts in buckets.items() if len(arts) >= 2}
 
 
 def _collect_thin_entries(
     items: list[dict],
     groups: dict[str, list[dict]],
 ) -> list[dict]:
-    """Return ungrouped score 7–10 articles for thin thematic rendering.
+    """Return ungrouped high-impact (7–10) articles for thin thematic rendering.
 
     Args:
-        items: All non-critical articles (scores 4–10).
+        items: All non-critical articles at or above the visible threshold.
         groups: The 2+ article groups from _group_for_thematic().
 
     Returns:
-        Single-article items scoring 7–10 not captured in any group,
-        ordered by sentiment_score ascending.
+        Single-article items with effective impact 7–10 not captured in any group,
+        ordered by impact score ascending.
     """
     grouped_hashes = {
         art.get("url_hash") for arts in groups.values() for art in arts
@@ -173,24 +202,24 @@ def _collect_thin_entries(
     thin = [
         item for item in items
         if item.get("url_hash") not in grouped_hashes
-        and (item.get("sentiment_score") or 0) >= 7
+        and _effective_impact(item) >= 7
     ]
-    return sorted(thin, key=lambda x: x.get("sentiment_score") or 0)
+    return sorted(thin, key=lambda x: _effective_impact(x))
 
 
 def _collect_peripheral(
     items: list[dict],
     groups: dict[str, list[dict]],
 ) -> list[dict]:
-    """Return ungrouped score 4–6 articles for the Peripheral Signals section.
+    """Return ungrouped moderate-impact (4–6) articles for the Peripheral Signals section.
 
     Args:
-        items: All non-critical articles (scores 4–10).
+        items: Articles not in the critical zone.
         groups: The 2+ article groups from _group_for_thematic().
 
     Returns:
-        Single-article items scoring 4–6 not captured in any group,
-        ordered by sentiment_score ascending.
+        Single-article items with effective impact 4–6 not captured in any group,
+        ordered by impact score ascending.
     """
     grouped_hashes = {
         art.get("url_hash") for arts in groups.values() for art in arts
@@ -198,9 +227,9 @@ def _collect_peripheral(
     peripheral = [
         item for item in items
         if item.get("url_hash") not in grouped_hashes
-        and (item.get("sentiment_score") or 0) <= 6
+        and _effective_impact(item) <= 6
     ]
-    return sorted(peripheral, key=lambda x: x.get("sentiment_score") or 0)
+    return sorted(peripheral, key=lambda x: _effective_impact(x))
 
 
 def synthesize_thematic_paragraphs(
@@ -222,11 +251,13 @@ def synthesize_thematic_paragraphs(
     for category, articles in groups.items():
         lines.append(f"CATEGORY: {category}")
         for art in articles:
-            score = art.get("sentiment_score", 5)
+            impact_score = _effective_impact(art)
+            tag = art.get("sentiment_tag") or ""
             entities = art.get("entities_mentioned") or []
-            entity = entities[0] if entities else (art.get("category") or "Unknown")
-            impact = art.get("americhem_impact", "")
-            lines.append(f"- [{entity} | {score}/10] {impact}")
+            entity = entities[0] if entities else (art.get("strategic_segment") or art.get("category") or "Unknown")
+            americhem_impact = art.get("americhem_impact", "")
+            tag_suffix = f" | {tag}" if tag else ""
+            lines.append(f"- [{entity} | impact:{impact_score}/10{tag_suffix}] {americhem_impact}")
         lines.append("")
 
     grouped_text = "\n".join(lines).strip()
@@ -279,14 +310,14 @@ def _render_peripheral_section(items: list[dict]) -> str:
     bullets_html = ""
     for item in items:
         entities = item.get("entities_mentioned") or []
-        entity = entities[0] if entities else (item.get("category") or "Unknown")
-        score = item.get("sentiment_score", "")
+        entity = entities[0] if entities else (item.get("strategic_segment") or item.get("category") or "Unknown")
+        impact_score = _effective_impact(item)
         headline = item.get("headline", "")
         source_url = item.get("source_url", "#")
         bullets_html += (
             f'<tr><td style="padding:2px 0;">'
             f'<span style="font-size:12px;font-family:Arial,sans-serif;color:#6B7280;">'
-            f'&bull;&nbsp;<strong style="color:#374151;">[{entity}: {score}/10]</strong>'
+            f'&bull;&nbsp;<strong style="color:#374151;">[{entity}: {impact_score}/10]</strong>'
             f'&nbsp;<a href="{source_url}" style="color:#374151;text-decoration:none;">'
             f'{headline}</a>'
             f'</span></td></tr>'
@@ -349,13 +380,13 @@ def _render_thematic_section(
 
     ordered_groups = sorted(
         groups.items(),
-        key=lambda kv: min((a.get("sentiment_score") or 5) for a in kv[1]),
+        key=lambda kv: min(_effective_impact(a) for a in kv[1]),
     )
 
     def _bullet(item: dict) -> str:
         entities = item.get("entities_mentioned") or []
-        entity = entities[0] if entities else (item.get("category") or "Unknown")
-        score = item.get("sentiment_score", "")
+        entity = entities[0] if entities else (item.get("strategic_segment") or item.get("category") or "Unknown")
+        impact_score = _effective_impact(item)
         headline = item.get("headline", "")
         source_url = item.get("source_url", "#")
         return (
@@ -363,7 +394,7 @@ def _render_thematic_section(
             f'<span style="font-size:12px;font-family:Arial,sans-serif;">'
             f'&bull;&nbsp;'
             f'<a href="{source_url}" style="color:{_BRAND_NAVY};text-decoration:none;'
-            f'font-weight:600;">[{entity}: {score}/10]</a>'
+            f'font-weight:600;">[{entity}: {impact_score}/10]</a>'
             f'&nbsp;<span style="color:#374151;">{headline}</span>'
             f'</span></td></tr>'
         )
@@ -375,7 +406,7 @@ def _render_thematic_section(
             f'{para}</p>'
         ) if para else ""
         sorted_articles = sorted(
-            articles, key=lambda x: x.get("sentiment_score") or 0
+            articles, key=lambda x: _effective_impact(x)
         )
         bullets = "".join(_bullet(a) for a in sorted_articles)
         return (
@@ -394,10 +425,10 @@ def _render_thematic_section(
         for cat, arts in ordered_groups
     )
 
-    thin_sorted = sorted(thin_entries, key=lambda x: x.get("sentiment_score") or 0)
+    thin_sorted = sorted(thin_entries, key=lambda x: _effective_impact(x))
     for item in thin_sorted:
-        category = item.get("category") or "Uncategorized"
-        categories_html += _category_block(category, [item], "")
+        segment = item.get("strategic_segment") or item.get("category") or "Uncategorized"
+        categories_html += _category_block(segment, [item], "")
 
     return f"""
       <tr>
@@ -473,17 +504,44 @@ def _sentiment_word(score: int) -> tuple[str, str]:
     return ("Opportunity", "#15803D")
 
 
+_SENTIMENT_TAG_COLORS: dict[str, str] = {
+    "Negative": "#DC2626",
+    "Neutral":  "#6B7280",
+    "Positive": "#16A34A",
+}
+
+
 def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     headline            = item.get("headline", "No headline")
     source_url          = item.get("source_url", "#")
     americhem_impact    = item.get("americhem_impact", "")
-    category            = item.get("category", "").upper()
-    score               = item.get("sentiment_score", "")
     source_publication  = item.get("source_publication", "")
-    sentiment_rationale = item.get("sentiment_rationale", "")
-
     recommended_action  = item.get("recommended_action", "")
-    sentiment_word, sentiment_color = _sentiment_word(int(score) if score else 5)
+
+    # Segment label: new field preferred, category fallback
+    segment_label = (item.get("strategic_segment") or item.get("category") or "").upper()
+
+    # Score display: new fields preferred, old sentiment_score fallback
+    impact_score_raw = item.get("americhem_impact_score")
+    sentiment_tag    = item.get("sentiment_tag")
+    if impact_score_raw is not None and sentiment_tag:
+        tag_color   = _SENTIMENT_TAG_COLORS.get(sentiment_tag, "#6B7280")
+        score_html  = (
+            f'<span style="color:{_BRAND_NAVY};font-weight:600;">'
+            f'Impact: {impact_score_raw}/10</span>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+            f'<span style="color:{tag_color};font-weight:600;">{sentiment_tag}</span>'
+        )
+        rationale_text = item.get("impact_rationale", "")
+    else:
+        score = item.get("sentiment_score", "")
+        sentiment_word, sentiment_color = _sentiment_word(int(score) if score else 5)
+        score_html = (
+            f'<span style="color:{sentiment_color};font-weight:600;">'
+            f'{sentiment_word}</span>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Score: {score}/10</span>'
+        )
+        rationale_text = item.get("sentiment_rationale", "")
 
     source_pub_html = (
         f'<span style="font-size:11px;color:#9CA3AF;'
@@ -494,8 +552,8 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     rationale_html = (
         f'<p style="margin:0 0 10px 0;font-size:12px;color:#6B7280;'
         f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
-        f'Score rationale: {sentiment_rationale}</p>'
-        if sentiment_rationale else ""
+        f'{rationale_text}</p>'
+        if rationale_text else ""
     )
 
     action_html = (
@@ -540,18 +598,13 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
                                           border-radius:3px;background-color:{bg};
                                           color:{text};border:1px solid {accent};
                                           font-family:Arial,sans-serif;">
-                              {category}
+                              {segment_label}
                             </span>
                             <span style="margin-left:6px;">{source_pub_html}</span>
                           </td>
                           <td align="right"
                               style="font-size:11px;font-family:Arial,sans-serif;">
-                            <span style="color:{sentiment_color};font-weight:600;">
-                              {sentiment_word}
-                            </span>
-                            <span style="color:#9CA3AF;">
-                              &nbsp;&#9679;&nbsp;Score: {score}/10
-                            </span>
+                            {score_html}
                           </td>
                         </tr>
                       </table>
@@ -610,14 +663,38 @@ def generate_html_email(
     data: list[dict],
     macro_summary: dict | None = None,
 ) -> str:
-    # Zone 1: Critical (score 1–3) — always full cards
-    critical = [r for r in data if (r.get("sentiment_score") or 0) <= 3]
+    config = _load_mp_config()
+    visible_threshold: int = config.get("reporting", {}).get("visible_impact_threshold", 6)
 
-    # Zones 2 & 3: Thematic + Peripheral (scores 4–10)
-    non_critical = [r for r in data if (r.get("sentiment_score") or 0) >= 4]
-    groups       = _group_for_thematic(non_critical)
-    thin_entries = _collect_thin_entries(non_critical, groups)
-    peripheral   = _collect_peripheral(non_critical, groups)
+    # Zone 1 — Critical: old-style rows (no americhem_impact_score) with sentiment_score <= 3.
+    # New rows with low impact score are excluded from the report entirely (not shown as critical).
+    critical_hashes: set[str] = set()
+    critical: list[dict] = []
+    for r in data:
+        if r.get("americhem_impact_score") is None and (r.get("sentiment_score") or 5) <= 3:
+            critical_hashes.add(r.get("url_hash") or "")
+            critical.append(r)
+
+    non_critical_all = [r for r in data if (r.get("url_hash") or "") not in critical_hashes]
+
+    # Zone 2 — Thematic: articles at or above the visible impact threshold.
+    thematic_candidates = [r for r in non_critical_all if _effective_impact(r) >= visible_threshold]
+    groups       = _group_for_thematic(thematic_candidates)
+    thin_entries = _collect_thin_entries(thematic_candidates, groups)
+
+    # Zone 3 — Peripheral: ungrouped moderate-impact articles from the thematic pool
+    # plus below-threshold OLD-style articles (new-style rows below threshold are excluded entirely).
+    peripheral_from_thematic = _collect_peripheral(thematic_candidates, groups)
+    below_threshold_legacy = [
+        r for r in non_critical_all
+        if _effective_impact(r) < visible_threshold
+        and r.get("americhem_impact_score") is None
+    ]
+    peripheral = sorted(
+        peripheral_from_thematic + below_threshold_legacy,
+        key=lambda x: _effective_impact(x),
+    )
+
     synthesis    = synthesize_thematic_paragraphs(groups)
 
     sections_html = (
