@@ -840,12 +840,64 @@ def _render_thematic_section(
 # 3. HTML generation helpers
 # ---------------------------------------------------------------------------
 
+def _render_executive_bullets(bullets: list[dict]) -> str:
+    """Render the 3-bullet executive summary body.
+
+    Each bullet uses bold label + body text. Labels come from the data, which
+    guarantees they match the configured executive_bullet_labels enforced by
+    ingestion's _validate_executive_bullets().
+    """
+    items_html = ""
+    for b in bullets:
+        label = b.get("label", "")
+        body = b.get("body", "")
+        items_html += (
+            f'<tr><td style="padding:2px 0;font-size:13px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+            f'&bull;&nbsp;<strong>{label}:</strong> {body}'
+            f'</td></tr>'
+        )
+    return (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+        f'{items_html}</table>'
+    )
+
+
 def _render_exec_summary(macro_summary: dict | None) -> str:
+    """Render the Executive Summary row.
+
+    Prefers structured executive_bullets; falls back to legacy executive_summary prose.
+    Returns empty string when no summary data is present.
+    """
     if not macro_summary:
         return ""
 
-    sentiment    = macro_summary.get("macro_sentiment", "")
-    summary_text = macro_summary.get("executive_summary", "")
+    bullets = macro_summary.get("executive_bullets")
+    legacy_text = macro_summary.get("executive_summary") or ""
+    condition = (
+        macro_summary.get("dominant_condition")
+        or macro_summary.get("macro_sentiment")
+        or ""
+    )
+
+    if bullets:
+        body_html = _render_executive_bullets(bullets)
+    elif legacy_text:
+        body_html = (
+            f'<p style="margin:0;font-size:14px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
+            f'{legacy_text}</p>'
+        )
+    else:
+        return ""
+
+    badge_html = ""
+    if condition:
+        badge_html = (
+            f'&nbsp;<span style="background-color:{_BRAND_NAVY};color:#ffffff;'
+            f'padding:2px 10px;border-radius:20px;font-size:10px;font-weight:600;'
+            f'letter-spacing:0.5px;">{condition}</span>'
+        )
 
     return f"""
       <tr>
@@ -857,15 +909,9 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
                 <p style="margin:0 0 8px 0;font-size:10px;font-weight:700;
                            letter-spacing:1.5px;color:{_BRAND_NAVY};
                            font-family:Arial,sans-serif;text-transform:uppercase;">
-                  Executive Summary &nbsp;
-                  <span style="background-color:{_BRAND_NAVY};color:#ffffff;
-                                padding:2px 10px;border-radius:20px;
-                                font-size:10px;font-weight:600;
-                                letter-spacing:0.5px;">{sentiment}</span>
+                  Executive Summary{badge_html}
                 </p>
-                <p style="margin:0;font-size:14px;color:#1a2a45;
-                           font-family:Georgia,'Times New Roman',serif;
-                           line-height:1.65;">{summary_text}</p>
+                {body_html}
               </td>
             </tr>
           </table>

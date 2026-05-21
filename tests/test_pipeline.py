@@ -2525,3 +2525,55 @@ def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatc
     assert "run_mode" in keys, f"eq calls: {eq_calls}"
     rm_calls = [c for c in eq_calls if c[0] == "run_mode"]
     assert any(c[1] == "test" for c in rm_calls), f"Expected run_mode='test' in {rm_calls}"
+
+
+def test_render_executive_bullets_renders_three_labeled_bullets():
+    from delivery_engine import _render_executive_bullets
+    bullets = [
+        {"label": "Market pressure",    "body": "Techmer raised prices."},
+        {"label": "Supply chain watch", "body": "Mitsubishi restructuring."},
+        {"label": "Commercial action",  "body": "Prioritize additives."},
+    ]
+    html = _render_executive_bullets(bullets)
+    assert "Market pressure" in html
+    assert "Supply chain watch" in html
+    assert "Commercial action" in html
+    assert "Techmer raised prices." in html
+    assert "Mitsubishi restructuring." in html
+    assert "Prioritize additives." in html
+
+
+def test_render_exec_summary_uses_structured_bullets_when_present():
+    from delivery_engine import _render_exec_summary
+    macro = {
+        "dominant_condition": "Competitive Pressure",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action",  "body": "C."},
+        ],
+        "executive_summary": "Should not be used.",
+    }
+    html = _render_exec_summary(macro)
+    assert "Market pressure" in html
+    assert "A." in html
+    assert "Should not be used." not in html
+    assert "Competitive Pressure" in html  # condition badge
+
+
+def test_render_exec_summary_falls_back_to_legacy_when_bullets_null():
+    from delivery_engine import _render_exec_summary
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": None,
+        "executive_summary": "Legacy prose summary used.",
+    }
+    html = _render_exec_summary(macro)
+    assert "Legacy prose summary used." in html
+    assert "Market pressure" not in html
+
+
+def test_render_exec_summary_no_summary_returns_empty():
+    from delivery_engine import _render_exec_summary
+    assert _render_exec_summary(None) == ""
+    assert _render_exec_summary({}) == ""
