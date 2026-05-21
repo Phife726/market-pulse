@@ -50,3 +50,34 @@ def test_sample_is_frozen():
     s = SuppressionSample(reason="duplicate_url", url="u", title="t")
     with __import__("pytest").raises(Exception):
         s.reason = "other"  # frozen dataclass
+
+
+import pytest
+
+
+def test_record_increments_count_and_appends_sample():
+    led = SuppressionLedger.for_ingestion().record(
+        "duplicate_url", url="https://x/1", title="T1",
+    )
+    assert led.breakdown == {"duplicate_url": 1}
+    assert led.samples == (SuppressionSample("duplicate_url", "https://x/1", "T1"),)
+
+
+def test_record_returns_new_instance_does_not_mutate_original():
+    led1 = SuppressionLedger.for_ingestion()
+    led2 = led1.record("duplicate_url", url="u", title="t")
+    assert led1.breakdown == {}
+    assert led1.samples == ()
+    assert led2.breakdown == {"duplicate_url": 1}
+
+
+def test_record_wrong_side_raises_value_error():
+    led = SuppressionLedger.for_ingestion()
+    with pytest.raises(ValueError, match="not owned by ingestion"):
+        led.record("below_impact_threshold", url="u", title="t")
+
+
+def test_record_unknown_reason_raises_value_error():
+    led = SuppressionLedger.for_delivery()
+    with pytest.raises(ValueError, match="unknown reason"):
+        led.record("totally_made_up_code", url="u", title="t")

@@ -70,3 +70,24 @@ class SuppressionLedger:
     @classmethod
     def for_delivery(cls) -> "SuppressionLedger":
         return cls(side="delivery")
+
+    def record(self, reason: str, *, url: str, title: str) -> "SuppressionLedger":
+        """Return a new ledger with `reason` incremented and a sample appended.
+        Samples are deduped by (reason, url, title) and FIFO-capped at SAMPLES_CAP.
+        Raises ValueError if `reason` is unknown or not owned by this ledger's side."""
+        if reason not in _SIDE_OF:
+            raise ValueError(f"unknown reason: {reason!r}")
+        if _SIDE_OF[reason] != self.side:
+            raise ValueError(
+                f"reason {reason!r} not owned by {self.side} "
+                f"(owned by {_SIDE_OF[reason]})"
+            )
+        new_breakdown = dict(self.breakdown)
+        new_breakdown[reason] = new_breakdown.get(reason, 0) + 1
+
+        sample = SuppressionSample(reason=reason, url=url, title=title)
+        existing = tuple(s for s in self.samples if (s.reason, s.url, s.title) != (reason, url, title))
+        new_samples = existing + (sample,)
+        if len(new_samples) > SAMPLES_CAP:
+            new_samples = new_samples[-SAMPLES_CAP:]
+        return SuppressionLedger(side=self.side, breakdown=new_breakdown, samples=new_samples)
