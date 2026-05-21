@@ -52,13 +52,18 @@ The pipeline is two sequential scripts sharing a Supabase database:
 
 1. Queries `daily_intelligence` directly (last 24 h; 72 h on Mondays) via `fetch_todays_intelligence()` — does **not** use the `todays_intelligence` view at runtime
 2. Calls `fetch_macro_summary()` to retrieve the executive summary written by ingestion
-3. Renders a three-zone HTML email and sends via the **Resend HTTP API** (`POST https://api.resend.com/emails`) with exponential-backoff retry (5 attempts; retries on 429, 500, 502, 503, 504). `SMTP_PASS` env var holds the Resend API key (legacy name).
+3. Renders a single-zone HTML email and sends via the **Resend HTTP API** (`POST https://api.resend.com/emails`) with exponential-backoff retry (5 attempts; retries on 429, 500, 502, 503, 504). `SMTP_PASS` env var holds the Resend API key (legacy name).
 
-**Email layout — three zones.** Routing uses `_effective_impact()` (`americhem_impact_score` if present, else `sentiment_score`). New-style rows below `visible_impact_threshold` are excluded entirely — they never fall through to Peripheral.
+**Email layout — Commercial Segment Watch.** Rendering is one zone, produced by `_render_segment_watch_section()`. The pipeline inside `generate_html_email()`:
 
-- **Critical Disruptions**: legacy rows (no `americhem_impact_score`) with `sentiment_score <= 3`. Full article cards.
-- **Thematic Intelligence**: rows with effective impact `>= visible_impact_threshold` (default 6, see config). Articles are grouped by `strategic_segment` (fallback `category`). Groups with 2+ articles get an LLM-generated synthesis paragraph via `synthesize_thematic_paragraphs()`. Ungrouped impact 7–10 singletons render as bullets without synthesis. Per-segment and total caps from config apply; capped-out articles do **not** leak into Peripheral.
-- **Peripheral Signals**: ungrouped effective-impact 4–6 articles plus legacy below-threshold rows. Compact bullet list.
+1. Runs `_apply_delivery_suppression()` — a deterministic seven-rule guardrail (product-listing URLs, job postings, generic market reports, unrelated-color results, exact and semantic headline duplicates, Enterprise / Cross-Segment low-impact). First match wins; counts and last-10 samples are recorded as the delivery-side suppression breakdown.
+2. Filters to rows where `_effective_impact() >= visible_impact_threshold` (default 6). `_effective_impact()` returns `americhem_impact_score` if present, else `sentiment_score`.
+3. Groups visible rows by `commercial_segment` (with `_LEGACY_STRATEGIC_SEGMENT_MAP` resolving pre-migration rows that only have `strategic_segment`).
+4. Applies `max_visible_articles_per_segment` then `max_total_visible_articles`. Capped-out rows are dropped — there is no fallback section.
+5. For groups with 2+ articles, calls `synthesize_thematic_paragraphs()` for an LLM-generated synthesis paragraph above the cards.
+6. Writes `surfaced_count` and the merged ingestion+delivery `suppression_breakdown` back to today's `daily_summaries` row via `_update_delivery_summary_counts()` (idempotent on same-day retry).
+
+Cards display the `impact_score`, `sentiment_tag`, `signal_type`, BLUF "So what", and a `CRITICAL` badge when a legacy row has `sentiment_score <= 3`. The old Critical Disruptions / Thematic Intelligence / Peripheral Signals zones have been removed; integration tests still assert those section headers do not appear.
 
 When `MARKET_PULSE_RUN_MODE=test`, both the subject line and the rendered HTML are marked: `[TEST]` prefix and an amber "TEST RUN · Jason-only QA output" banner row.
 
