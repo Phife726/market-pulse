@@ -5,6 +5,8 @@ from suppression_ledger import (
     DELIVERY_CODES,
     side_of,
     label_for,
+    SuppressionLedger,
+    SuppressionSample,
 )
 
 
@@ -28,3 +30,23 @@ def test_side_of_returns_correct_side():
 def test_label_for_returns_human_label():
     assert label_for("duplicate_url") == "duplicate URL"
     assert label_for("enterprise_cross_segment_low_impact") == "Enterprise / Cross-Segment, low impact"
+
+
+def test_ledger_for_ingestion_starts_empty():
+    led = SuppressionLedger.for_ingestion()
+    assert led.side == "ingestion"
+    assert led.breakdown == {}
+    assert led.samples == ()
+
+
+def test_ledger_for_delivery_starts_empty():
+    led = SuppressionLedger.for_delivery()
+    assert led.side == "delivery"
+    assert led.breakdown == {}
+    assert led.samples == ()
+
+
+def test_sample_is_frozen():
+    s = SuppressionSample(reason="duplicate_url", url="u", title="t")
+    with __import__("pytest").raises(Exception):
+        s.reason = "other"  # frozen dataclass

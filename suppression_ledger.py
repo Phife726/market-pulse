@@ -1,6 +1,7 @@
 """Pure in-process module owning the suppression reason taxonomy, samples
 cap, and same-day-retry merge semantics. Performs zero I/O."""
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Literal, Mapping
 
 Side = Literal["ingestion", "delivery"]
 
@@ -42,3 +43,30 @@ def side_of(reason: str) -> Side:
 def label_for(reason: str) -> str:
     """Return the human-readable label for `reason`. Falls back to the code itself if unknown (forward-compat for future codes)."""
     return _LABELS.get(reason, reason)
+
+
+@dataclass(frozen=True)
+class SuppressionSample:
+    """One suppressed-item record. Persisted shape is {reason, url, title}."""
+    reason: str
+    url: str
+    title: str
+
+    def to_dict(self) -> dict:
+        return {"reason": self.reason, "url": self.url, "title": self.title}
+
+
+@dataclass(frozen=True)
+class SuppressionLedger:
+    """Side-tagged immutable accumulator. Build via for_ingestion()/for_delivery()."""
+    side: Side
+    breakdown: Mapping[str, int] = field(default_factory=dict)
+    samples:   tuple[SuppressionSample, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def for_ingestion(cls) -> "SuppressionLedger":
+        return cls(side="ingestion")
+
+    @classmethod
+    def for_delivery(cls) -> "SuppressionLedger":
+        return cls(side="delivery")
