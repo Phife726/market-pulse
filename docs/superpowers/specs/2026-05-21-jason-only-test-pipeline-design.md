@@ -61,11 +61,14 @@ Test mode is signalled to the application code by exactly one environment variab
 ```yaml
 name: Market Pulse Test Pipeline
 
+run-name: >-
+  Test Pipeline - ingest=${{ github.event.inputs.run_ingestion }} - email=${{ github.event.inputs.send_email }} - ${{ github.actor }}
+
 on:
   workflow_dispatch:
     inputs:
       run_ingestion:
-        description: "Run ingestion before delivery?"
+        description: "Run ingestion before delivery? (true writes new rows to Supabase — only set true when you intentionally want to test ingestion)"
         required: true
         default: "true"
         type: choice
@@ -306,6 +309,29 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
     html = _generate_no_news_email()
     assert "[TEST]" in html
     assert "TEST RUN" in html
+
+
+def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
+    """Recipient invariant: send_email() builds the Resend 'to' list strictly from the
+    RECIPIENT_EMAILS env var and never falls back to any hardcoded address. This is
+    the safety guarantee that lets the workflow swap recipient pools by env var alone.
+    """
+    monkeypatch.setenv("SMTP_PASS", "re_test_key")
+    monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
+    monkeypatch.setenv("RECIPIENT_EMAILS", "jphifer@americhem.com")
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    captured = {}
+    def fake_post(*args, **kwargs):
+        captured["payload"] = kwargs["json"]
+        resp = MagicMock(); resp.status_code = 200; resp.ok = True
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr(_requests, "post", fake_post)
+    _send_email("<html>x</html>")
+    assert captured["payload"]["to"] == ["jphifer@americhem.com"]
 ```
 
 The existing test helpers `_make_new_article`, `_email_env`, `_send_email`, `_time`, and `_requests` are reused from earlier sections of `test_pipeline.py`.
@@ -349,4 +375,6 @@ After implementation:
 - [ ] Dispatching with `run_ingestion=true, send_email=false` ingests articles and produces no email.
 - [ ] Dispatching with `run_ingestion=false, send_email=true` emails Jason from existing rows without re-ingesting (verify by Supabase row count delta = 0).
 - [ ] Two simultaneous dispatches of the test workflow result in the second waiting on the concurrency group rather than running in parallel.
+- [ ] Inspect the rendered test workflow YAML: every `RECIPIENT_EMAILS:` env var in a Python step is sourced from `${{ secrets.TEST_RECIPIENT_EMAILS }}`, never from `${{ secrets.RECIPIENT_EMAILS }}`.
+- [ ] Inspect the Resend API call from a test-mode delivery (Actions log + Resend dashboard): the `to` field equals the configured `TEST_RECIPIENT_EMAILS` value and contains no production addresses.
 - [ ] The next scheduled production run produces an email with no `[TEST]` marker and the existing recipient list.
