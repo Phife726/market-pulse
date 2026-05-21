@@ -392,6 +392,30 @@ def _is_test_mode() -> bool:
 # QA suppression-summary (test-mode only)
 # ---------------------------------------------------------------------------
 
+# Ownership of suppression reason codes.
+# Ingestion writes these on the upsert in generate_macro_summary(); delivery
+# must preserve them when updating the row.
+_INGESTION_SUPPRESSION_KEYS: frozenset[str] = frozenset({
+    "duplicate_url",
+    "semantic_duplicate",
+    "llm_discard",
+    "scrape_failed",
+})
+
+# Delivery owns these — they are recomputed on every render and must be
+# OVERWRITTEN on retry, never added to prior values.
+_DELIVERY_SUPPRESSION_KEYS: frozenset[str] = frozenset({
+    "below_impact_threshold",
+    "weak_relevance",
+    "duplicate_headline",
+    "semantic_duplicate_headline",
+    "product_listing",
+    "job_posting",
+    "generic_market_report",
+    "unrelated_color_result",
+    "enterprise_cross_segment_low_impact",
+})
+
 _QA_REASON_LABELS: dict[str, str] = {
     "duplicate_url":                       "duplicate URL",
     "semantic_duplicate":                  "semantic duplicate",
@@ -638,13 +662,27 @@ def _update_delivery_summary_counts(
         prior_breakdown = (rows[0].get("suppression_breakdown") if rows else None) or {}
         prior_samples   = (rows[0].get("suppression_samples")   if rows else None) or []
 
-        merged_breakdown = dict(prior_breakdown)
+        # Start from the prior breakdown but drop delivery-owned keys so this
+        # render can write fresh values for them. Ingestion-owned keys and any
+        # unknown future codes are preserved.
+        merged_breakdown = {
+            k: v for k, v in prior_breakdown.items()
+            if k not in _DELIVERY_SUPPRESSION_KEYS
+        }
         for k, v in delivery_counts.items():
-            merged_breakdown[k] = merged_breakdown.get(k, 0) + int(v)
+            merged_breakdown[k] = int(v)
 
-        merged_samples = list(prior_samples) + list(delivery_samples)
-        if len(merged_samples) > _DELIVERY_SAMPLES_CAP:
-            merged_samples = merged_samples[-_DELIVERY_SAMPLES_CAP:]
+        # Dedupe samples by (reason, url, title) before capping so retries don't
+        # produce duplicates of the same suppressed item.
+        seen: set[tuple] = set()
+        deduped_samples: list[dict] = []
+        for sample in list(prior_samples) + list(delivery_samples):
+            key = (sample.get("reason"), sample.get("url"), sample.get("title"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped_samples.append(sample)
+        merged_samples = deduped_samples[-_DELIVERY_SAMPLES_CAP:]
 
         supabase.table("daily_summaries").update({
             "surfaced_count": surfaced_count,

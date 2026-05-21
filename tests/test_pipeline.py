@@ -2792,3 +2792,137 @@ def test_render_qa_debug_section_uses_friendly_labels():
     assert "semantic duplicate" in html
     assert "LLM discard" in html
     assert "Enterprise / Cross-Segment" in html
+
+
+# ===========================================================================
+# PR #7 fix — idempotent suppression breakdown on same-day retries
+# ===========================================================================
+
+def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
+    """Delivery-owned keys must be REPLACED, not added, on retry. Ingestion-owned
+    keys must be preserved unchanged."""
+    from delivery_engine import _update_delivery_summary_counts
+
+    prior = {
+        "duplicate_url": 10,            # ingestion-owned
+        "semantic_duplicate": 2,        # ingestion-owned
+        "below_impact_threshold": 22,   # delivery-owned (must be replaced)
+        "weak_relevance": 7,            # delivery-owned (must be replaced)
+    }
+
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[{"suppression_breakdown": prior, "suppression_samples": []}]
+    )
+    captured = {}
+    def fake_update(payload):
+        captured["update"] = payload
+        return mock_supa.table.return_value.update.return_value
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        _update_delivery_summary_counts(
+            surfaced_count=6,
+            delivery_counts={"below_impact_threshold": 5, "weak_relevance": 2},
+            delivery_samples=[],
+        )
+
+    merged = captured["update"]["suppression_breakdown"]
+    # Ingestion-owned keys preserved unchanged:
+    assert merged["duplicate_url"] == 10
+    assert merged["semantic_duplicate"] == 2
+    # Delivery-owned keys REPLACED (not added):
+    assert merged["below_impact_threshold"] == 5, "delivery-owned count must be overwritten, not added"
+    assert merged["weak_relevance"] == 2
+
+
+def test_update_delivery_summary_counts_idempotent_on_retry():
+    """Two consecutive calls with the same delivery_counts must produce the same
+    final breakdown — no doubling."""
+    from delivery_engine import _update_delivery_summary_counts
+
+    captured = {}
+    mock_supa = MagicMock()
+
+    def fake_select_chain(*args, **kwargs):
+        return mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.side_effect = fake_select_chain
+    mock_supa.table.return_value.select.return_value.eq.return_value = mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.return_value.limit.return_value = mock_supa.table.return_value.select.return_value
+
+    # Track prior state across calls.
+    state = {"prior_breakdown": {"duplicate_url": 10}, "prior_samples": []}
+
+    def fake_execute_select():
+        return MagicMock(data=[{
+            "suppression_breakdown": dict(state["prior_breakdown"]),
+            "suppression_samples": list(state["prior_samples"]),
+        }])
+    mock_supa.table.return_value.select.return_value.execute.side_effect = fake_execute_select
+
+    def fake_update(payload):
+        captured["update"] = payload
+        # Simulate the write landing on the row for the next .select() read.
+        state["prior_breakdown"] = payload["suppression_breakdown"]
+        state["prior_samples"] = payload["suppression_samples"]
+        return mock_supa.table.return_value.update.return_value
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    delivery_counts = {"below_impact_threshold": 22, "product_listing": 5}
+    sample = {"reason": "product_listing", "url": "https://amazon.com/p/1", "title": "Plastic tote"}
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        _update_delivery_summary_counts(
+            surfaced_count=6,
+            delivery_counts=delivery_counts,
+            delivery_samples=[sample],
+        )
+        first_breakdown = dict(captured["update"]["suppression_breakdown"])
+        first_samples = list(captured["update"]["suppression_samples"])
+
+        _update_delivery_summary_counts(
+            surfaced_count=6,
+            delivery_counts=delivery_counts,
+            delivery_samples=[sample],
+        )
+        second_breakdown = dict(captured["update"]["suppression_breakdown"])
+        second_samples = list(captured["update"]["suppression_samples"])
+
+    assert first_breakdown == second_breakdown, \
+        f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
+    assert second_breakdown["below_impact_threshold"] == 22, "must not double"
+    assert second_breakdown["product_listing"] == 5, "must not double"
+    assert second_breakdown["duplicate_url"] == 10, "ingestion-owned key preserved"
+    assert first_samples == second_samples, \
+        f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"
+
+
+def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
+    """Unknown keys in the existing breakdown (e.g., future codes) must be preserved."""
+    from delivery_engine import _update_delivery_summary_counts
+
+    prior = {"some_future_reason": 99, "duplicate_url": 5}
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[{"suppression_breakdown": prior, "suppression_samples": []}]
+    )
+    captured = {}
+    def fake_update(payload):
+        captured["update"] = payload
+        return mock_supa.table.return_value.update.return_value
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        _update_delivery_summary_counts(
+            surfaced_count=1,
+            delivery_counts={"below_impact_threshold": 2},
+            delivery_samples=[],
+        )
+
+    merged = captured["update"]["suppression_breakdown"]
+    assert merged["some_future_reason"] == 99
+    assert merged["duplicate_url"] == 5
+    assert merged["below_impact_threshold"] == 2
