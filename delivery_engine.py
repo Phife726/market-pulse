@@ -872,6 +872,9 @@ def generate_html_email(
 
 def _generate_no_news_email() -> str:
     today_str = datetime.now().strftime("%A, %B %d, %Y")
+    _test_mode = _is_test_mode()
+    title_prefix = "[TEST] " if _test_mode else ""
+    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Americhem Market-Pulse</title></head>
 <body style="margin:0;padding:0;background-color:#F3F4F6;font-family:Arial,sans-serif;">
@@ -881,10 +884,11 @@ def _generate_no_news_email() -> str:
         <tr><td>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td style="background-color:{_BRAND_NAVY};padding:20px 32px 18px;">
-              <p style="margin:0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">Market-Pulse: Daily Intelligence</p>
+              <p style="margin:0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">{title_prefix}Market-Pulse: Daily Intelligence</p>
               <p style="margin:4px 0 0 0;font-size:12px;color:rgba(255,255,255,0.6);font-family:Arial,sans-serif;">{today_str}</p>
             </td></tr>
             <tr><td style="background-color:{_BRAND_GREEN};height:3px;font-size:0;line-height:0;">&nbsp;</td></tr>
+            {test_banner_row}
           </table>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td style="padding:32px;">

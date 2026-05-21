@@ -1735,3 +1735,12 @@ def test_generate_html_email_production_mode_unchanged(monkeypatch):
         html = generate_html_email(data)
     assert "[TEST]" not in html
     assert "TEST RUN" not in html
+
+
+def test_no_news_email_test_mode_marks_header(monkeypatch):
+    """The no-news fallback HTML must carry [TEST] and the TEST RUN banner in test mode."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import _generate_no_news_email
+    html = _generate_no_news_email()
+    assert "[TEST]" in html
+    assert "TEST RUN" in html
