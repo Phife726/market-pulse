@@ -1744,3 +1744,45 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
     html = _generate_no_news_email()
     assert "[TEST]" in html
     assert "TEST RUN" in html
+
+
+def test_config_has_commercial_segments_and_signal_types():
+    """market_pulse_config.yaml must expose the new commercial_segments,
+    signal_types, macro_conditions, executive_bullet_labels, and
+    delivery_suppression blocks with the expected labels."""
+    import yaml
+    with open("market_pulse_config.yaml") as fh:
+        cfg = yaml.safe_load(fh)
+
+    segments = {s["label"] for s in cfg["commercial_segments"].values()}
+    assert segments == {
+        "Healthcare", "Fibers",
+        "Transportation - Automotive", "Transportation - Non-Automotive",
+        "Transportation - Aerospace",
+        "Industrial", "Packaging", "Engineered Resins",
+        "Enterprise / Cross-Segment",
+    }
+
+    signals = {s["label"] for s in cfg["signal_types"].values()}
+    assert signals == {
+        "Competitive", "Customer", "Regulatory", "Sustainability",
+        "Supply Chain", "Technology", "Macro", "Other",
+    }
+
+    assert cfg["macro_conditions"] == [
+        "Competitive Pressure", "Supply Volatility", "Demand Expansion",
+        "Demand Softness", "Regulatory Pressure", "Sustainability Pull",
+        "Commercial Opportunity", "Mixed / Watch", "Low Signal",
+    ]
+
+    assert cfg["executive_bullet_labels"] == [
+        "Market pressure", "Supply chain watch", "Commercial action",
+    ]
+
+    sup = cfg["delivery_suppression"]
+    assert sup["enable_duplicate_headline"] is True
+    assert sup["headline_duplicate_threshold"] == 90
+    assert sup["enterprise_min_impact"] == 7
+    assert "linkedin.com/jobs" in sup["url_patterns_job_posting"]
+    assert "market size" in sup["title_patterns_generic_market_report"]
+    assert "masterbatch" in sup["plastics_relevance_terms"]

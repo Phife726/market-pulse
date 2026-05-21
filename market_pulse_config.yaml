@@ -77,3 +77,199 @@ strategic_segments:
       Relevant to Americhem's business but not clearly segment-specific.
       Use when an article spans multiple segments or addresses general
       plastics compounding industry trends.
+
+commercial_segments:
+  healthcare:
+    label: "Healthcare"
+    description: >
+      Medical devices, pharmaceutical packaging, diagnostics equipment, regulated
+      healthcare polymer applications, biocompatible and sterilizable plastics,
+      clean-room compounding. Includes FDA/EMA regulatory signals specific to
+      medical materials. Do NOT use for general consumer products that merely
+      happen to be plastic.
+
+  fibers:
+    label: "Fibers"
+    description: >
+      Synthetic fibers, textiles, nonwovens, filaments, yarn, performance fabric,
+      carpet fiber, geotextiles. Polyester, nylon, polypropylene, and acrylic fiber
+      chains. Includes fiber-grade resin pricing and end-market apparel/home-textiles
+      demand signals. Route finished consumer textile products to Packaging or
+      Industrial instead.
+
+  transportation_automotive:
+    label: "Transportation - Automotive"
+    description: >
+      Light vehicles (passenger car, SUV, light truck), automotive OEMs, Tier-1
+      and Tier-2 suppliers; interiors, exteriors, under-hood, electrification
+      (EV/HEV), ADAS materials, body panels, lighting, fluid systems. Includes
+      automotive-industry pricing, demand, and regulatory signals. Route heavy
+      trucks/buses to Non-Automotive; route aircraft/space to Aerospace.
+
+  transportation_non_automotive:
+    label: "Transportation - Non-Automotive"
+    description: >
+      Off-highway and heavy vehicles: Class 4-8 trucks, buses, agriculture
+      equipment, construction equipment, rail, marine, recreational vehicles,
+      motorcycles. Excludes passenger cars (-> Automotive) and aerospace
+      (-> Aerospace).
+
+  transportation_aerospace:
+    label: "Transportation - Aerospace"
+    description: >
+      Commercial and defense aerospace (fixed-wing, rotorcraft), space, and
+      advanced air mobility (UAS, UAM, eVTOL). Includes aerospace materials
+      qualification (FAR 25.853 flame, OEM specs) and defense procurement
+      signals. Do NOT use for ground transportation.
+
+  industrial:
+    label: "Industrial"
+    description: >
+      Industrial plastics, durable goods, wire and cable, building products,
+      construction materials, agricultural applications, electrical infrastructure.
+      Includes general industrial demand cycles and construction-driven plastics
+      consumption. Route healthcare devices and automotive end-uses to their own
+      segments.
+
+  packaging:
+    label: "Packaging"
+    description: >
+      Flexible and rigid packaging, consumer-goods packaging, brand-owner demand
+      signals, food contact materials, sustainable packaging trends, packaging
+      legislation, converter and brand-owner sourcing shifts. Route industrial
+      packaging that is structurally part of a durable good to Industrial.
+
+  engineered_resins:
+    label: "Engineered Resins"
+    description: >
+      High-performance compounds and resin platforms where mechanical, thermal,
+      flame, electrical, chemical, or processing performance drives material
+      selection. Use for engineered polymers, custom compounds, material
+      qualification, and resin-technology signals that are NOT clearly tied to
+      one downstream end-market. If the article is clearly about an end-market
+      application (a healthcare device using a custom compound, an automotive
+      interior using PA66), prefer that end-market segment over Engineered Resins.
+
+  enterprise_cross_segment:
+    label: "Enterprise / Cross-Segment"
+    description: >
+      Spans multiple commercial segments or addresses Americhem-wide topics
+      (corporate finance, multi-segment supplier moves, generic industry trends).
+      Use only when no single end-market dominates the article.
+
+signal_types:
+  competitive:
+    label: "Competitive"
+    description: >
+      Direct competitor moves - pricing, capacity, product launches, M&A activity,
+      executive hires, plant openings/closures by named competitors (Avient,
+      Techmer PM, Ampacet, RTP, Penn Color, KRAIBURG, etc.).
+  customer:
+    label: "Customer"
+    description: >
+      Americhem customer or named brand-owner signals - expansions, contractions,
+      sourcing changes, product launches, plant moves. Includes OEM sourcing
+      decisions and downstream brand shifts.
+  regulatory:
+    label: "Regulatory"
+    description: >
+      Government, agency, or standards-body actions affecting chemicals, plastics,
+      packaging, or end-markets. PFAS, EPR, REACH, Prop 65, FDA medical device
+      rules, chemical reporting requirements.
+  sustainability:
+    label: "Sustainability"
+    description: >
+      Recycled-content mandates, circularity initiatives, carbon-reduction targets,
+      EPR programs, ESG commitments by brand owners, sustainability-driven material
+      substitution.
+  supply_chain:
+    label: "Supply Chain"
+    description: >
+      Resin pricing, monomer/feedstock supply, pigment and additive availability,
+      logistics, port/rail disruptions, force majeure events, supplier capacity
+      changes.
+  technology:
+    label: "Technology"
+    description: >
+      New chemistry, processes, manufacturing innovations, materials-science
+      research, novel additive platforms, recycling-technology breakthroughs.
+  macro:
+    label: "Macro"
+    description: >
+      Industry-wide demand or pricing shifts, macroeconomic indicators (GDP,
+      manufacturing PMI, construction starts) that affect plastics consumption.
+  other:
+    label: "Other"
+    description: >
+      Use only when none of the seven categories above clearly fit; prefer a named
+      type whenever possible.
+
+macro_conditions:
+  - Competitive Pressure
+  - Supply Volatility
+  - Demand Expansion
+  - Demand Softness
+  - Regulatory Pressure
+  - Sustainability Pull
+  - Commercial Opportunity
+  - Mixed / Watch
+  - Low Signal
+
+executive_bullet_labels:
+  - Market pressure
+  - Supply chain watch
+  - Commercial action
+
+delivery_suppression:
+  enable_duplicate_headline: true
+  enable_semantic_duplicate_headline: true
+  headline_duplicate_threshold: 90
+  enable_product_listing: true
+  enable_job_posting: true
+  job_posting_override_action: "Escalate to leadership"
+  enable_generic_market_report: true
+  enable_unrelated_color_result: true
+  enable_enterprise_low_impact: true
+  enterprise_min_impact: 7
+  url_patterns_product_listing:
+    - "/product/"
+    - "/shop/"
+    - "/listing/"
+    - "/store/"
+    - "/p/"
+    - "amazon.com"
+    - "ebay.com"
+    - "etsy.com"
+  url_patterns_job_posting:
+    - "/jobs/"
+    - "/careers/"
+    - "/hiring/"
+    - "linkedin.com/jobs"
+    - "indeed.com"
+    - "glassdoor.com"
+  title_patterns_generic_market_report:
+    - "market size"
+    - "market report"
+    - "market forecast"
+    - "market analysis"
+    - "market outlook"
+    - "growth analysis"
+    - "CAGR"
+    - "to reach $"
+  color_terms:
+    - "color"
+    - "colour"
+    - "colors"
+    - "colours"
+  plastics_relevance_terms:
+    - "plastic"
+    - "polymer"
+    - "resin"
+    - "compound"
+    - "masterbatch"
+    - "additive"
+    - "colorant"
+    - "pigment"
+    - "compounding"
+    - "thermoplastic"
+    - "elastomer"
