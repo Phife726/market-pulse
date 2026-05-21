@@ -96,6 +96,129 @@ def _signal_type_of(row: dict) -> str:
     return sig if sig else "Other"
 
 
+# ---------------------------------------------------------------------------
+# Delivery suppression guardrail (Task 9)
+# ---------------------------------------------------------------------------
+
+from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
+
+_DELIVERY_SAMPLES_CAP = 10
+
+
+def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
+    """Case-insensitive substring match: True if any pattern appears in haystack."""
+    h = (haystack or "").lower()
+    return any(p.lower() in h for p in patterns or [])
+
+
+def _contains_any_term(text: str, terms: list[str]) -> bool:
+    """True if any of `terms` appears in `text` (case-insensitive substring)."""
+    t = (text or "").lower()
+    return any(term.lower() in t for term in terms or [])
+
+
+def _apply_delivery_suppression(
+    rows: list[dict],
+    config: dict,
+) -> tuple[list[dict], dict, list[dict]]:
+    """Run the deterministic seven-rule guardrail over fetched rows.
+
+    Returns (kept_rows, counts_by_reason, samples_capped_at_10).
+    First matching rule wins; a row is counted once.
+    """
+    sup_cfg = config.get("delivery_suppression") or {}
+    counts: dict[str, int] = {}
+    samples: list[dict] = []
+    kept: list[dict] = []
+    kept_headlines: list[str] = []
+
+    threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
+    enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
+    override_action = sup_cfg.get("job_posting_override_action", "Escalate to leadership")
+
+    product_patterns   = sup_cfg.get("url_patterns_product_listing", [])
+    job_patterns       = sup_cfg.get("url_patterns_job_posting", [])
+    market_patterns    = sup_cfg.get("title_patterns_generic_market_report", [])
+    color_terms        = sup_cfg.get("color_terms", [])
+    plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
+
+    def _suppress(reason: str, row: dict) -> None:
+        counts[reason] = counts.get(reason, 0) + 1
+        samples.append({
+            "reason": reason,
+            "url": row.get("source_url", ""),
+            "title": row.get("headline", ""),
+        })
+        if len(samples) > _DELIVERY_SAMPLES_CAP:
+            del samples[0]
+
+    for row in rows:
+        url = row.get("source_url", "") or ""
+        headline = row.get("headline", "") or ""
+        americhem_impact = row.get("americhem_impact", "") or ""
+        entities = row.get("entities_mentioned") or []
+        entities_text = " ".join(str(e) for e in entities)
+        action = row.get("recommended_action", "")
+
+        # Rule 1: Enterprise / Cross-Segment with low impact
+        if sup_cfg.get("enable_enterprise_low_impact", True):
+            segment = _commercial_segment_of(row)
+            score = int(row.get("americhem_impact_score") or 0)
+            if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
+                _suppress("enterprise_cross_segment_low_impact", row)
+                continue
+
+        # Rule 2: Product listing URL
+        if sup_cfg.get("enable_product_listing", True) and _matches_any_pattern(url, product_patterns):
+            _suppress("product_listing", row)
+            continue
+
+        # Rule 3: Job posting URL (unless escalated)
+        if sup_cfg.get("enable_job_posting", True) and _matches_any_pattern(url, job_patterns):
+            if action != override_action:
+                _suppress("job_posting", row)
+                continue
+
+        # Rule 4: Generic market report title with empty entities
+        if sup_cfg.get("enable_generic_market_report", True):
+            if _matches_any_pattern(headline, market_patterns) and not entities:
+                _suppress("generic_market_report", row)
+                continue
+
+        # Rule 5: Unrelated color result
+        if sup_cfg.get("enable_unrelated_color_result", True):
+            if _contains_any_term(headline, color_terms):
+                # Check headline and entities only — not americhem_impact, which may
+                # contain negating language like "No plastics relevance." that would
+                # cause a false substring match on "plastic".
+                relevance_haystack = f"{headline} {entities_text}"
+                if not _contains_any_term(relevance_haystack, plastics_terms):
+                    _suppress("unrelated_color_result", row)
+                    continue
+
+        # Rule 6: Exact duplicate headline (case-insensitive)
+        if sup_cfg.get("enable_duplicate_headline", True):
+            if headline and any(h.lower() == headline.lower() for h in kept_headlines):
+                _suppress("duplicate_headline", row)
+                continue
+
+        # Rule 7: Semantic duplicate headline
+        # Lowercase before comparison — rapidfuzz 3.x no longer auto-lowercases,
+        # so case differences in proper nouns would otherwise deflate the score.
+        if sup_cfg.get("enable_semantic_duplicate_headline", True) and kept_headlines and headline:
+            hl_lower = headline.lower()
+            scores = [_token_sort_ratio(hl_lower, h.lower()) for h in kept_headlines]
+            if scores and max(scores) >= threshold:
+                _suppress("semantic_duplicate_headline", row)
+                continue
+
+        kept.append(row)
+        if headline:
+            kept_headlines.append(headline)
+
+    return kept, counts, samples
+
+
 def _config_int(cfg: dict, key: str, default: int) -> int:
     """Read an int from a config sub-dict, coercing strings and warning on bad values."""
     try:

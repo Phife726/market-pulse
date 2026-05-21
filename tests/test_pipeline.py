@@ -2097,3 +2097,183 @@ def test_run_mode_helper(monkeypatch):
     assert _run_mode() == "production"
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     assert _run_mode() == "production"
+
+
+# ===========================================================================
+# Task 9 — _apply_delivery_suppression()
+# ===========================================================================
+
+def _supp_config(**overrides) -> dict:
+    """Default delivery_suppression config for tests; overrides applied on top."""
+    base = {
+        "enable_duplicate_headline": True,
+        "enable_semantic_duplicate_headline": True,
+        "headline_duplicate_threshold": 90,
+        "enable_product_listing": True,
+        "enable_job_posting": True,
+        "job_posting_override_action": "Escalate to leadership",
+        "enable_generic_market_report": True,
+        "enable_unrelated_color_result": True,
+        "enable_enterprise_low_impact": True,
+        "enterprise_min_impact": 7,
+        "url_patterns_product_listing": ["/product/", "amazon.com"],
+        "url_patterns_job_posting": ["linkedin.com/jobs", "/careers/"],
+        "title_patterns_generic_market_report": ["market size", "market report"],
+        "color_terms": ["color", "colour"],
+        "plastics_relevance_terms": ["plastic", "polymer", "masterbatch", "colorant"],
+    }
+    base.update(overrides)
+    return {"delivery_suppression": base}
+
+
+def _row(**overrides) -> dict:
+    base = {
+        "url_hash": overrides.get("url_hash", "abc"),
+        "source_url": "https://example.com/article",
+        "headline": "Default Headline",
+        "americhem_impact": "Effect.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Neutral",
+        "commercial_segment": "Healthcare",
+        "signal_type": "Customer",
+        "entities_mentioned": ["Acme"],
+        "recommended_action": "Monitor",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_apply_delivery_suppression_drops_enterprise_low_impact():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=5)]
+    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"enterprise_cross_segment_low_impact": 1}
+    assert samples[0]["reason"] == "enterprise_cross_segment_low_impact"
+
+
+def test_apply_delivery_suppression_keeps_enterprise_high_impact():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=8)]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert counts == {}
+
+
+def test_apply_delivery_suppression_drops_product_listing():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(source_url="https://example.com/product/widget")]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"product_listing": 1}
+
+
+def test_apply_delivery_suppression_drops_job_posting():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(source_url="https://www.linkedin.com/jobs/12345")]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"job_posting": 1}
+
+
+def test_apply_delivery_suppression_job_posting_escalate_override():
+    """A job-posting URL with recommended_action='Escalate to leadership' is kept."""
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(source_url="https://www.linkedin.com/jobs/ceo-move",
+                 recommended_action="Escalate to leadership")]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert counts == {}
+
+
+def test_apply_delivery_suppression_drops_generic_market_report_no_entities():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(headline="Global Polypropylene Market Size 2026-2032",
+                 entities_mentioned=[])]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"generic_market_report": 1}
+
+
+def test_apply_delivery_suppression_keeps_generic_market_report_with_entities():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(headline="Global Polypropylene Market 2026 Report",
+                 entities_mentioned=["Avient"])]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert counts == {}
+
+
+def test_apply_delivery_suppression_drops_unrelated_color_result():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(headline="What extension cord colors mean",
+                 americhem_impact="No plastics relevance.",
+                 entities_mentioned=["DIY Network"])]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"unrelated_color_result": 1}
+
+
+def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(headline="New masterbatch colors for automotive interiors",
+                 americhem_impact="Drives masterbatch demand.",
+                 entities_mentioned=["BASF"])]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert counts == {}
+
+
+def test_apply_delivery_suppression_drops_exact_duplicate_headline():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(url_hash="a", headline="Plant fire halts production"),
+            _row(url_hash="b", headline="Plant fire halts production")]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert kept[0]["url_hash"] == "a"
+    assert counts == {"duplicate_headline": 1}
+
+
+def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [
+        _row(url_hash="a", headline="Plant fire halts production at BASF site"),
+        _row(url_hash="b", headline="BASF plant fire halts production at site"),
+    ]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+    assert counts == {"semantic_duplicate_headline": 1}
+
+
+def test_apply_delivery_suppression_first_match_wins():
+    """A row matching both product_listing and generic_market_report is counted once,
+    under product_listing (which is checked first in the rule order)."""
+    from delivery_engine import _apply_delivery_suppression
+    rows = [_row(source_url="https://amazon.com/product/123",
+                 headline="Plastic Market Report 2026",
+                 entities_mentioned=[])]
+    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts == {"product_listing": 1}  # NOT generic_market_report
+
+
+def test_apply_delivery_suppression_disabled_rule_allows_through():
+    from delivery_engine import _apply_delivery_suppression
+    cfg = _supp_config(enable_product_listing=False)
+    rows = [_row(source_url="https://example.com/product/widget")]
+    kept, counts, _ = _apply_delivery_suppression(rows, cfg)
+    assert len(kept) == 1
+    assert counts == {}
+
+
+def test_apply_delivery_suppression_samples_capped_at_10():
+    from delivery_engine import _apply_delivery_suppression
+    rows = [
+        _row(url_hash=f"h{i}", source_url=f"https://amazon.com/product/{i}",
+             headline=f"Product {i}")
+        for i in range(15)
+    ]
+    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert counts["product_listing"] == 15
+    assert len(samples) == 10
