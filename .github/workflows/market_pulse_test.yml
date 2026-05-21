@@ -74,7 +74,7 @@ jobs:
           SERPER_API_KEY: test_serper_key
           SMTP_PASS: test_resend_key
           SENDER_EMAIL: test@example.com
-          RECIPIENT_EMAILS: jphifer@americhem.com
+          RECIPIENT_EMAILS: recipient@example.com
         run: python -m pytest tests/test_pipeline.py
 
       - name: Run ingestion_engine.py
