@@ -2638,3 +2638,112 @@ def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
     # The literal string 'None' must not appear anywhere as a rendered value.
     assert ">None<" not in html
     assert "Dominant condition: None" not in html
+
+
+# ===========================================================================
+# Task 14 — QA suppression-summary section
+# ===========================================================================
+
+def test_qa_debug_section_appears_in_test_mode(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
+             "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+             "signal_type": "Customer", "headline": "Some Distinct QA Headline",
+             "americhem_impact": ".", "source_url": "https://x/a",
+             "entities_mentioned": ["Acme"]}]
+    macro = {
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action",  "body": "C."},
+        ],
+        "dominant_condition": "Competitive Pressure",
+        "screened_count": 87,
+        "surfaced_count": 1,
+        "suppression_breakdown": {
+            "duplicate_url": 23,
+            "llm_discard": 12,
+            "product_listing": 5,
+            "job_posting": 3,
+        },
+        "suppression_samples": [
+            {"reason": "product_listing", "url": "https://amazon.com/product/1",
+             "title": "Pretty plastic tote"},
+            {"reason": "llm_discard", "url": "https://news.com/extension-cord",
+             "title": "Best extension cord colors"},
+        ],
+    }
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(rows, macro_summary=macro)
+
+    assert "QA" in html
+    assert "Suppression Summary" in html
+    # Friendly labels expected (Task 14 spec uses friendly forms in the email).
+    assert "duplicate URL" in html
+    assert "product listing" in html
+    assert "Pretty plastic tote" in html
+    assert "Best extension cord colors" in html
+
+
+def test_qa_debug_section_absent_in_production(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
+             "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+             "signal_type": "Customer", "headline": "Production Distinct Headline",
+             "americhem_impact": ".", "source_url": "https://x/a",
+             "entities_mentioned": ["Acme"]}]
+    macro = {
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action",  "body": "C."},
+        ],
+        "dominant_condition": "Competitive Pressure",
+        "screened_count": 87,
+        "surfaced_count": 1,
+        "suppression_breakdown": {"duplicate_url": 23, "product_listing": 5},
+        "suppression_samples": [{"reason": "product_listing",
+                                 "url": "https://amazon.com/product/1",
+                                 "title": "Pretty plastic tote"}],
+    }
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(rows, macro_summary=macro)
+
+    assert "Suppression Summary" not in html
+    assert "Pretty plastic tote" not in html
+
+
+def test_render_qa_debug_section_uses_friendly_labels():
+    from delivery_engine import _render_qa_debug_section
+    macro = {
+        "screened_count": 87,
+        "surfaced_count": 6,
+        "suppression_breakdown": {
+            "duplicate_url": 23,
+            "semantic_duplicate": 4,
+            "llm_discard": 12,
+            "enterprise_cross_segment_low_impact": 3,
+        },
+        "suppression_samples": [
+            {"reason": "duplicate_url", "url": "https://x/1", "title": "Dup"},
+        ],
+    }
+    html = _render_qa_debug_section(macro)
+    assert "duplicate URL" in html
+    assert "semantic duplicate" in html
+    assert "LLM discard" in html
+    assert "Enterprise / Cross-Segment" in html

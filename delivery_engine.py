@@ -389,6 +389,123 @@ def _is_test_mode() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# QA suppression-summary (test-mode only)
+# ---------------------------------------------------------------------------
+
+_QA_REASON_LABELS: dict[str, str] = {
+    "duplicate_url":                       "duplicate URL",
+    "semantic_duplicate":                  "semantic duplicate",
+    "llm_discard":                         "LLM discard",
+    "scrape_failed":                       "scrape failed",
+    "below_impact_threshold":              "below impact threshold",
+    "weak_relevance":                      "weak relevance (4-5, ungrouped)",
+    "duplicate_headline":                  "duplicate headline",
+    "semantic_duplicate_headline":         "semantic duplicate headline",
+    "product_listing":                     "product listing",
+    "job_posting":                         "job posting",
+    "generic_market_report":               "generic market report",
+    "unrelated_color_result":              "unrelated color result",
+    "enterprise_cross_segment_low_impact": "Enterprise / Cross-Segment, low impact",
+}
+
+
+def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
+    """Render the QA suppression summary block. Caller is responsible for gating
+    on test mode; this function does not check MARKET_PULSE_RUN_MODE itself."""
+    if not macro_summary:
+        return ""
+
+    screened = macro_summary.get("screened_count")
+    surfaced = macro_summary.get("surfaced_count")
+    breakdown = macro_summary.get("suppression_breakdown") or {}
+    samples = macro_summary.get("suppression_samples") or []
+
+    suppressed_total = sum(int(v) for v in breakdown.values())
+
+    rows_html = ""
+    # Stable display order: ingestion-side first, then delivery-side.
+    display_order = [
+        "duplicate_url", "semantic_duplicate", "llm_discard", "scrape_failed",
+        "below_impact_threshold", "weak_relevance",
+        "duplicate_headline", "semantic_duplicate_headline",
+        "product_listing", "job_posting", "generic_market_report",
+        "unrelated_color_result", "enterprise_cross_segment_low_impact",
+    ]
+    for code in display_order:
+        if code in breakdown:
+            label = _QA_REASON_LABELS.get(code, code)
+            rows_html += (
+                f'<tr><td style="padding:2px 0;font-size:12px;color:#374151;'
+                f'font-family:Arial,sans-serif;">'
+                f'&nbsp;&nbsp;{label}'
+                f'</td><td align="right" style="padding:2px 0;font-size:12px;'
+                f'color:#374151;font-family:Arial,sans-serif;">{breakdown[code]}</td></tr>'
+            )
+
+    samples_html = ""
+    for s in samples[-10:]:
+        reason_code = s.get("reason", "")
+        reason_label = _QA_REASON_LABELS.get(reason_code, reason_code)
+        title = s.get("title", "")
+        url = s.get("url", "")
+        samples_html += (
+            f'<tr><td style="padding:2px 0;font-size:11px;color:#6B7280;'
+            f'font-family:monospace;">'
+            f'[{reason_label}] "{title}" — {url}'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:#9CA3AF;
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      QA &middot; Suppression Summary
+                    </td>
+                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
+                           font-family:Arial,sans-serif;">
+                  Screened: {screened if screened is not None else '?'} &nbsp;&middot;&nbsp;
+                  Surfaced: {surfaced if surfaced is not None else '?'} &nbsp;&middot;&nbsp;
+                  Suppressed: {suppressed_total}
+                </p>
+                <p style="margin:8px 0 4px 0;font-size:11px;color:#6B7280;
+                           font-family:Arial,sans-serif;text-transform:uppercase;
+                           letter-spacing:1px;">
+                  By reason
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {rows_html}
+                </table>
+                <p style="margin:12px 0 4px 0;font-size:11px;color:#6B7280;
+                           font-family:Arial,sans-serif;text-transform:uppercase;
+                           letter-spacing:1px;">
+                  Last 10 suppressed items
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {samples_html}
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+
+# ---------------------------------------------------------------------------
 # Email delivery retry constants
 # ---------------------------------------------------------------------------
 
@@ -1182,8 +1299,7 @@ def generate_html_email(
     title_prefix = "[TEST] " if _test_mode else ""
     test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
 
-    # QA debug section is added in Task 14. Until then keep it empty.
-    qa_html = ""
+    qa_html = _render_qa_debug_section(macro_summary) if _test_mode else ""
 
     subtitle = (
         f"{today_str} &nbsp;&middot;&nbsp; "
