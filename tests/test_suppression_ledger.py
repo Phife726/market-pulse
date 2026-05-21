@@ -142,3 +142,92 @@ def test_record_count_accumulates_with_prior_record_calls():
            .record_count("duplicate_headline", 4))
     assert led.breakdown == {"duplicate_headline": 5}
     assert len(led.samples) == 1
+
+
+def test_merge_with_preserves_prior_ingestion_codes_on_delivery_merge():
+    prior = (SuppressionLedger.for_ingestion()
+             .record("duplicate_url", url="u1", title="t1")
+             .record("scrape_failed", url="u2", title="t2"))
+    new = (SuppressionLedger.for_delivery()
+           .record_count("below_impact_threshold", 3))
+    merged = new.merge_with(prior)
+    assert merged.side == "delivery"
+    # Ingestion codes survive untouched
+    assert merged.breakdown["duplicate_url"] == 1
+    assert merged.breakdown["scrape_failed"] == 1
+    # Delivery code is what `new` set it to
+    assert merged.breakdown["below_impact_threshold"] == 3
+
+
+def test_merge_with_overwrites_prior_delivery_codes_on_retry():
+    prior_run = (SuppressionLedger.for_delivery()
+                 .record_count("below_impact_threshold", 99))
+    second_run = (SuppressionLedger.for_delivery()
+                  .record_count("below_impact_threshold", 7))
+    merged = second_run.merge_with(prior_run)
+    # Second run overwrites — not 99 + 7
+    assert merged.breakdown["below_impact_threshold"] == 7
+
+
+def test_merge_with_preserves_unknown_future_codes_from_prior():
+    # Simulate a prior row that has a code the ledger doesn't know yet
+    prior = SuppressionLedger(
+        side="ingestion",
+        breakdown={"some_future_code": 5},
+        samples=(),
+    )
+    new = SuppressionLedger.for_delivery().record_count("weak_relevance", 2)
+    merged = new.merge_with(prior)
+    assert merged.breakdown["some_future_code"] == 5
+    assert merged.breakdown["weak_relevance"] == 2
+
+
+def test_merge_with_samples_dedupes_across_runs():
+    prior = (SuppressionLedger.for_ingestion()
+             .record("duplicate_url", url="u1", title="t1"))
+    new = (SuppressionLedger.for_delivery()
+           .record("duplicate_headline", url="u2", title="t2"))
+    # Same sample exists in prior; new run records it again on the delivery side
+    # (simulating an item that triggered both ingestion-side dedupe and
+    # delivery-side dedupe across retries)
+    new_with_dupe = new.record("duplicate_headline", url="u2", title="t2")
+    merged = new_with_dupe.merge_with(prior)
+    # Each unique (reason, url, title) appears exactly once
+    sample_keys = [(s.reason, s.url, s.title) for s in merged.samples]
+    assert len(sample_keys) == len(set(sample_keys))
+    assert ("duplicate_url", "u1", "t1") in sample_keys
+    assert ("duplicate_headline", "u2", "t2") in sample_keys
+
+
+def test_merge_with_caps_samples_at_ten_after_merge():
+    prior = SuppressionLedger.for_ingestion()
+    for i in range(8):
+        prior = prior.record("duplicate_url", url=f"u{i}", title=f"t{i}")
+    new = SuppressionLedger.for_delivery()
+    for i in range(8):
+        new = new.record("duplicate_headline", url=f"d{i}", title=f"dt{i}")
+    merged = new.merge_with(prior)
+    assert len(merged.samples) == 10
+
+
+def test_merge_with_on_ingestion_ledger_raises():
+    prior = SuppressionLedger.for_delivery()
+    ingestion_ledger = SuppressionLedger.for_ingestion()
+    with pytest.raises(RuntimeError, match="merge_with is delivery-only"):
+        ingestion_ledger.merge_with(prior)
+
+
+def test_idempotent_same_day_delivery_retry():
+    """The load-bearing invariant: running merge twice with the same input
+    produces the same output as running it once."""
+    prior = (SuppressionLedger.for_ingestion()
+             .record("duplicate_url", url="u1", title="t1")
+             .record("scrape_failed", url="u2", title="t2"))
+    new = (SuppressionLedger.for_delivery()
+           .record("duplicate_headline", url="u3", title="t3")
+           .record_count("below_impact_threshold", 5))
+    once = new.merge_with(prior)
+    twice = new.merge_with(once)  # Simulating a retry where prior == once
+    assert once.breakdown == twice.breakdown
+    assert {(s.reason, s.url, s.title) for s in once.samples} == \
+           {(s.reason, s.url, s.title) for s in twice.samples}

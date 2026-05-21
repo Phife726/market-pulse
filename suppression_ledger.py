@@ -110,3 +110,43 @@ class SuppressionLedger:
         new_breakdown = dict(self.breakdown)
         new_breakdown[reason] = new_breakdown.get(reason, 0) + n
         return SuppressionLedger(side=self.side, breakdown=new_breakdown, samples=self.samples)
+
+    def merge_with(self, prior: "SuppressionLedger") -> "SuppressionLedger":
+        """Combine this delivery run with the `prior` persisted state for
+        same-day-retry idempotency.
+
+        - Ingestion-owned codes: taken from `prior` (delivery never touches them).
+        - Delivery-owned codes:  taken from `self` (overwrite, do not sum).
+        - Unknown future codes:  taken from `prior` (forward-compat).
+        - Samples: prior + self, deduped by (reason, url, title), FIFO-capped.
+
+        Only callable on a delivery ledger; raises RuntimeError otherwise."""
+        if self.side != "delivery":
+            raise RuntimeError("merge_with is delivery-only")
+
+        merged_breakdown: dict[str, int] = {}
+        # 1. Start with prior, dropping delivery-owned codes (we'll overwrite).
+        for code, count in prior.breakdown.items():
+            if code not in DELIVERY_CODES:
+                merged_breakdown[code] = count
+        # 2. Overlay self's delivery-owned counts.
+        for code, count in self.breakdown.items():
+            merged_breakdown[code] = count
+
+        # Samples: prior-first ordering, dedupe by (reason, url, title), cap.
+        seen: set[tuple[str, str, str]] = set()
+        merged_samples: list[SuppressionSample] = []
+        for s in tuple(prior.samples) + tuple(self.samples):
+            key = (s.reason, s.url, s.title)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged_samples.append(s)
+        if len(merged_samples) > SAMPLES_CAP:
+            merged_samples = merged_samples[-SAMPLES_CAP:]
+
+        return SuppressionLedger(
+            side="delivery",
+            breakdown=merged_breakdown,
+            samples=tuple(merged_samples),
+        )
