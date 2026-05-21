@@ -24,8 +24,21 @@ logger = logging.getLogger(__name__)
 _BRAND_NAVY       = "#1B3A6B"
 _BRAND_NAVY_DARK  = "#152E56"
 _BRAND_GREEN      = "#7FB069"
+_BRAND_AMBER      = "#D97706"
 _LOGO_URL = (
     "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
+)
+
+# ---------------------------------------------------------------------------
+# Test-mode banner row (inserted into the email HTML when MARKET_PULSE_RUN_MODE=test)
+# ---------------------------------------------------------------------------
+
+_TEST_BANNER_ROW = (
+    f'<tr><td style="background-color:{_BRAND_AMBER};padding:8px 32px;font-size:11px;'
+    f'font-weight:700;letter-spacing:1.5px;color:#ffffff;'
+    f'font-family:Arial,sans-serif;text-transform:uppercase;">'
+    f'TEST RUN · Jason-only QA output — not for distribution'
+    f'</td></tr>'
 )
 
 # ---------------------------------------------------------------------------
@@ -63,6 +76,15 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning("Invalid config value for reporting.%s; using %d", key, default)
         return default
+
+
+# ---------------------------------------------------------------------------
+# Run-mode detection
+# ---------------------------------------------------------------------------
+
+def _is_test_mode() -> bool:
+    """Return True when MARKET_PULSE_RUN_MODE env var is set to 'test' (case-insensitive)."""
+    return os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +783,10 @@ def generate_html_email(
             f'{sentiment}</span>'
         )
 
+    _test_mode = _is_test_mode()
+    title_prefix = "[TEST] " if _test_mode else ""
+    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -792,13 +818,14 @@ def generate_html_email(
                     </td>
                     <td>
                       <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;color:{_BRAND_GREEN};font-family:Arial,sans-serif;text-transform:uppercase;">Market Intelligence</p>
-                      <p style="margin:2px 0 0 0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;line-height:1.2;">Market-Pulse: Daily Intelligence</p>
+                      <p style="margin:2px 0 0 0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;line-height:1.2;">{title_prefix}Market-Pulse: Daily Intelligence</p>
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
             <tr><td style="background-color:{_BRAND_GREEN};height:3px;font-size:0;line-height:0;">&nbsp;</td></tr>
+            {test_banner_row}
             <tr>
               <td style="background-color:{_BRAND_NAVY_DARK};padding:10px 32px;">
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -845,6 +872,9 @@ def generate_html_email(
 
 def _generate_no_news_email() -> str:
     today_str = datetime.now().strftime("%A, %B %d, %Y")
+    _test_mode = _is_test_mode()
+    title_prefix = "[TEST] " if _test_mode else ""
+    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Americhem Market-Pulse</title></head>
 <body style="margin:0;padding:0;background-color:#F3F4F6;font-family:Arial,sans-serif;">
@@ -854,10 +884,11 @@ def _generate_no_news_email() -> str:
         <tr><td>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td style="background-color:{_BRAND_NAVY};padding:20px 32px 18px;">
-              <p style="margin:0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">Market-Pulse: Daily Intelligence</p>
+              <p style="margin:0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">{title_prefix}Market-Pulse: Daily Intelligence</p>
               <p style="margin:4px 0 0 0;font-size:12px;color:rgba(255,255,255,0.6);font-family:Arial,sans-serif;">{today_str}</p>
             </td></tr>
             <tr><td style="background-color:{_BRAND_GREEN};height:3px;font-size:0;line-height:0;">&nbsp;</td></tr>
+            {test_banner_row}
           </table>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td style="padding:32px;">
@@ -897,6 +928,8 @@ def send_email(html_content: str) -> None:
         f"Americhem Market-Pulse \u2014 "
         f"{datetime.now().strftime('%B %d, %Y')}"
     )
+    if _is_test_mode():
+        subject = f"[TEST] {subject}"
 
     payload = {
         "from":    sender_email,

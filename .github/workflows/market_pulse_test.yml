@@ -1,0 +1,106 @@
+name: Market Pulse Test Pipeline
+
+run-name: >-
+  Test Pipeline - ingest=${{ github.event.inputs.run_ingestion }} - email=${{ github.event.inputs.send_email }} - ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_ingestion:
+        description: "Run ingestion before delivery? (true writes new rows to Supabase — only set true when you intentionally want to test ingestion)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      send_email:
+        description: "Send test email after generation?"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-pulse-test-pipeline
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  run-market-pulse-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate inputs and required secrets
+        env:
+          TEST_RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          RUN_INGESTION: ${{ github.event.inputs.run_ingestion }}
+          SEND_EMAIL: ${{ github.event.inputs.send_email }}
+        run: |
+          if [ -z "$TEST_RECIPIENT_EMAILS" ]; then
+            echo "::error::TEST_RECIPIENT_EMAILS secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [ "$RUN_INGESTION" = "false" ] && [ "$SEND_EMAIL" = "false" ]; then
+            echo "::error::run_ingestion=false and send_email=false is a no-op. Set at least one to true."
+            exit 1
+          fi
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Run pytest tests/test_pipeline.py
+        env:
+          FIRECRAWL_API_KEY: test_firecrawl_key
+          OPENAI_API_KEY: test_openai_key
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_KEY: test_supabase_key
+          SERPER_API_KEY: test_serper_key
+          SMTP_PASS: test_resend_key
+          SENDER_EMAIL: test@example.com
+          RECIPIENT_EMAILS: recipient@example.com
+        run: python -m pytest tests/test_pipeline.py
+
+      - name: Run ingestion_engine.py
+        if: ${{ github.event.inputs.run_ingestion == 'true' }}
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          MARKET_PULSE_RUN_MODE: test
+        run: python ingestion_engine.py
+
+      - name: Run delivery_engine.py
+        if: ${{ github.event.inputs.send_email == 'true' }}
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          MARKET_PULSE_RUN_MODE: test
+        run: python delivery_engine.py
