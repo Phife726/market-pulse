@@ -2577,3 +2577,64 @@ def test_render_exec_summary_no_summary_returns_empty():
     from delivery_engine import _render_exec_summary
     assert _render_exec_summary(None) == ""
     assert _render_exec_summary({}) == ""
+
+
+# ===========================================================================
+# Task 13 — Null-safe header fallbacks (screened_count, dominant_condition)
+# ===========================================================================
+
+def test_header_falls_back_to_len_data_when_screened_null(monkeypatch):
+    """When screened_count is NULL, header uses len(data)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    rows = [
+        {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": f"Distinct Healthcare News {i}",
+         "americhem_impact": ".", "source_url": f"https://x/{i}",
+         "entities_mentioned": ["Acme"]}
+        for i in range(7)
+    ]
+    macro = {"executive_bullets": [
+        {"label": "Market pressure",    "body": "A."},
+        {"label": "Supply chain watch", "body": "B."},
+        {"label": "Commercial action",  "body": "C."},
+    ], "dominant_condition": "Competitive Pressure",
+       "screened_count": None, "surfaced_count": None}
+
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(rows, macro_summary=macro)
+
+    assert "from 7 screened items" in html
+    assert "from None screened items" not in html
+
+
+def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
+    """When dominant_condition is NULL, the badge clause is omitted (no literal 'None')."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
+             "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+             "signal_type": "Customer", "headline": "Some Distinct Headline",
+             "americhem_impact": ".", "source_url": "https://x/a",
+             "entities_mentioned": ["Acme"]}]
+    macro = {"executive_bullets": None, "executive_summary": "Fallback prose.",
+             "dominant_condition": None, "macro_sentiment": None,
+             "screened_count": 5, "surfaced_count": 1}
+
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(rows, macro_summary=macro)
+
+    # The literal string 'None' must not appear anywhere as a rendered value.
+    assert ">None<" not in html
+    assert "Dominant condition: None" not in html
