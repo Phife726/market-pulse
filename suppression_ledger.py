@@ -150,3 +150,31 @@ class SuppressionLedger:
             breakdown=merged_breakdown,
             samples=tuple(merged_samples),
         )
+
+    def to_row(self) -> dict:
+        """Return the persisted-shape dict ready for daily_summaries upsert.
+        Keys match the column names: 'suppression_breakdown', 'suppression_samples'."""
+        return {
+            "suppression_breakdown": dict(self.breakdown),
+            "suppression_samples": [s.to_dict() for s in self.samples],
+        }
+
+    @classmethod
+    def from_row(cls, side: Side, row: Mapping | None) -> "SuppressionLedger":
+        """Reconstruct a ledger from a daily_summaries row (or None → empty).
+        Tolerates missing keys, non-list samples, and missing sample fields."""
+        if not row:
+            return cls(side=side)
+        breakdown_raw = row.get("suppression_breakdown") or {}
+        samples_raw   = row.get("suppression_samples") or []
+        breakdown = {str(k): int(v) for k, v in dict(breakdown_raw).items()}
+        samples = tuple(
+            SuppressionSample(
+                reason=str(s.get("reason", "")),
+                url=str(s.get("url", "")),
+                title=str(s.get("title", "")),
+            )
+            for s in samples_raw
+            if isinstance(s, dict)
+        )
+        return cls(side=side, breakdown=breakdown, samples=samples)

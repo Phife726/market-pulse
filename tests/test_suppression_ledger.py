@@ -231,3 +231,48 @@ def test_idempotent_same_day_delivery_retry():
     assert once.breakdown == twice.breakdown
     assert {(s.reason, s.url, s.title) for s in once.samples} == \
            {(s.reason, s.url, s.title) for s in twice.samples}
+
+
+def test_to_row_emits_persisted_shape():
+    led = (SuppressionLedger.for_ingestion()
+           .record("duplicate_url", url="https://x/1", title="T1")
+           .record_count("scrape_failed", 3))
+    row = led.to_row()
+    assert row == {
+        "suppression_breakdown": {"duplicate_url": 1, "scrape_failed": 3},
+        "suppression_samples": [
+            {"reason": "duplicate_url", "url": "https://x/1", "title": "T1"},
+        ],
+    }
+
+
+def test_from_row_reconstructs_ledger():
+    row = {
+        "suppression_breakdown": {"duplicate_url": 2, "below_impact_threshold": 5},
+        "suppression_samples": [
+            {"reason": "duplicate_url", "url": "https://x/1", "title": "T1"},
+        ],
+    }
+    led = SuppressionLedger.from_row("ingestion", row)
+    assert led.side == "ingestion"
+    assert led.breakdown == {"duplicate_url": 2, "below_impact_threshold": 5}
+    assert led.samples == (SuppressionSample("duplicate_url", "https://x/1", "T1"),)
+
+
+def test_from_row_handles_none_or_missing_keys():
+    empty = SuppressionLedger.from_row("delivery", None)
+    assert empty.side == "delivery"
+    assert empty.breakdown == {}
+    assert empty.samples == ()
+
+    partial = SuppressionLedger.from_row("delivery", {"suppression_breakdown": {"weak_relevance": 1}})
+    assert partial.breakdown == {"weak_relevance": 1}
+    assert partial.samples == ()
+
+
+def test_to_row_then_from_row_roundtrip():
+    led1 = (SuppressionLedger.for_delivery()
+            .record("duplicate_headline", url="u", title="t")
+            .record_count("below_impact_threshold", 4))
+    led2 = SuppressionLedger.from_row("delivery", led1.to_row())
+    assert led1 == led2
