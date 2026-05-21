@@ -26,6 +26,40 @@ No new modules. No schema changes. No production workflow edits.
 
 ---
 
+## Task 0: Pre-implementation safety checks
+
+Before writing any new code, confirm that the test names and helper aliases referenced in this plan do not collide with anything that already exists in `tests/test_pipeline.py`. Pytest silently overrides earlier function definitions when two tests in the same module share a name, which would mask regressions.
+
+**Files:** none modified.
+
+- [ ] **Step 0.1: Check for duplicate test names**
+
+Run:
+
+```bash
+grep -nE "test_send_email_test_mode_prefixes_subject|test_send_email_production_mode_subject_unchanged|test_send_email_recipient_list_is_only_recipient_emails_env|test_generate_html_email_test_mode_prefixes_header|test_generate_html_email_production_mode_unchanged|test_no_news_email_test_mode_marks_header" tests/test_pipeline.py || echo "OK: no duplicate names"
+```
+
+Expected: `OK: no duplicate names`. If any names already exist, **stop and update the existing test in place** — do not append a duplicate.
+
+- [ ] **Step 0.2: Confirm test helper aliases exist**
+
+Run:
+
+```bash
+grep -nE "^from delivery_engine import send_email as _send_email|^import time as _time|^import requests as _requests|^def _email_env" tests/test_pipeline.py
+```
+
+Expected: matching lines for `_send_email`, `_time`, `_requests`, and `_email_env`. If any are missing or renamed, follow the current convention in the file rather than reintroducing the old names.
+
+- [ ] **Step 0.3: Confirm production workflow is the baseline**
+
+Run: `git diff main -- .github/workflows/market_pulse.yml`
+
+Expected: empty diff. Establish that you are starting from a clean production-workflow state.
+
+---
+
 ## Task 1: Add subject prefix and recipient-isolation guarantees in `send_email()`
 
 This task adds the `_is_test_mode()` helper and modifies `send_email()` to prefix the subject with `[TEST] ` when test mode is active. Includes a guard test that proves the recipient list is sourced exclusively from the `RECIPIENT_EMAILS` env var.
@@ -63,7 +97,7 @@ def test_send_email_test_mode_prefixes_subject(monkeypatch):
 
 - [ ] **Step 1.2: Run the test and verify it fails**
 
-Run: `pytest tests/test_pipeline.py::test_send_email_test_mode_prefixes_subject -v`
+Run: `python -m pytest tests/test_pipeline.py::test_send_email_test_mode_prefixes_subject -v`
 
 Expected: FAIL — assertion `captured["payload"]["subject"].startswith("[TEST] ")` returns False because `send_email()` does not yet check `MARKET_PULSE_RUN_MODE`.
 
@@ -105,7 +139,7 @@ Replace it with:
 
 - [ ] **Step 1.5: Run the test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_send_email_test_mode_prefixes_subject -v`
+Run: `python -m pytest tests/test_pipeline.py::test_send_email_test_mode_prefixes_subject -v`
 
 Expected: PASS.
 
@@ -134,7 +168,7 @@ def test_send_email_production_mode_subject_unchanged(monkeypatch):
 
 - [ ] **Step 1.7: Run the new test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_send_email_production_mode_subject_unchanged -v`
+Run: `python -m pytest tests/test_pipeline.py::test_send_email_production_mode_subject_unchanged -v`
 
 Expected: PASS — production mode has no `[TEST]` prefix.
 
@@ -168,13 +202,13 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
 
 - [ ] **Step 1.9: Run the recipient-isolation test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_send_email_recipient_list_is_only_recipient_emails_env -v`
+Run: `python -m pytest tests/test_pipeline.py::test_send_email_recipient_list_is_only_recipient_emails_env -v`
 
 Expected: PASS — no implementation change needed, this is a guard test that proves the existing behaviour.
 
 - [ ] **Step 1.10: Run the full suite to catch regressions**
 
-Run: `pytest tests/`
+Run: `python -m pytest tests/`
 
 Expected: All tests pass.
 
@@ -221,7 +255,7 @@ def test_generate_html_email_test_mode_prefixes_header(monkeypatch):
 
 - [ ] **Step 2.2: Run the test and verify it fails**
 
-Run: `pytest tests/test_pipeline.py::test_generate_html_email_test_mode_prefixes_header -v`
+Run: `python -m pytest tests/test_pipeline.py::test_generate_html_email_test_mode_prefixes_header -v`
 
 Expected: FAIL — `[TEST]` and `TEST RUN` are not present in the rendered HTML.
 
@@ -275,7 +309,7 @@ Change it to add the banner row immediately after:
 
 - [ ] **Step 2.5: Run the test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_generate_html_email_test_mode_prefixes_header -v`
+Run: `python -m pytest tests/test_pipeline.py::test_generate_html_email_test_mode_prefixes_header -v`
 
 Expected: PASS.
 
@@ -298,13 +332,13 @@ def test_generate_html_email_production_mode_unchanged(monkeypatch):
 
 - [ ] **Step 2.7: Run the test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_generate_html_email_production_mode_unchanged -v`
+Run: `python -m pytest tests/test_pipeline.py::test_generate_html_email_production_mode_unchanged -v`
 
 Expected: PASS — production-mode output is byte-clean of test markers.
 
 - [ ] **Step 2.8: Run the full suite to catch regressions**
 
-Run: `pytest tests/`
+Run: `python -m pytest tests/`
 
 Expected: All tests pass.
 
@@ -345,7 +379,7 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
 
 - [ ] **Step 3.2: Run the test and verify it fails**
 
-Run: `pytest tests/test_pipeline.py::test_no_news_email_test_mode_marks_header -v`
+Run: `python -m pytest tests/test_pipeline.py::test_no_news_email_test_mode_marks_header -v`
 
 Expected: FAIL — the no-news template does not consult `_is_test_mode()`.
 
@@ -394,13 +428,13 @@ def _generate_no_news_email() -> str:
 
 - [ ] **Step 3.4: Run the test and verify it passes**
 
-Run: `pytest tests/test_pipeline.py::test_no_news_email_test_mode_marks_header -v`
+Run: `python -m pytest tests/test_pipeline.py::test_no_news_email_test_mode_marks_header -v`
 
 Expected: PASS.
 
 - [ ] **Step 3.5: Run the full suite to catch regressions**
 
-Run: `pytest tests/`
+Run: `python -m pytest tests/`
 
 Expected: All tests pass.
 
@@ -506,7 +540,7 @@ jobs:
           SMTP_PASS: test_resend_key
           SENDER_EMAIL: test@example.com
           RECIPIENT_EMAILS: jphifer@americhem.com
-        run: pytest tests/test_pipeline.py
+        run: python -m pytest tests/test_pipeline.py
 
       - name: Run ingestion_engine.py
         if: ${{ github.event.inputs.run_ingestion == 'true' }}
@@ -573,7 +607,7 @@ Confirm the full test suite still passes and run the spec's verification checkli
 
 - [ ] **Step 5.1: Run the full pytest suite one last time**
 
-Run: `pytest tests/ -v`
+Run: `python -m pytest tests/ -v`
 
 Expected: all tests pass. Confirm the 6 new tests from this plan appear in the output with PASS status:
 
@@ -592,17 +626,32 @@ Expected: empty diff.
 
 - [ ] **Step 5.3: Inspect the test workflow for the recipient-isolation invariant**
 
-Run: `grep -n "RECIPIENT_EMAILS:" .github/workflows/market_pulse_test.yml`
+Run a direct safety check that fails if the production recipient secret appears anywhere in the test workflow:
 
-Expected output (showing only `TEST_RECIPIENT_EMAILS` or the dummy `jphifer@americhem.com` value, never `${{ secrets.RECIPIENT_EMAILS }}`):
+```bash
+if grep -n "secrets.RECIPIENT_EMAILS" .github/workflows/market_pulse_test.yml; then
+  echo "FAIL: test workflow references the production RECIPIENT_EMAILS secret"
+  exit 1
+else
+  echo "OK: test workflow does not reference secrets.RECIPIENT_EMAILS"
+fi
+```
+
+Expected: `OK: test workflow does not reference secrets.RECIPIENT_EMAILS` and exit code 0.
+
+Then run a confirmatory listing of the RECIPIENT_EMAILS env entries in the test workflow:
+
+```bash
+grep -n "RECIPIENT_EMAILS:" .github/workflows/market_pulse_test.yml
+```
+
+Expected output (showing only `TEST_RECIPIENT_EMAILS` or the dummy `jphifer@americhem.com` placeholder, never `${{ secrets.RECIPIENT_EMAILS }}`):
 
 ```
 <lineno>:          RECIPIENT_EMAILS: jphifer@americhem.com
 <lineno>:          RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
 <lineno>:          RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
 ```
-
-Confirm: no occurrence of `secrets.RECIPIENT_EMAILS` (the production secret) anywhere in this file.
 
 - [ ] **Step 5.4: Print a final summary**
 
