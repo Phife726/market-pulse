@@ -81,3 +81,25 @@ def test_record_unknown_reason_raises_value_error():
     led = SuppressionLedger.for_delivery()
     with pytest.raises(ValueError, match="unknown reason"):
         led.record("totally_made_up_code", url="u", title="t")
+
+
+def test_record_dedupes_identical_sample_but_count_still_grows():
+    led = SuppressionLedger.for_ingestion()
+    led = led.record("duplicate_url", url="https://x/1", title="T1")
+    led = led.record("duplicate_url", url="https://x/1", title="T1")
+    led = led.record("duplicate_url", url="https://x/1", title="T1")
+    assert led.breakdown == {"duplicate_url": 3}
+    # Sample is deduped — only one survives
+    assert len(led.samples) == 1
+
+
+def test_record_caps_samples_at_ten_fifo():
+    led = SuppressionLedger.for_ingestion()
+    for i in range(15):
+        led = led.record("duplicate_url", url=f"https://x/{i}", title=f"T{i}")
+    assert len(led.samples) == 10
+    # Last 10 survived — first 5 evicted
+    assert led.samples[0].url == "https://x/5"
+    assert led.samples[-1].url == "https://x/14"
+    # Count is full 15
+    assert led.breakdown == {"duplicate_url": 15}
