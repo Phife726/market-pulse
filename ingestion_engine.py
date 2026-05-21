@@ -17,6 +17,12 @@ from supabase import create_client, Client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _run_mode() -> str:
+    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
+    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
+
+
 MAX_DAILY_SCRAPES = 150
 OPENAI_MODEL = "gpt-5.4-nano"
 PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
@@ -489,6 +495,16 @@ _VALID_SIGNAL_TYPES: frozenset[str] = frozenset({
     "Supply Chain", "Technology", "Macro", "Other",
 })
 
+_VALID_MACRO_CONDITIONS: frozenset[str] = frozenset({
+    "Competitive Pressure", "Supply Volatility", "Demand Expansion",
+    "Demand Softness", "Regulatory Pressure", "Sustainability Pull",
+    "Commercial Opportunity", "Mixed / Watch", "Low Signal",
+})
+
+_EXEC_BULLET_LABELS: tuple[str, ...] = (
+    "Market pressure", "Supply chain watch", "Commercial action",
+)
+
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
     client = _get_openai()
@@ -605,11 +621,34 @@ def store_insight(payload: dict) -> bool:
         return False
 
 
-def generate_macro_summary(articles: list[dict]) -> bool:
-    """Generate a macro executive summary from today's stored articles.
+def _validate_executive_bullets(raw) -> Optional[list[dict]]:
+    """Return the bullets list if valid; None otherwise (delivery falls back to prose).
 
-    Calls the configured OpenAI model with all article headlines and impacts, then upserts
-    a single row into daily_summaries keyed on today's run_date.
+    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in order,
+    and non-empty string body fields.
+    """
+    if not isinstance(raw, list) or len(raw) != 3:
+        return None
+    cleaned: list[dict] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return None
+        label = item.get("label")
+        body = item.get("body")
+        if label != _EXEC_BULLET_LABELS[i]:
+            return None
+        if not isinstance(body, str) or not body.strip():
+            return None
+        cleaned.append({"label": label, "body": body.strip()})
+    return cleaned
+
+
+def generate_macro_summary(articles: list[dict]) -> bool:
+    """Generate a structured macro summary from today's stored articles.
+
+    Writes dominant_condition (constrained enum) and executive_bullets (3-bullet
+    JSON) to daily_summaries. Also populates legacy executive_summary and
+    macro_sentiment columns for backward compatibility.
     """
     if not articles:
         logger.warning("No articles to summarize — skipping macro summary generation.")
@@ -619,19 +658,36 @@ def generate_macro_summary(articles: list[dict]) -> bool:
 
     article_digest = "\n".join(
         f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
-        f"(Score {a.get('sentiment_score', '')}/10): {a.get('americhem_impact', '')}"
+        f"(Impact {a.get('americhem_impact_score', a.get('sentiment_score', ''))}/10): "
+        f"{a.get('americhem_impact', '')}"
         for a in articles
+    )
+
+    macro_conditions_text = ", ".join(sorted(_VALID_MACRO_CONDITIONS))
+    label_a, label_b, label_c = _EXEC_BULLET_LABELS
+
+    system_prompt = (
+        "You are a senior Americhem commercial intelligence analyst writing the morning brief\n"
+        "for GMMs and Sales leaders. Output ONLY a JSON object with two keys.\n\n"
+        "1. dominant_condition — pick exactly one value from this list that best describes\n"
+        "   today's overall commercial weather across the digest:\n"
+        f"     {macro_conditions_text}\n\n"
+        "2. executive_bullets — exactly three objects, in this order, with these exact labels:\n"
+        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>"}}\n'
+        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>"}}\n'
+        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>"}}\n\n'
+        '   Each body must reference specific named entities or segments from the digest.\n'
+        '   Do NOT hedge ("may", "could", "potentially") without a specific data point.\n'
+        '   Do NOT write generic statements ("monitor closely", "remain vigilant").\n\n'
+        '   Low-signal special case:\n'
+        '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
+        '   literal string "No action required." The other two bullets MUST describe the\n'
+        '   absence of meaningful signal.'
     )
 
     user_prompt = (
         f"Today's market intelligence digest for Americhem ({len(articles)} articles):\n\n"
-        f"{article_digest}\n\n"
-        f"Generate a JSON object with exactly two keys:\n"
-        f"- executive_summary: A 3-sentence macro summary of today's most important market movements "
-        f"and their implications for Americhem's supply chain and commercial position.\n"
-        f"- macro_sentiment: One word or short phrase describing overall market tone "
-        f"(e.g. Stable, Bearish, Volatile, Cautiously Optimistic, Bullish).\n"
-        f"Output ONLY the JSON object."
+        f"{article_digest}\n\nOutput ONLY the JSON object."
     )
 
     try:
@@ -639,7 +695,7 @@ def generate_macro_summary(articles: list[dict]) -> bool:
             model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "You are a senior market intelligence analyst. Output only valid JSON."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
@@ -648,11 +704,29 @@ def generate_macro_summary(articles: list[dict]) -> bool:
         if content is None:
             raise ValueError("OpenAI returned empty content for macro summary")
         parsed = json.loads(content)
-        executive_summary = parsed["executive_summary"]
-        macro_sentiment = parsed["macro_sentiment"]
     except Exception as exc:
         logger.error("Failed to generate macro summary from OpenAI: %s", exc)
         return False
+
+    # Validate dominant_condition.
+    cond_raw = parsed.get("dominant_condition")
+    if cond_raw not in _VALID_MACRO_CONDITIONS:
+        cond = "Low Signal" if len(articles) < 3 else "Mixed / Watch"
+    else:
+        cond = cond_raw
+
+    # Validate executive_bullets.
+    bullets = _validate_executive_bullets(parsed.get("executive_bullets"))
+
+    # Low Signal: force the third bullet body.
+    if bullets is not None and cond == "Low Signal":
+        bullets[2] = {"label": _EXEC_BULLET_LABELS[2], "body": "No action required."}
+
+    # Legacy executive_summary string for backward compat.
+    if bullets is not None:
+        executive_summary = " ".join(f"{b['label']}: {b['body']}" for b in bullets)
+    else:
+        executive_summary = "Macro summary unavailable today."
 
     try:
         from datetime import date
@@ -660,12 +734,15 @@ def generate_macro_summary(articles: list[dict]) -> bool:
         supabase.table("daily_summaries").upsert(
             {
                 "run_date": date.today().isoformat(),
+                "run_mode": _run_mode(),
+                "dominant_condition": cond,
+                "executive_bullets": bullets,
                 "executive_summary": executive_summary,
-                "macro_sentiment": macro_sentiment,
+                "macro_sentiment": cond,
             },
-            on_conflict="run_date",
+            on_conflict="run_date,run_mode",
         ).execute()
-        logger.info("Macro summary upserted — sentiment: %s", macro_sentiment)
+        logger.info("Macro summary upserted — condition: %s", cond)
         return True
     except Exception as exc:
         logger.error("Failed to upsert macro summary to Supabase: %s", exc)

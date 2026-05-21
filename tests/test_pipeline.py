@@ -667,40 +667,6 @@ def test_generate_macro_summary_empty_articles():
     assert result is False
 
 
-def test_generate_macro_summary_success():
-    """Should call OpenAI, parse response, upsert to daily_summaries, return True."""
-    articles = [
-        {
-            "headline": "Polymer prices surge",
-            "category": "markets",
-            "sentiment_score": 2,
-            "americhem_impact": "Cost pressure on compounding margins.",
-        }
-    ]
-
-    mock_completion = MagicMock()
-    mock_completion.choices[0].message.content = json.dumps({
-        "executive_summary": "Polymer prices are surging.",
-        "macro_sentiment": "Bearish",
-    })
-
-    mock_openai = MagicMock()
-    mock_openai.chat.completions.create.return_value = mock_completion
-
-    mock_supabase = MagicMock()
-    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
-
-    with patch("ingestion_engine._get_openai", return_value=mock_openai), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supabase):
-        result = generate_macro_summary(articles)
-
-    assert result is True
-    mock_supabase.table.assert_called_with("daily_summaries")
-    call_kwargs = mock_supabase.table.return_value.upsert.call_args[0][0]
-    assert call_kwargs["executive_summary"] == "Polymer prices are surging."
-    assert call_kwargs["macro_sentiment"] == "Bearish"
-    assert "run_date" in call_kwargs
-
 
 # ---------------------------------------------------------------------------
 # 16. _render_card() — article_summary must not appear in rendered HTML
@@ -1844,3 +1810,126 @@ def test_config_has_commercial_segments_and_signal_types():
     assert "linkedin.com/jobs" in sup["url_patterns_job_posting"]
     assert "market size" in sup["title_patterns_generic_market_report"]
     assert "masterbatch" in sup["plastics_relevance_terms"]
+
+
+# ===========================================================================
+# Task 5 — structured macro summary (dominant_condition + executive_bullets)
+# ===========================================================================
+
+def _make_macro_mock(payload: dict) -> MagicMock:
+    msg = MagicMock(); msg.content = json.dumps(payload)
+    choice = MagicMock(); choice.message = msg
+    completion = MagicMock(); completion.choices = [choice]
+    client = MagicMock(); client.chat.completions.create.return_value = completion
+    return client
+
+
+def _make_articles(n: int) -> list[dict]:
+    return [
+        {"category": "competitors", "headline": f"H{i}",
+         "sentiment_score": 5, "americhem_impact": f"Impact {i}."}
+        for i in range(n)
+    ]
+
+
+def _capture_upsert(mock_supabase) -> dict:
+    """Return the dict that was passed to .upsert()."""
+    return mock_supabase.table.return_value.upsert.call_args[0][0]
+
+
+def test_generate_macro_summary_writes_dominant_condition_when_valid():
+    payload = {
+        "dominant_condition": "Competitive Pressure",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "Body A."},
+            {"label": "Supply chain watch", "body": "Body B."},
+            {"label": "Commercial action",  "body": "Body C."},
+        ],
+    }
+    mock_supa = MagicMock()
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        assert generate_macro_summary(_make_articles(5)) is True
+    row = _capture_upsert(mock_supa)
+    assert row["dominant_condition"] == "Competitive Pressure"
+    assert row["executive_bullets"] == payload["executive_bullets"]
+    # Legacy fields still populated for backward compat:
+    assert row["macro_sentiment"] == "Competitive Pressure"
+    assert row["executive_summary"]  # joined paragraph
+
+
+def test_generate_macro_summary_coerces_invalid_dominant_condition():
+    payload = {
+        "dominant_condition": "NonExistentCondition",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action",  "body": "C."},
+        ],
+    }
+    mock_supa = MagicMock()
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        generate_macro_summary(_make_articles(5))
+    row = _capture_upsert(mock_supa)
+    assert row["dominant_condition"] == "Mixed / Watch"
+
+
+def test_generate_macro_summary_defaults_low_signal_when_few_articles():
+    """When fewer than 3 articles are passed in and the LLM omits a valid condition,
+    default to Low Signal."""
+    payload = {"executive_bullets": [
+        {"label": "Market pressure",    "body": "Quiet day."},
+        {"label": "Supply chain watch", "body": "Quiet day."},
+        {"label": "Commercial action",  "body": "Anything."},
+    ]}
+    mock_supa = MagicMock()
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        generate_macro_summary(_make_articles(2))
+    row = _capture_upsert(mock_supa)
+    assert row["dominant_condition"] == "Low Signal"
+
+
+def test_generate_macro_summary_low_signal_coerces_action_body():
+    payload = {
+        "dominant_condition": "Low Signal",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "Quiet day."},
+            {"label": "Supply chain watch", "body": "Quiet day."},
+            {"label": "Commercial action",  "body": "Sales should call every customer."},
+        ],
+    }
+    mock_supa = MagicMock()
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        generate_macro_summary(_make_articles(2))
+    row = _capture_upsert(mock_supa)
+    assert row["executive_bullets"][2]["body"] == "No action required."
+
+
+@pytest.mark.parametrize("bad_bullets", [
+    None,                                              # missing key
+    [],                                                # wrong count
+    [{"label": "Market pressure", "body": "A."}],      # wrong count
+    [{"label": "X", "body": "A."},                     # wrong labels
+     {"label": "Supply chain watch", "body": "B."},
+     {"label": "Commercial action", "body": "C."}],
+    [{"label": "Market pressure", "body": "A."},       # wrong order
+     {"label": "Commercial action", "body": "B."},
+     {"label": "Supply chain watch", "body": "C."}],
+    [{"body": "A."},                                   # missing label key
+     {"label": "Supply chain watch", "body": "B."},
+     {"label": "Commercial action", "body": "C."}],
+    "not a list",                                      # wrong type
+])
+def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
+    payload = {"dominant_condition": "Mixed / Watch", "executive_bullets": bad_bullets}
+    mock_supa = MagicMock()
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        generate_macro_summary(_make_articles(5))
+    row = _capture_upsert(mock_supa)
+    assert row["executive_bullets"] is None
+    # Legacy executive_summary still populated so delivery has a fallback:
+    assert row["executive_summary"]
