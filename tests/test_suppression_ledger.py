@@ -103,3 +103,42 @@ def test_record_caps_samples_at_ten_fifo():
     assert led.samples[-1].url == "https://x/14"
     # Count is full 15
     assert led.breakdown == {"duplicate_url": 15}
+
+
+def test_record_count_increments_breakdown_only():
+    led = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 7)
+    assert led.breakdown == {"below_impact_threshold": 7}
+    assert led.samples == ()
+
+
+def test_record_count_zero_is_noop():
+    led1 = SuppressionLedger.for_delivery()
+    led2 = led1.record_count("weak_relevance", 0)
+    assert led2 == led1
+    assert led2.breakdown == {}
+
+
+def test_record_count_negative_raises():
+    led = SuppressionLedger.for_delivery()
+    with pytest.raises(ValueError, match="must be non-negative"):
+        led.record_count("weak_relevance", -1)
+
+
+def test_record_count_wrong_side_raises():
+    led = SuppressionLedger.for_ingestion()
+    with pytest.raises(ValueError, match="not owned by ingestion"):
+        led.record_count("below_impact_threshold", 3)
+
+
+def test_record_count_unknown_reason_raises():
+    led = SuppressionLedger.for_delivery()
+    with pytest.raises(ValueError, match="unknown reason"):
+        led.record_count("not_a_thing", 1)
+
+
+def test_record_count_accumulates_with_prior_record_calls():
+    led = (SuppressionLedger.for_delivery()
+           .record("duplicate_headline", url="u", title="t")
+           .record_count("duplicate_headline", 4))
+    assert led.breakdown == {"duplicate_headline": 5}
+    assert len(led.samples) == 1

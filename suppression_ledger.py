@@ -91,3 +91,22 @@ class SuppressionLedger:
         if len(new_samples) > SAMPLES_CAP:
             new_samples = new_samples[-SAMPLES_CAP:]
         return SuppressionLedger(side=self.side, breakdown=new_breakdown, samples=new_samples)
+
+    def record_count(self, reason: str, n: int) -> "SuppressionLedger":
+        """Return a new ledger with `reason` incremented by `n`. No sample appended.
+        n must be >= 0; n == 0 is a no-op. Raises ValueError on negative n,
+        unknown reason, or wrong-side reason."""
+        if n < 0:
+            raise ValueError(f"n must be non-negative, got {n}")
+        if n == 0:
+            return self
+        if reason not in _SIDE_OF:
+            raise ValueError(f"unknown reason: {reason!r}")
+        if _SIDE_OF[reason] != self.side:
+            raise ValueError(
+                f"reason {reason!r} not owned by {self.side} "
+                f"(owned by {_SIDE_OF[reason]})"
+            )
+        new_breakdown = dict(self.breakdown)
+        new_breakdown[reason] = new_breakdown.get(reason, 0) + n
+        return SuppressionLedger(side=self.side, breakdown=new_breakdown, samples=self.samples)
