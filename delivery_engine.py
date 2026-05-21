@@ -11,7 +11,7 @@ import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
-from suppression_ledger import SAMPLES_CAP as _DELIVERY_SAMPLES_CAP, SuppressionLedger, label_for, DELIVERY_CODES
+from suppression_ledger import SuppressionLedger, label_for, DELIVERY_CODES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -591,18 +591,17 @@ def fetch_macro_summary() -> dict | None:
 def _update_delivery_summary_counts(
     *,
     surfaced_count: int,
-    delivery_counts: dict,
-    delivery_samples: list,
+    ledger: SuppressionLedger,
 ) -> None:
-    """Update today's daily_summaries row (filtered by run_mode) with delivery-side stats.
+    """Update today's daily_summaries row with delivery-side surfaced count
+    and merged suppression accounting. Idempotent on same-day retry — the
+    merge semantics live in SuppressionLedger.merge_with().
 
-    Non-critical: failures are logged but do not raise.
-    """
+    Non-critical: failures are logged but do not raise."""
     try:
         from datetime import date as _date
         supabase = _get_supabase()
 
-        # Fetch the existing breakdown/samples so we can merge ours in.
         existing = (
             supabase.table("daily_summaries")
             .select("suppression_breakdown, suppression_samples")
@@ -611,36 +610,13 @@ def _update_delivery_summary_counts(
             .limit(1)
             .execute()
         )
-        rows = existing.data or []
-        prior_breakdown = (rows[0].get("suppression_breakdown") if rows else None) or {}
-        prior_samples   = (rows[0].get("suppression_samples")   if rows else None) or []
-
-        # Start from the prior breakdown but drop delivery-owned keys so this
-        # render can write fresh values for them. Ingestion-owned keys and any
-        # unknown future codes are preserved.
-        merged_breakdown = {
-            k: v for k, v in prior_breakdown.items()
-            if k not in DELIVERY_CODES
-        }
-        for k, v in delivery_counts.items():
-            merged_breakdown[k] = int(v)
-
-        # Dedupe samples by (reason, url, title) before capping so retries don't
-        # produce duplicates of the same suppressed item.
-        seen: set[tuple] = set()
-        deduped_samples: list[dict] = []
-        for sample in list(prior_samples) + list(delivery_samples):
-            key = (sample.get("reason"), sample.get("url"), sample.get("title"))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped_samples.append(sample)
-        merged_samples = deduped_samples[-_DELIVERY_SAMPLES_CAP:]
+        prior_row = (existing.data or [None])[0]
+        prior = SuppressionLedger.from_row("delivery", prior_row)
+        merged = ledger.merge_with(prior)
 
         supabase.table("daily_summaries").update({
             "surfaced_count": surfaced_count,
-            "suppression_breakdown": merged_breakdown,
-            "suppression_samples": merged_samples,
+            **merged.to_row(),
         }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
     except Exception as exc:
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
@@ -974,9 +950,6 @@ def generate_html_email(
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
     kept, delivery_ledger = _apply_delivery_suppression(data, config)
-    # Temporary bridge until Task 4.1 replaces _update_delivery_summary_counts.
-    delivery_sup_counts  = dict(delivery_ledger.breakdown)
-    delivery_sup_samples = [s.to_dict() for s in delivery_ledger.samples]
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]
@@ -1017,14 +990,12 @@ def generate_html_email(
     surfaced_count = sum(len(arts) for arts in groups.values())
 
     # 8. Write delivery-side counts + surfaced_count back to today's row.
+    delivery_ledger = (delivery_ledger
+                       .record_count("below_impact_threshold", below_threshold_count)
+                       .record_count("weak_relevance", weak_relevance_count))
     _update_delivery_summary_counts(
         surfaced_count=surfaced_count,
-        delivery_counts={
-            **delivery_sup_counts,
-            "below_impact_threshold": below_threshold_count,
-            "weak_relevance": weak_relevance_count,
-        },
-        delivery_samples=delivery_sup_samples,
+        ledger=delivery_ledger,
     )
 
     # 9. Thematic synthesis paragraphs (existing helper, now keyed off the new groups).

@@ -2590,6 +2590,7 @@ def test_render_qa_debug_section_uses_friendly_labels():
 def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     """Delivery-owned keys must be REPLACED, not added, on retry. Ingestion-owned
     keys must be preserved unchanged."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     prior = {
@@ -2610,12 +2611,12 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
+    ledger = (SuppressionLedger.for_delivery()
+              .record_count("below_impact_threshold", 5)
+              .record_count("weak_relevance", 2))
+
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts={"below_impact_threshold": 5, "weak_relevance": 2},
-            delivery_samples=[],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
 
     merged = captured["update"]["suppression_breakdown"]
     # Ingestion-owned keys preserved unchanged:
@@ -2627,8 +2628,9 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
 
 
 def test_update_delivery_summary_counts_idempotent_on_retry():
-    """Two consecutive calls with the same delivery_counts must produce the same
+    """Two consecutive calls with the same ledger must produce the same
     final breakdown — no doubling."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     captured = {}
@@ -2659,23 +2661,17 @@ def test_update_delivery_summary_counts_idempotent_on_retry():
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
-    delivery_counts = {"below_impact_threshold": 22, "product_listing": 5}
-    sample = {"reason": "product_listing", "url": "https://amazon.com/p/1", "title": "Plastic tote"}
+    ledger = (SuppressionLedger.for_delivery()
+              .record_count("below_impact_threshold", 22)
+              .record("product_listing", url="https://amazon.com/p/1", title="Plastic tote")
+              .record_count("product_listing", 4))  # total product_listing = 5
 
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts=delivery_counts,
-            delivery_samples=[sample],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
         first_breakdown = dict(captured["update"]["suppression_breakdown"])
         first_samples = list(captured["update"]["suppression_samples"])
 
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts=delivery_counts,
-            delivery_samples=[sample],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
         second_breakdown = dict(captured["update"]["suppression_breakdown"])
         second_samples = list(captured["update"]["suppression_samples"])
 
@@ -2690,6 +2686,7 @@ def test_update_delivery_summary_counts_idempotent_on_retry():
 
 def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
     """Unknown keys in the existing breakdown (e.g., future codes) must be preserved."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     prior = {"some_future_reason": 99, "duplicate_url": 5}
@@ -2704,14 +2701,44 @@ def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
+    ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
+
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=1,
-            delivery_counts={"below_impact_threshold": 2},
-            delivery_samples=[],
-        )
+        _update_delivery_summary_counts(surfaced_count=1, ledger=ledger)
 
     merged = captured["update"]["suppression_breakdown"]
     assert merged["some_future_reason"] == 99
     assert merged["duplicate_url"] == 5
     assert merged["below_impact_threshold"] == 2
+
+
+def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
+    """Running delivery twice in the same day with the same inputs must
+    produce identical persisted breakdown and samples."""
+    from suppression_ledger import SuppressionLedger
+    from delivery_engine import _update_delivery_summary_counts
+
+    captured = []
+    mock_supa = MagicMock()
+    def capture_update(payload):
+        captured.append(payload)
+        m = MagicMock()
+        m.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+        return m
+    mock_supa.table.return_value.update.side_effect = capture_update
+    # First read returns empty prior; second read returns what was just written
+    reads = [MagicMock(data=[]), MagicMock(data=[{"suppression_breakdown": {}, "suppression_samples": []}])]
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.side_effect = reads
+
+    ledger = (SuppressionLedger.for_delivery()
+              .record("duplicate_headline", url="u", title="t")
+              .record_count("below_impact_threshold", 3))
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+
+    assert len(captured) == 2
+    # Second run produces same breakdown + samples as first
+    assert captured[0]["suppression_breakdown"] == captured[1]["suppression_breakdown"]
+    assert captured[0]["suppression_samples"]   == captured[1]["suppression_samples"]
