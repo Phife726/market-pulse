@@ -82,9 +82,14 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
 # Run-mode detection
 # ---------------------------------------------------------------------------
 
+def _run_mode() -> str:
+    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
+    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
+
+
 def _is_test_mode() -> bool:
-    """Return True when MARKET_PULSE_RUN_MODE env var is set to 'test' (case-insensitive)."""
-    return os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test"
+    """Return True when MARKET_PULSE_RUN_MODE=test (case-insensitive)."""
+    return _run_mode() == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +177,12 @@ def fetch_macro_summary() -> dict | None:
         supabase = _get_supabase()
         result = (
             supabase.table("daily_summaries")
-            .select("run_date, executive_summary, macro_sentiment")
+            .select(
+                "run_date, run_mode, executive_summary, macro_sentiment, "
+                "dominant_condition, executive_bullets, screened_count, "
+                "surfaced_count, suppression_breakdown, suppression_samples"
+            )
+            .eq("run_mode", _run_mode())
             .gte("run_date", min_run_date)
             .order("run_date", desc=True)
             .limit(1)

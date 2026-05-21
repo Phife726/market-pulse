@@ -1986,3 +1986,67 @@ def test_record_suppression_caps_samples_at_10_fifo():
     # Most recent 10 (5..14) should be retained.
     assert samples[0]["title"] == "Title 5"
     assert samples[-1]["title"] == "Title 14"
+
+
+# ===========================================================================
+# Task 7 — run-mode isolation in delivery fetch_macro_summary()
+# ===========================================================================
+
+def test_fetch_macro_summary_filters_by_run_mode_production(monkeypatch):
+    """Production delivery must fetch the production row even when a test row exists."""
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    from delivery_engine import fetch_macro_summary
+
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.select.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.eq.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.gte.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.order.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.limit.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.execute.return_value = MagicMock(
+        data=[{"run_date": "2026-05-21", "run_mode": "production",
+               "executive_summary": "Prod summary", "macro_sentiment": "Stable"}]
+    )
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        result = fetch_macro_summary()
+
+    # eq() must have been called with run_mode='production'.
+    eq_calls = mock_supa.table.return_value.eq.call_args_list
+    assert any(c.args == ("run_mode", "production") for c in eq_calls), \
+        f"Expected eq('run_mode', 'production') in {eq_calls}"
+    assert result["executive_summary"] == "Prod summary"
+
+
+def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
+    """Test delivery must fetch the test row."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.select.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.eq.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.gte.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.order.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.limit.return_value = mock_supa.table.return_value
+    mock_supa.table.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        fetch_macro_summary()
+
+    eq_calls = mock_supa.table.return_value.eq.call_args_list
+    assert any(c.args == ("run_mode", "test") for c in eq_calls), \
+        f"Expected eq('run_mode', 'test') in {eq_calls}"
+
+
+def test_run_mode_helper(monkeypatch):
+    """_run_mode() returns 'test' when env=test; 'production' otherwise; case-insensitive."""
+    from delivery_engine import _run_mode
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    assert _run_mode() == "test"
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "TEST")
+    assert _run_mode() == "test"
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "")
+    assert _run_mode() == "production"
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    assert _run_mode() == "production"
