@@ -11,6 +11,8 @@ import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
+from suppression_ledger import SAMPLES_CAP as _DELIVERY_SAMPLES_CAP, SuppressionLedger, label_for
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -248,9 +250,6 @@ def _render_segment_watch_section(
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
 
-_DELIVERY_SAMPLES_CAP = 10
-
-
 def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
     """Case-insensitive substring match: True if any pattern appears in haystack."""
     h = (haystack or "").lower()
@@ -266,15 +265,14 @@ def _contains_any_term(text: str, terms: list[str]) -> bool:
 def _apply_delivery_suppression(
     rows: list[dict],
     config: dict,
-) -> tuple[list[dict], dict, list[dict]]:
+) -> tuple[list[dict], SuppressionLedger]:
     """Run the deterministic seven-rule guardrail over fetched rows.
 
-    Returns (kept_rows, counts_by_reason, samples_capped_at_10).
-    First matching rule wins; a row is counted once.
+    Returns (kept_rows, ledger). First matching rule wins; each suppressed
+    row is counted once and contributes at most one sample (deduped).
     """
     sup_cfg = config.get("delivery_suppression") or {}
-    counts: dict[str, int] = {}
-    samples: list[dict] = []
+    ledger = SuppressionLedger.for_delivery()
     kept: list[dict] = []
     kept_headlines: list[str] = []
 
@@ -287,16 +285,6 @@ def _apply_delivery_suppression(
     market_patterns    = sup_cfg.get("title_patterns_generic_market_report", [])
     color_terms        = sup_cfg.get("color_terms", [])
     plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
-
-    def _suppress(reason: str, row: dict) -> None:
-        counts[reason] = counts.get(reason, 0) + 1
-        samples.append({
-            "reason": reason,
-            "url": row.get("source_url", ""),
-            "title": row.get("headline", ""),
-        })
-        if len(samples) > _DELIVERY_SAMPLES_CAP:
-            del samples[0]
 
     for row in rows:
         url = row.get("source_url", "") or ""
@@ -311,24 +299,28 @@ def _apply_delivery_suppression(
             segment = _commercial_segment_of(row)
             score = int(row.get("americhem_impact_score") or 0)
             if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
-                _suppress("enterprise_cross_segment_low_impact", row)
+                ledger = ledger.record(
+                    "enterprise_cross_segment_low_impact",
+                    url=url,
+                    title=headline,
+                )
                 continue
 
         # Rule 2: Product listing URL
         if sup_cfg.get("enable_product_listing", True) and _matches_any_pattern(url, product_patterns):
-            _suppress("product_listing", row)
+            ledger = ledger.record("product_listing", url=url, title=headline)
             continue
 
         # Rule 3: Job posting URL (unless escalated)
         if sup_cfg.get("enable_job_posting", True) and _matches_any_pattern(url, job_patterns):
             if action != override_action:
-                _suppress("job_posting", row)
+                ledger = ledger.record("job_posting", url=url, title=headline)
                 continue
 
         # Rule 4: Generic market report title with empty entities
         if sup_cfg.get("enable_generic_market_report", True):
             if _matches_any_pattern(headline, market_patterns) and not entities:
-                _suppress("generic_market_report", row)
+                ledger = ledger.record("generic_market_report", url=url, title=headline)
                 continue
 
         # Rule 5: Unrelated color result
@@ -339,13 +331,13 @@ def _apply_delivery_suppression(
                 # cause a false substring match on "plastic".
                 relevance_haystack = f"{headline} {entities_text}"
                 if not _contains_any_term(relevance_haystack, plastics_terms):
-                    _suppress("unrelated_color_result", row)
+                    ledger = ledger.record("unrelated_color_result", url=url, title=headline)
                     continue
 
         # Rule 6: Exact duplicate headline (case-insensitive)
         if sup_cfg.get("enable_duplicate_headline", True):
             if headline and any(h.lower() == headline.lower() for h in kept_headlines):
-                _suppress("duplicate_headline", row)
+                ledger = ledger.record("duplicate_headline", url=url, title=headline)
                 continue
 
         # Rule 7: Semantic duplicate headline
@@ -355,14 +347,14 @@ def _apply_delivery_suppression(
             hl_lower = headline.lower()
             scores = [_token_sort_ratio(hl_lower, h.lower()) for h in kept_headlines]
             if scores and max(scores) >= threshold:
-                _suppress("semantic_duplicate_headline", row)
+                ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
                 continue
 
         kept.append(row)
         if headline:
             kept_headlines.append(headline)
 
-    return kept, counts, samples
+    return kept, ledger
 
 
 def _config_int(cfg: dict, key: str, default: int) -> int:
@@ -1020,7 +1012,10 @@ def generate_html_email(
     max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, delivery_sup_counts, delivery_sup_samples = _apply_delivery_suppression(data, config)
+    kept, delivery_ledger = _apply_delivery_suppression(data, config)
+    # Temporary bridge until Task 4.1 replaces _update_delivery_summary_counts.
+    delivery_sup_counts  = dict(delivery_ledger.breakdown)
+    delivery_sup_samples = [s.to_dict() for s in delivery_ledger.samples]
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]

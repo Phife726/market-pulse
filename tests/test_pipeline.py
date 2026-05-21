@@ -1992,34 +1992,34 @@ def _row(**overrides) -> dict:
 def test_apply_delivery_suppression_drops_enterprise_low_impact():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=5)]
-    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"enterprise_cross_segment_low_impact": 1}
-    assert samples[0]["reason"] == "enterprise_cross_segment_low_impact"
+    assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 1}
+    assert ledger.samples[0].to_dict()["reason"] == "enterprise_cross_segment_low_impact"
 
 
 def test_apply_delivery_suppression_keeps_enterprise_high_impact():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=8)]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_product_listing():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://example.com/product/widget")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"product_listing": 1}
+    assert dict(ledger.breakdown) == {"product_listing": 1}
 
 
 def test_apply_delivery_suppression_drops_job_posting():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/12345")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"job_posting": 1}
+    assert dict(ledger.breakdown) == {"job_posting": 1}
 
 
 def test_apply_delivery_suppression_job_posting_escalate_override():
@@ -2027,27 +2027,27 @@ def test_apply_delivery_suppression_job_posting_escalate_override():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/ceo-move",
                  recommended_action="Escalate to leadership")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_generic_market_report_no_entities():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market Size 2026-2032",
                  entities_mentioned=[])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"generic_market_report": 1}
+    assert dict(ledger.breakdown) == {"generic_market_report": 1}
 
 
 def test_apply_delivery_suppression_keeps_generic_market_report_with_entities():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market 2026 Report",
                  entities_mentioned=["Avient"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_unrelated_color_result():
@@ -2055,9 +2055,9 @@ def test_apply_delivery_suppression_drops_unrelated_color_result():
     rows = [_row(headline="What extension cord colors mean",
                  americhem_impact="No plastics relevance.",
                  entities_mentioned=["DIY Network"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"unrelated_color_result": 1}
+    assert dict(ledger.breakdown) == {"unrelated_color_result": 1}
 
 
 def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
@@ -2065,19 +2065,19 @@ def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
     rows = [_row(headline="New masterbatch colors for automotive interiors",
                  americhem_impact="Drives masterbatch demand.",
                  entities_mentioned=["BASF"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_exact_duplicate_headline():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(url_hash="a", headline="Plant fire halts production"),
             _row(url_hash="b", headline="Plant fire halts production")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
     assert kept[0]["url_hash"] == "a"
-    assert counts == {"duplicate_headline": 1}
+    assert dict(ledger.breakdown) == {"duplicate_headline": 1}
 
 
 def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
@@ -2086,9 +2086,9 @@ def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
         _row(url_hash="a", headline="Plant fire halts production at BASF site"),
         _row(url_hash="b", headline="BASF plant fire halts production at site"),
     ]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {"semantic_duplicate_headline": 1}
+    assert dict(ledger.breakdown) == {"semantic_duplicate_headline": 1}
 
 
 def test_apply_delivery_suppression_first_match_wins():
@@ -2098,18 +2098,18 @@ def test_apply_delivery_suppression_first_match_wins():
     rows = [_row(source_url="https://amazon.com/product/123",
                  headline="Plastic Market Report 2026",
                  entities_mentioned=[])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"product_listing": 1}  # NOT generic_market_report
+    assert dict(ledger.breakdown) == {"product_listing": 1}  # NOT generic_market_report
 
 
 def test_apply_delivery_suppression_disabled_rule_allows_through():
     from delivery_engine import _apply_delivery_suppression
     cfg = _supp_config(enable_product_listing=False)
     rows = [_row(source_url="https://example.com/product/widget")]
-    kept, counts, _ = _apply_delivery_suppression(rows, cfg)
+    kept, ledger = _apply_delivery_suppression(rows, cfg)
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_samples_capped_at_10():
@@ -2119,10 +2119,10 @@ def test_apply_delivery_suppression_samples_capped_at_10():
              headline=f"Product {i}")
         for i in range(15)
     ]
-    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts["product_listing"] == 15
-    assert len(samples) == 10
+    assert ledger.breakdown["product_listing"] == 15
+    assert len(ledger.samples) == 10
 
 
 # ---------------------------------------------------------------------------
