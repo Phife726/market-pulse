@@ -66,6 +66,15 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Run-mode detection
+# ---------------------------------------------------------------------------
+
+def _is_test_mode() -> bool:
+    """Return True when MARKET_PULSE_RUN_MODE env var is set to 'test' (case-insensitive)."""
+    return os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test"
+
+
+# ---------------------------------------------------------------------------
 # Email delivery retry constants
 # ---------------------------------------------------------------------------
 
@@ -897,6 +906,8 @@ def send_email(html_content: str) -> None:
         f"Americhem Market-Pulse \u2014 "
         f"{datetime.now().strftime('%B %d, %Y')}"
     )
+    if _is_test_mode():
+        subject = f"[TEST] {subject}"
 
     payload = {
         "from":    sender_email,

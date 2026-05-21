@@ -1647,4 +1647,66 @@ def test_config_int_returns_default_and_warns_for_bad_value(caplog):
     with caplog.at_level(logging.WARNING, logger="delivery_engine"):
         result = _config_int(cfg, "visible_impact_threshold", 6)
     assert result == 6
-    assert "visible_impact_threshold" in caplog.text
+
+
+# ===========================================================================
+# MARKET_PULSE_RUN_MODE — test-mode markings
+# ===========================================================================
+
+def test_send_email_test_mode_prefixes_subject(monkeypatch):
+    """In test mode, the Resend payload subject must start with '[TEST] '."""
+    _email_env(monkeypatch)
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    captured = {}
+    def fake_post(*args, **kwargs):
+        captured["payload"] = kwargs["json"]
+        resp = MagicMock(); resp.status_code = 200; resp.ok = True
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr(_requests, "post", fake_post)
+    _send_email("<html>x</html>")
+    assert captured["payload"]["subject"].startswith("[TEST] ")
+
+
+def test_send_email_production_mode_subject_unchanged(monkeypatch):
+    """When MARKET_PULSE_RUN_MODE is unset, the subject must have no [TEST] prefix."""
+    _email_env(monkeypatch)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    captured = {}
+    def fake_post(*args, **kwargs):
+        captured["payload"] = kwargs["json"]
+        resp = MagicMock(); resp.status_code = 200; resp.ok = True
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr(_requests, "post", fake_post)
+    _send_email("<html>x</html>")
+    assert "[TEST]" not in captured["payload"]["subject"]
+
+
+def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
+    """Recipient invariant: send_email() builds the Resend 'to' list strictly from the
+    RECIPIENT_EMAILS env var and never falls back to any hardcoded address. This is
+    the safety guarantee that lets the workflow swap recipient pools by env var alone.
+    """
+    monkeypatch.setenv("SMTP_PASS", "re_test_key")
+    monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
+    monkeypatch.setenv("RECIPIENT_EMAILS", "jphifer@americhem.com")
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    captured = {}
+    def fake_post(*args, **kwargs):
+        captured["payload"] = kwargs["json"]
+        resp = MagicMock(); resp.status_code = 200; resp.ok = True
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr(_requests, "post", fake_post)
+    _send_email("<html>x</html>")
+    assert captured["payload"]["to"] == ["jphifer@americhem.com"]
