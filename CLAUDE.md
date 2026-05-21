@@ -26,7 +26,12 @@ pytest tests/
 pytest tests/test_pipeline.py::test_name
 ```
 
-The GitHub Actions workflow (`.github/workflows/market_pulse.yml`) runs ingestion then delivery Monday–Friday at 10:00 UTC. It can also be triggered manually via the Actions tab.
+Two GitHub Actions workflows exist:
+
+- `.github/workflows/market_pulse.yml` — production schedule, runs ingestion then delivery Monday–Friday at 10:00 UTC; also dispatchable manually.
+- `.github/workflows/market_pulse_test.yml` — manually-dispatched sandbox run. Sets `MARKET_PULSE_RUN_MODE=test`, routes mail to the `TEST_RECIPIENT_EMAILS` secret (Jason-only QA pool), and exposes `run_ingestion` / `send_email` input flags so you can re-render against existing rows without re-billing APIs.
+
+`delivery_engine_old.py` is a legacy snapshot — do not edit it; the active delivery code is `delivery_engine.py`.
 
 ## Architecture
 
@@ -38,7 +43,7 @@ The pipeline is two sequential scripts sharing a Supabase database:
 2. Queries Serper.dev for recent article URLs; runs semantic deduplication (`rapidfuzz token_sort_ratio >= 88`) against headlines seen in the last 72 h before scraping
 3. Strips URL query parameters, computes SHA-256 hash → skips if already in DB
 4. Extracts article markdown via Firecrawl; falls back to a direct-HTTP scraper on HTTP 402 (quota exhaustion); skips if below `min_article_length`
-5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON: `headline`, `americhem_impact`, `sentiment_score` (1–10), `source_url`, `entities_mentioned`, `recommended_action`, etc.
+5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON including `headline`, `americhem_impact` (BLUF "so what"), `sentiment_score` (1–10, legacy directional), the relevance-upgrade fields `sentiment_tag` (Negative/Neutral/Positive), `americhem_impact_score` (1–10, **materiality** — independent of tone), `impact_rationale`, `strategic_segment` (one of the labels in `market_pulse_config.yaml`), and `recommended_action`. The model may return `{"americhem_impact": "DISCARD"}` to drop false-positive entity matches.
 6. Upserts row into `daily_intelligence` table (unique constraint on `url_hash`)
 7. After all articles are stored, calls `generate_macro_summary()` — a second OpenAI call that writes `executive_summary` and `macro_sentiment` to the `daily_summaries` table (keyed on `run_date`)
 8. Enforces `MAX_DAILY_SCRAPES = 150` hard cap and `PIPELINE_DEADLINE_SECONDS = 600` wall-clock deadline (keeps runtime inside the GitHub Actions 15-min limit)
@@ -49,20 +54,31 @@ The pipeline is two sequential scripts sharing a Supabase database:
 2. Calls `fetch_macro_summary()` to retrieve the executive summary written by ingestion
 3. Renders a three-zone HTML email and sends via the **Resend HTTP API** (`POST https://api.resend.com/emails`) with exponential-backoff retry (5 attempts; retries on 429, 500, 502, 503, 504). `SMTP_PASS` env var holds the Resend API key (legacy name).
 
-**Email layout — three zones:**
+**Email layout — three zones.** Routing uses `_effective_impact()` (`americhem_impact_score` if present, else `sentiment_score`). New-style rows below `visible_impact_threshold` are excluded entirely — they never fall through to Peripheral.
 
-- **Critical Disruptions** (score 1–3): full article cards
-- **Thematic Intelligence** (score 4–10): categories with 2+ articles get an LLM-generated synthesis paragraph (`synthesize_thematic_paragraphs()`); single high-score articles (7–10) render as bullets without synthesis
-- **Peripheral Signals** (score 4–6, ungrouped singletons): compact bullet list
+- **Critical Disruptions**: legacy rows (no `americhem_impact_score`) with `sentiment_score <= 3`. Full article cards.
+- **Thematic Intelligence**: rows with effective impact `>= visible_impact_threshold` (default 6, see config). Articles are grouped by `strategic_segment` (fallback `category`). Groups with 2+ articles get an LLM-generated synthesis paragraph via `synthesize_thematic_paragraphs()`. Ungrouped impact 7–10 singletons render as bullets without synthesis. Per-segment and total caps from config apply; capped-out articles do **not** leak into Peripheral.
+- **Peripheral Signals**: ungrouped effective-impact 4–6 articles plus legacy below-threshold rows. Compact bullet list.
+
+When `MARKET_PULSE_RUN_MODE=test`, both the subject line and the rendered HTML are marked: `[TEST]` prefix and an amber "TEST RUN · Jason-only QA output" banner row.
 
 **Database** (`schema.sql`) — Two tables: `daily_intelligence` (articles) and `daily_summaries` (one macro summary row per run date). The `todays_intelligence` view adds an `alert_tier` column for ad-hoc queries; the unique index on `url_hash` is the deduplication gate.
 
-**`targets.yaml`** — The only file non-technical editors need to touch. Add/remove entities here; no Python changes required. Top-level keys:
+`migrations/` holds incremental SQL applied via the Supabase SQL editor. `001_add_relevance_fields.sql` adds the relevance-upgrade columns (`sentiment_tag`, `americhem_impact_score`, `impact_rationale`, `strategic_segment`, `include_in_report`); existing DBs must run this before the current code stores rows. A fresh DB can initialize from `schema.sql` alone — it already contains those columns.
+
+**`targets.yaml`** — The first of two non-technical control files. Add/remove entities here; no Python changes required. Top-level keys:
 
 - `discovery.results_per_entity` / `lookback_hours` / `min_article_length` — discovery tuning
 - **Entity-mode groups** (`search_mode: entity`): list entities under `entities:` as `{name, active}`; set `active: false` to pause without deleting
 - **Concept-mode groups** (`search_mode: concept`): set `active: true/false` at the group level; define `include_any` (OR'd terms) and optional `include_all` / `exclude_any`
 - `exclude_any` entries matching Moody's platform identifiers (e.g. `"source set 238658"`, `"PR wires"`) are silently dropped by `build_query()` — only real search terms become `-"term"` operators
+
+**`market_pulse_config.yaml`** — The second control file. Tunes the report and the LLM's segment taxonomy without code changes:
+
+- `reporting.visible_impact_threshold` (default 6) — minimum `americhem_impact_score` for an article to appear as a visible card; raise if the report feels noisy.
+- `reporting.supporting_impact_threshold` (default 4) — rows above this but below the visible threshold can still feed thematic context.
+- `reporting.max_visible_articles_per_segment` (default 3) and `reporting.max_total_visible_articles` (default 12) — prevent any one segment from dominating and cap total card count.
+- `strategic_segments.<key>.label` / `description` — passed verbatim into RULE 4 of the synthesis system prompt via `_build_segment_rule()`. Editing labels/descriptions changes how the LLM classifies articles. Add new segments at the bottom; do **not** reorder keys.
 
 ## Tests
 
@@ -77,6 +93,9 @@ The pipeline is two sequential scripts sharing a Supabase database:
 - `PIPELINE_DEADLINE_SECONDS = 600` — ingestion stops early if the wall clock exceeds 10 min, then flushes stats and calls `generate_macro_summary()` before returning.
 - Monday delivery uses a 72-hour lookback (vs. 24 h on other days) to capture weekend news — this logic lives in `fetch_todays_intelligence()`.
 - `SMTP_PASS` env var holds the **Resend API key** (legacy name retained to avoid secret rotation). Email is sent via `POST https://api.resend.com/emails`, not SMTP.
+- `RECIPIENT_EMAILS` is the **only** source for the Resend `to:` list — there are no hardcoded fallbacks. The production workflow injects the production recipient pool; the test workflow injects `TEST_RECIPIENT_EMAILS` instead. Swapping pools is therefore a workflow-level secret change.
+- Report filtering uses `americhem_impact_score` (materiality), **not** `sentiment_tag` (tone). A Negative-low-impact article is excluded; a Negative-high-impact supply disruption appears prominently. Don't conflate the two.
+- `MARKET_PULSE_RUN_MODE=test` is the single switch that marks both the subject line (`[TEST]`) and the HTML body (amber banner row). The test workflow sets it; production never does.
 
 ## Python Conventions
 
