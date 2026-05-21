@@ -11,7 +11,7 @@ import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
-from suppression_ledger import SAMPLES_CAP as _DELIVERY_SAMPLES_CAP, SuppressionLedger, label_for
+from suppression_ledger import SAMPLES_CAP as _DELIVERY_SAMPLES_CAP, SuppressionLedger, label_for, DELIVERY_CODES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -384,45 +384,6 @@ def _is_test_mode() -> bool:
 # QA suppression-summary (test-mode only)
 # ---------------------------------------------------------------------------
 
-# Ownership of suppression reason codes.
-# Ingestion writes these on the upsert in generate_macro_summary(); delivery
-# must preserve them when updating the row.
-_INGESTION_SUPPRESSION_KEYS: frozenset[str] = frozenset({
-    "duplicate_url",
-    "semantic_duplicate",
-    "llm_discard",
-    "scrape_failed",
-})
-
-# Delivery owns these — they are recomputed on every render and must be
-# OVERWRITTEN on retry, never added to prior values.
-_DELIVERY_SUPPRESSION_KEYS: frozenset[str] = frozenset({
-    "below_impact_threshold",
-    "weak_relevance",
-    "duplicate_headline",
-    "semantic_duplicate_headline",
-    "product_listing",
-    "job_posting",
-    "generic_market_report",
-    "unrelated_color_result",
-    "enterprise_cross_segment_low_impact",
-})
-
-_QA_REASON_LABELS: dict[str, str] = {
-    "duplicate_url":                       "duplicate URL",
-    "semantic_duplicate":                  "semantic duplicate",
-    "llm_discard":                         "LLM discard",
-    "scrape_failed":                       "scrape failed",
-    "below_impact_threshold":              "below impact threshold",
-    "weak_relevance":                      "weak relevance (4-5, ungrouped)",
-    "duplicate_headline":                  "duplicate headline",
-    "semantic_duplicate_headline":         "semantic duplicate headline",
-    "product_listing":                     "product listing",
-    "job_posting":                         "job posting",
-    "generic_market_report":               "generic market report",
-    "unrelated_color_result":              "unrelated color result",
-    "enterprise_cross_segment_low_impact": "Enterprise / Cross-Segment, low impact",
-}
 
 
 def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
@@ -449,7 +410,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     ]
     for code in display_order:
         if code in breakdown:
-            label = _QA_REASON_LABELS.get(code, code)
+            label = label_for(code)
             rows_html += (
                 f'<tr><td style="padding:2px 0;font-size:12px;color:#374151;'
                 f'font-family:Arial,sans-serif;">'
@@ -461,7 +422,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     samples_html = ""
     for s in samples[-10:]:
         reason_code = s.get("reason", "")
-        reason_label = _QA_REASON_LABELS.get(reason_code, reason_code)
+        reason_label = label_for(reason_code)
         title = s.get("title", "")
         url = s.get("url", "")
         samples_html += (
@@ -659,7 +620,7 @@ def _update_delivery_summary_counts(
         # unknown future codes are preserved.
         merged_breakdown = {
             k: v for k, v in prior_breakdown.items()
-            if k not in _DELIVERY_SUPPRESSION_KEYS
+            if k not in DELIVERY_CODES
         }
         for k, v in delivery_counts.items():
             merged_breakdown[k] = int(v)
