@@ -2712,23 +2712,39 @@ def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
     assert merged["below_impact_threshold"] == 2
 
 
-def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
+def test_delivery_suppression_idempotent_on_same_day_retry():
     """Running delivery twice in the same day with the same inputs must
     produce identical persisted breakdown and samples."""
     from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
-    captured = []
+    captured = {}
     mock_supa = MagicMock()
-    def capture_update(payload):
-        captured.append(payload)
-        m = MagicMock()
-        m.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-        return m
-    mock_supa.table.return_value.update.side_effect = capture_update
-    # First read returns empty prior; second read returns what was just written
-    reads = [MagicMock(data=[]), MagicMock(data=[{"suppression_breakdown": {}, "suppression_samples": []}])]
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.side_effect = reads
+
+    def fake_select_chain(*args, **kwargs):
+        return mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.side_effect = fake_select_chain
+    mock_supa.table.return_value.select.return_value.eq.return_value = mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.return_value.limit.return_value = mock_supa.table.return_value.select.return_value
+
+    # Track prior state across calls.
+    state = {"prior_breakdown": {}, "prior_samples": []}
+
+    def fake_execute_select():
+        return MagicMock(data=[{
+            "suppression_breakdown": dict(state["prior_breakdown"]),
+            "suppression_samples": list(state["prior_samples"]),
+        }])
+    mock_supa.table.return_value.select.return_value.execute.side_effect = fake_execute_select
+
+    def fake_update(payload):
+        captured["update"] = payload
+        # Simulate the write landing on the row for the next .select() read.
+        state["prior_breakdown"] = payload["suppression_breakdown"]
+        state["prior_samples"] = payload["suppression_samples"]
+        return mock_supa.table.return_value.update.return_value
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
     ledger = (SuppressionLedger.for_delivery()
               .record("duplicate_headline", url="u", title="t")
@@ -2736,9 +2752,14 @@ def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
 
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
         _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
-        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+        first_breakdown = dict(captured["update"]["suppression_breakdown"])
+        first_samples = list(captured["update"]["suppression_samples"])
 
-    assert len(captured) == 2
-    # Second run produces same breakdown + samples as first
-    assert captured[0]["suppression_breakdown"] == captured[1]["suppression_breakdown"]
-    assert captured[0]["suppression_samples"]   == captured[1]["suppression_samples"]
+        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+        second_breakdown = dict(captured["update"]["suppression_breakdown"])
+        second_samples = list(captured["update"]["suppression_samples"])
+
+    assert first_breakdown == second_breakdown, \
+        f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
+    assert first_samples == second_samples, \
+        f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"
