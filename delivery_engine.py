@@ -24,8 +24,21 @@ logger = logging.getLogger(__name__)
 _BRAND_NAVY       = "#1B3A6B"
 _BRAND_NAVY_DARK  = "#152E56"
 _BRAND_GREEN      = "#7FB069"
+_BRAND_AMBER      = "#D97706"
 _LOGO_URL = (
     "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
+)
+
+# ---------------------------------------------------------------------------
+# Test-mode banner row (inserted into the email HTML when MARKET_PULSE_RUN_MODE=test)
+# ---------------------------------------------------------------------------
+
+_TEST_BANNER_ROW = (
+    f'<tr><td style="background-color:{_BRAND_AMBER};padding:8px 32px;font-size:11px;'
+    f'font-weight:700;letter-spacing:1.5px;color:#ffffff;'
+    f'font-family:Arial,sans-serif;text-transform:uppercase;">'
+    f'TEST RUN · Jason-only QA output — not for distribution'
+    f'</td></tr>'
 )
 
 # ---------------------------------------------------------------------------
@@ -770,15 +783,9 @@ def generate_html_email(
             f'{sentiment}</span>'
         )
 
-    title_prefix = "[TEST] " if _is_test_mode() else ""
-    test_banner_row = (
-        '<tr><td style="background-color:#D97706;padding:8px 32px;font-size:11px;'
-        'font-weight:700;letter-spacing:1.5px;color:#ffffff;'
-        'font-family:Arial,sans-serif;text-transform:uppercase;">'
-        'TEST RUN · Jason-only QA output — not for distribution'
-        '</td></tr>'
-        if _is_test_mode() else ""
-    )
+    _test_mode = _is_test_mode()
+    title_prefix = "[TEST] " if _test_mode else ""
+    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
