@@ -69,6 +69,33 @@ def _effective_impact(row: dict) -> int:
     return int(row.get("sentiment_score") or 5)
 
 
+_LEGACY_STRATEGIC_SEGMENT_MAP: dict[str, str] = {
+    "Healthcare":                    "Healthcare",
+    "Fibers":                        "Fibers",
+    "Packaging":                     "Packaging",
+    "Industrial":                    "Industrial",
+    "Raw Materials / Supply Chain":  "Enterprise / Cross-Segment",
+    "Regulatory / Sustainability":   "Enterprise / Cross-Segment",
+    "Competitive / Customer Signal": "Enterprise / Cross-Segment",
+    "Broader Americhem":             "Enterprise / Cross-Segment",
+}
+
+
+def _commercial_segment_of(row: dict) -> str:
+    """Return commercial_segment if set; else map legacy strategic_segment; else default."""
+    seg = (row.get("commercial_segment") or "").strip()
+    if seg:
+        return seg
+    legacy = (row.get("strategic_segment") or "").strip()
+    return _LEGACY_STRATEGIC_SEGMENT_MAP.get(legacy, "Enterprise / Cross-Segment")
+
+
+def _signal_type_of(row: dict) -> str:
+    """Return signal_type if set on the row; else 'Other'."""
+    sig = (row.get("signal_type") or "").strip()
+    return sig if sig else "Other"
+
+
 def _config_int(cfg: dict, key: str, default: int) -> int:
     """Read an int from a config sub-dict, coercing strings and warning on bad values."""
     try:

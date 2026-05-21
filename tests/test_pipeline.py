@@ -1517,6 +1517,53 @@ def test_config_int_coerces_string_to_int():
     assert _config_int(cfg, "visible_impact_threshold", 6) == 8
 
 
+# ---------------------------------------------------------------------------
+# Task 8 — _commercial_segment_of and _signal_type_of helpers
+# ---------------------------------------------------------------------------
+
+def test_commercial_segment_of_prefers_new_field():
+    from delivery_engine import _commercial_segment_of
+    row = {"commercial_segment": "Healthcare", "strategic_segment": "Industrial"}
+    assert _commercial_segment_of(row) == "Healthcare"
+
+
+def test_commercial_segment_of_falls_back_to_strategic_segment():
+    from delivery_engine import _commercial_segment_of
+    cases = {
+        "Healthcare": "Healthcare",
+        "Fibers": "Fibers",
+        "Packaging": "Packaging",
+        "Industrial": "Industrial",
+        "Raw Materials / Supply Chain": "Enterprise / Cross-Segment",
+        "Regulatory / Sustainability": "Enterprise / Cross-Segment",
+        "Competitive / Customer Signal": "Enterprise / Cross-Segment",
+        "Broader Americhem": "Enterprise / Cross-Segment",
+    }
+    for legacy, expected in cases.items():
+        row = {"strategic_segment": legacy}
+        assert _commercial_segment_of(row) == expected, f"{legacy} -> {expected}"
+
+
+def test_commercial_segment_of_handles_null_strategic_segment():
+    from delivery_engine import _commercial_segment_of
+    assert _commercial_segment_of({}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"strategic_segment": None}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"strategic_segment": ""}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"strategic_segment": "UnknownValue"}) == "Enterprise / Cross-Segment"
+
+
+def test_signal_type_of_prefers_new_field():
+    from delivery_engine import _signal_type_of
+    assert _signal_type_of({"signal_type": "Regulatory"}) == "Regulatory"
+
+
+def test_signal_type_of_falls_back_to_other():
+    from delivery_engine import _signal_type_of
+    assert _signal_type_of({}) == "Other"
+    assert _signal_type_of({"signal_type": None}) == "Other"
+    assert _signal_type_of({"signal_type": ""}) == "Other"
+
+
 def test_config_int_returns_default_for_missing_key():
     assert _config_int({}, "visible_impact_threshold", 6) == 6
 
