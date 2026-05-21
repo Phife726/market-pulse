@@ -1710,3 +1710,28 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
     monkeypatch.setattr(_requests, "post", fake_post)
     _send_email("<html>x</html>")
     assert captured["payload"]["to"] == ["jphifer@americhem.com"]
+
+
+def test_generate_html_email_test_mode_prefixes_header(monkeypatch):
+    """In test mode, generate_html_email() must include [TEST] in the title and
+    a visible TEST RUN banner in the rendered HTML."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    data = [_make_new_article("h", 8, headline="Some Headline")]
+    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+        html = generate_html_email(data)
+    assert "[TEST]" in html
+    assert "TEST RUN" in html
+    assert "Jason-only QA output" in html
+
+
+def test_generate_html_email_production_mode_unchanged(monkeypatch):
+    """When MARKET_PULSE_RUN_MODE is unset, the rendered HTML must contain
+    no [TEST] markers or TEST RUN banner."""
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    data = [_make_new_article("h", 8, headline="Some Headline")]
+    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+        html = generate_html_email(data)
+    assert "[TEST]" not in html
+    assert "TEST RUN" not in html

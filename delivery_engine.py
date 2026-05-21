@@ -770,6 +770,16 @@ def generate_html_email(
             f'{sentiment}</span>'
         )
 
+    title_prefix = "[TEST] " if _is_test_mode() else ""
+    test_banner_row = (
+        '<tr><td style="background-color:#D97706;padding:8px 32px;font-size:11px;'
+        'font-weight:700;letter-spacing:1.5px;color:#ffffff;'
+        'font-family:Arial,sans-serif;text-transform:uppercase;">'
+        'TEST RUN · Jason-only QA output — not for distribution'
+        '</td></tr>'
+        if _is_test_mode() else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -801,13 +811,14 @@ def generate_html_email(
                     </td>
                     <td>
                       <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:1.5px;color:{_BRAND_GREEN};font-family:Arial,sans-serif;text-transform:uppercase;">Market Intelligence</p>
-                      <p style="margin:2px 0 0 0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;line-height:1.2;">Market-Pulse: Daily Intelligence</p>
+                      <p style="margin:2px 0 0 0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;line-height:1.2;">{title_prefix}Market-Pulse: Daily Intelligence</p>
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
             <tr><td style="background-color:{_BRAND_GREEN};height:3px;font-size:0;line-height:0;">&nbsp;</td></tr>
+            {test_banner_row}
             <tr>
               <td style="background-color:{_BRAND_NAVY_DARK};padding:10px 32px;">
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
