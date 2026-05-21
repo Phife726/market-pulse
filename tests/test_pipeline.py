@@ -1883,18 +1883,17 @@ def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
 
 def test_record_suppression_caps_samples_at_10_fifo():
     """The suppression samples buffer must cap at 10 items, keeping the most recent."""
-    from ingestion_engine import _record_suppression
+    from suppression_ledger import SuppressionLedger
 
-    counts: dict = {}
-    samples: list = []
+    ledger = SuppressionLedger.for_ingestion()
     for i in range(15):
-        _record_suppression(
-            counts, samples,
-            reason="duplicate_url",
+        ledger = ledger.record(
+            "duplicate_url",
             url=f"https://x.com/{i}",
             title=f"Title {i}",
         )
-    assert counts["duplicate_url"] == 15
+    assert ledger.breakdown["duplicate_url"] == 15
+    samples = [s.to_dict() for s in ledger.samples]
     assert len(samples) == 10
     # Most recent 10 (5..14) should be retained.
     assert samples[0]["title"] == "Title 5"
