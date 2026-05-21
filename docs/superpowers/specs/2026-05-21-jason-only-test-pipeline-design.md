@@ -64,6 +64,14 @@ name: Market Pulse Test Pipeline
 on:
   workflow_dispatch:
     inputs:
+      run_ingestion:
+        description: "Run ingestion before delivery?"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
       send_email:
         description: "Send test email after generation?"
         required: true
@@ -72,6 +80,13 @@ on:
         options:
           - "true"
           - "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: market-pulse-test-pipeline
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -85,6 +100,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate inputs and required secrets
+        env:
+          TEST_RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          RUN_INGESTION: ${{ github.event.inputs.run_ingestion }}
+          SEND_EMAIL: ${{ github.event.inputs.send_email }}
+        run: |
+          if [ -z "$TEST_RECIPIENT_EMAILS" ]; then
+            echo "::error::TEST_RECIPIENT_EMAILS secret is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [ "$RUN_INGESTION" = "false" ] && [ "$SEND_EMAIL" = "false" ]; then
+            echo "::error::run_ingestion=false and send_email=false is a no-op. Set at least one to true."
+            exit 1
+          fi
+
       - name: Setup Python 3.10
         uses: actions/setup-python@v5
         with:
@@ -95,17 +125,18 @@ jobs:
 
       - name: Run pytest tests/test_pipeline.py
         env:
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          FIRECRAWL_API_KEY: test_firecrawl_key
+          OPENAI_API_KEY: test_openai_key
+          SUPABASE_URL: https://example.supabase.co
+          SUPABASE_KEY: test_supabase_key
+          SERPER_API_KEY: test_serper_key
+          SMTP_PASS: test_resend_key
+          SENDER_EMAIL: test@example.com
+          RECIPIENT_EMAILS: jphifer@americhem.com
         run: pytest tests/test_pipeline.py
 
       - name: Run ingestion_engine.py
+        if: ${{ github.event.inputs.run_ingestion == 'true' }}
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -133,13 +164,26 @@ jobs:
         run: python delivery_engine.py
 ```
 
+**Input matrix:**
+
+| `run_ingestion` | `send_email` | Behaviour |
+|---|---|---|
+| `true` | `true` | Full pipeline: ingest + deliver test email |
+| `true` | `false` | Ingest only (writes to Supabase, no email) |
+| `false` | `true` | Deliver only (sends test email from existing rows) |
+| `false` | `false` | Rejected by preflight |
+
 **Notable differences from production workflow:**
 
 - Trigger is `workflow_dispatch` only (no `schedule`).
-- One input: `send_email` (boolean choice, default `"true"`).
-- Delivery step has an `if:` guard that skips execution when `send_email == "false"`. Ingestion always runs.
-- `RECIPIENT_EMAILS` env var is populated from `secrets.TEST_RECIPIENT_EMAILS` (a new secret the operator adds).
-- `MARKET_PULSE_RUN_MODE: test` is added to both ingestion and delivery steps.
+- Two boolean choice inputs: `run_ingestion` (default `"true"`) and `send_email` (default `"true"`).
+- A preflight step validates `TEST_RECIPIENT_EMAILS` is set and rejects the no-op combination before any Python runs. Uses `::error::` annotations so GitHub renders the failure as a banner in the Actions UI.
+- Both ingestion and delivery steps have `if:` guards keyed on their respective inputs.
+- `permissions: contents: read` is set at the workflow level — least-privilege baseline; this workflow only reads the repo.
+- `concurrency: group: market-pulse-test-pipeline, cancel-in-progress: false` prevents overlapping test dispatches. Production keeps its own (absent) concurrency setting — no change there. If overlap with production becomes an operational problem later, adding the same concurrency group to the production workflow is the next step (out of scope here).
+- `RECIPIENT_EMAILS` env var is populated from `secrets.TEST_RECIPIENT_EMAILS`.
+- `MARKET_PULSE_RUN_MODE: test` is added to ingestion and delivery steps only — not the pytest step.
+- The pytest step uses **dummy placeholder values** instead of live secrets. The test suite is fully mocked (no external API calls); supplying real secrets there would expose them unnecessarily. The dummy values exist only so `os.environ[...]` reads in module-level code don't raise during import.
 - Drops the legacy `SMTP_SERVER` / `SMTP_PORT` / `SMTP_USER` env vars — delivery uses the Resend HTTP API (only `SMTP_PASS` is read, as the Resend API key under a legacy name). Production keeps them for now; the test workflow starts clean.
 
 ### 2. `delivery_engine.py` — test-mode awareness
@@ -266,6 +310,8 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
 
 The existing test helpers `_make_new_article`, `_email_env`, `_send_email`, `_time`, and `_requests` are reused from earlier sections of `test_pipeline.py`.
 
+**Implementation note:** before adding these tests, inspect the current import aliases at the top of `tests/test_pipeline.py` and adapt to whatever conventions exist now. The snippets above are illustrative — they assume `_send_email`, `_time`, `_requests`, `_email_env` are already imported the way they appear in earlier test sections. If those aliases have been renamed or refactored, follow the current pattern rather than reintroducing stale ones.
+
 ---
 
 ## Out-of-band Operator Step
@@ -283,8 +329,10 @@ This is not a code change. It must happen before the test workflow can be dispat
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Test run ingests articles that production then skips as duplicates within 72h | Medium | Operational: dispatch test runs **after** the day's production send (10:00 UTC). If this becomes painful, add a `run_mode` column to `daily_intelligence` later — out of scope here. |
-| Operator forgets to set `TEST_RECIPIENT_EMAILS` and the test workflow fails noisily | Low | The workflow fails at the delivery step with a clear "RECIPIENT_EMAILS not set" KeyError. No silent fallthrough to the production list, because the secret is referenced by a different name. |
+| Test run ingests articles that production then skips as duplicates within 72h | Medium | Operational: prefer `run_ingestion=false, send_email=true` for delivery/layout QA — that path never writes to Supabase. Dispatch ingestion-running test runs **after** the day's production send (10:00 UTC). If this becomes painful, add a `run_mode` column to `daily_intelligence` later — out of scope here. |
+| Operator forgets to set `TEST_RECIPIENT_EMAILS` | Low | Caught by the preflight step before any Python runs. A `::error::` annotation surfaces in the Actions UI with a pointer to the secret settings. |
+| Operator dispatches with both inputs `false` (no-op) | Low | Caught by the preflight step with a clear annotation. |
+| Two test runs dispatched concurrently against the same Supabase rows | Low | The test workflow's `concurrency` group serialises dispatches. The second dispatch waits for the first to finish rather than running in parallel. |
 | Test mode env var leaks into a production run somehow (e.g., manually re-dispatched production workflow with edited env) | Very low | The production workflow file does not set `MARKET_PULSE_RUN_MODE`. A leak would require either repo-level env var configuration or workflow file edits — both visible in PR review. |
 | `[TEST]` prefix breaks email client previews or thread grouping | Low | Bracket prefixes are standard practice and well-supported. The banner provides redundancy if subject is truncated. |
 
@@ -295,6 +343,10 @@ After implementation:
 - [ ] `pytest tests/` passes locally.
 - [ ] Production workflow file diff is empty (no changes).
 - [ ] Test workflow appears in the GitHub Actions sidebar after merge.
-- [ ] Dispatching the test workflow with `send_email=true` results in a single email to `jphifer@americhem.com` with `[TEST]` in the subject and a visible TEST RUN banner.
-- [ ] Dispatching with `send_email=false` runs ingestion only; no email is sent.
+- [ ] Dispatching with `TEST_RECIPIENT_EMAILS` unset fails at the preflight step with the expected annotation.
+- [ ] Dispatching with both `run_ingestion=false` and `send_email=false` fails at the preflight step.
+- [ ] Dispatching with `run_ingestion=true, send_email=true` ingests articles and emails Jason with `[TEST]` in subject and a visible TEST RUN banner.
+- [ ] Dispatching with `run_ingestion=true, send_email=false` ingests articles and produces no email.
+- [ ] Dispatching with `run_ingestion=false, send_email=true` emails Jason from existing rows without re-ingesting (verify by Supabase row count delta = 0).
+- [ ] Two simultaneous dispatches of the test workflow result in the second waiting on the concurrency group rather than running in parallel.
 - [ ] The next scheduled production run produces an email with no `[TEST]` marker and the existing recipient list.
