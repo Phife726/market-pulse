@@ -2277,3 +2277,113 @@ def test_apply_delivery_suppression_samples_capped_at_10():
     assert kept == []
     assert counts["product_listing"] == 15
     assert len(samples) == 10
+
+
+# ---------------------------------------------------------------------------
+# Task 10: _group_by_commercial_segment + _render_segment_watch_section
+# ---------------------------------------------------------------------------
+
+def test_group_by_commercial_segment_keys_off_new_field():
+    from delivery_engine import _group_by_commercial_segment
+    rows = [
+        {"url_hash": "a", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 8, "headline": "A"},
+        {"url_hash": "b", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 7, "headline": "B"},
+        {"url_hash": "c", "commercial_segment": "Packaging",
+         "americhem_impact_score": 6, "headline": "C"},
+    ]
+    groups = _group_by_commercial_segment(rows)
+    assert set(groups.keys()) == {"Healthcare", "Packaging"}
+    assert len(groups["Healthcare"]) == 2
+
+
+def test_group_by_commercial_segment_uses_legacy_fallback():
+    from delivery_engine import _group_by_commercial_segment
+    rows = [
+        {"url_hash": "a", "strategic_segment": "Healthcare",
+         "americhem_impact_score": 8, "headline": "A"},
+        {"url_hash": "b", "strategic_segment": "Competitive / Customer Signal",
+         "americhem_impact_score": 7, "headline": "B"},
+    ]
+    groups = _group_by_commercial_segment(rows)
+    assert "Healthcare" in groups
+    assert "Enterprise / Cross-Segment" in groups
+
+
+def test_render_segment_watch_section_displays_meta_strip_with_signal():
+    from delivery_engine import _render_segment_watch_section
+    groups = {
+        "Healthcare": [{
+            "url_hash": "a",
+            "headline": "Test Card Headline",
+            "source_url": "https://news.com/a",
+            "americhem_impact": "Direct demand effect.",
+            "americhem_impact_score": 8,
+            "sentiment_tag": "Positive",
+            "signal_type": "Customer",
+            "commercial_segment": "Healthcare",
+            "recommended_action": "Monitor",
+        }],
+    }
+    html = _render_segment_watch_section(groups, synthesis={})
+    assert "HEALTHCARE" in html.upper()
+    assert "Test Card Headline" in html
+    assert "Impact: 8/10" in html
+    assert "Positive" in html
+    assert "Signal: Customer" in html
+    assert "Direct demand effect." in html
+
+
+def test_render_segment_watch_section_omits_signal_for_legacy_row():
+    from delivery_engine import _render_segment_watch_section
+    groups = {
+        "Healthcare": [{
+            "url_hash": "a",
+            "headline": "Legacy Row Headline",
+            "source_url": "https://news.com/a",
+            "americhem_impact": "Effect.",
+            "americhem_impact_score": 7,
+            "sentiment_tag": "Neutral",
+            "strategic_segment": "Healthcare",
+            # no signal_type
+        }],
+    }
+    html = _render_segment_watch_section(groups, synthesis={})
+    assert "Impact: 7/10" in html
+    assert "Signal:" not in html
+
+
+def test_render_segment_watch_section_critical_badge_for_legacy_low_score():
+    from delivery_engine import _render_segment_watch_section
+    groups = {
+        "Enterprise / Cross-Segment": [{
+            "url_hash": "a",
+            "headline": "Critical legacy headline",
+            "source_url": "https://news.com/a",
+            "americhem_impact": "Effect.",
+            "sentiment_score": 2,
+            "strategic_segment": "Broader Americhem",
+        }],
+    }
+    html = _render_segment_watch_section(groups, synthesis={})
+    assert "CRITICAL" in html
+
+
+def test_render_segment_watch_section_renders_synthesis_paragraph():
+    from delivery_engine import _render_segment_watch_section
+    groups = {
+        "Packaging": [
+            {"url_hash": "a", "headline": "A", "source_url": "https://x/a",
+             "americhem_impact": "X.", "americhem_impact_score": 7,
+             "sentiment_tag": "Neutral", "signal_type": "Sustainability",
+             "commercial_segment": "Packaging"},
+            {"url_hash": "b", "headline": "B", "source_url": "https://x/b",
+             "americhem_impact": "Y.", "americhem_impact_score": 6,
+             "sentiment_tag": "Neutral", "signal_type": "Sustainability",
+             "commercial_segment": "Packaging"},
+        ]
+    }
+    synth = {"Packaging": "Brand-owners are shifting toward recycled content."}
+    html = _render_segment_watch_section(groups, synth)
+    assert "Brand-owners are shifting toward recycled content." in html

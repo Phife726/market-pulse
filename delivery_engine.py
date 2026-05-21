@@ -97,6 +97,152 @@ def _signal_type_of(row: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Task 10: Commercial segment grouping + new section renderer
+# ---------------------------------------------------------------------------
+
+def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
+    """Bucket items by their resolved commercial segment (new field or legacy fallback)."""
+    from collections import defaultdict
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        buckets[_commercial_segment_of(item)].append(item)
+    return dict(buckets)
+
+
+def _render_meta_strip(item: dict) -> str:
+    """Return the inline meta strip HTML span: 'Impact: X/10 · Tag · Signal: Y · [CRITICAL]'."""
+    score = item.get("americhem_impact_score")
+    tag = item.get("sentiment_tag") or ""
+
+    if score is not None and tag:
+        score_html = (
+            f'<span style="color:{_BRAND_NAVY};font-weight:600;">'
+            f'Impact: {int(score)}/10</span>'
+        )
+        tag_color = _SENTIMENT_TAG_COLORS.get(tag, "#6B7280")
+        tag_html = (
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+            f'<span style="color:{tag_color};font-weight:600;">{tag}</span>'
+        )
+        signal = (item.get("signal_type") or "").strip()
+        signal_html = (
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Signal: {signal}</span>'
+            if signal else ""
+        )
+    else:
+        # Legacy row: use sentiment_score for the score display.
+        legacy_score = item.get("sentiment_score") or 5
+        score_word, score_color = _sentiment_word(int(legacy_score))
+        score_html = (
+            f'<span style="color:{score_color};font-weight:600;">{score_word}</span>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Score: {legacy_score}/10</span>'
+        )
+        tag_html = ""
+        signal_html = ""
+
+    # CRITICAL badge for legacy low-sentiment rows.
+    critical_html = ""
+    if score is None:
+        legacy_sentiment = item.get("sentiment_score")
+        if legacy_sentiment is not None and int(legacy_sentiment) <= 3:
+            critical_html = (
+                '<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+                '<span style="color:#DC2626;font-weight:700;">CRITICAL</span>'
+            )
+
+    return f'{score_html}{tag_html}{signal_html}{critical_html}'
+
+
+def _render_segment_watch_section(
+    groups: dict[str, list[dict]],
+    synthesis: dict[str, str],
+) -> str:
+    """Render the Commercial Segment Watch section.
+
+    Each commercial segment becomes its own block. Within a segment, if a synthesis
+    paragraph exists, it appears above the article cards.
+    """
+    if not groups:
+        return ""
+
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: -max(int(a.get("americhem_impact_score") or a.get("sentiment_score") or 0)
+                            for a in kv[1]),
+    )
+
+    blocks_html = ""
+    for segment_label, articles in ordered:
+        para = synthesis.get(segment_label, "")
+        para_html = (
+            f'<p style="margin:0 0 10px 0;font-size:13px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
+            f'{para}</p>'
+        ) if para else ""
+
+        cards_html = ""
+        articles_sorted = sorted(
+            articles,
+            key=lambda x: -int(x.get("americhem_impact_score") or x.get("sentiment_score") or 0),
+        )
+        for art in articles_sorted:
+            meta = _render_meta_strip(art)
+            headline = art.get("headline", "")
+            source_url = art.get("source_url", "#")
+            americhem_impact = art.get("americhem_impact", "")
+            so_what_html = (
+                f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
+                f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+                f'<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
+                if americhem_impact else ""
+            )
+            cards_html += (
+                f'<tr><td style="padding:6px 0 10px 0;">'
+                f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
+                f'font-family:Arial,sans-serif;">{meta}</p>'
+                f'<a href="{source_url}" style="font-size:14px;font-weight:700;'
+                f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
+                f'text-decoration:none;line-height:1.35;">{headline}</a>'
+                f'{so_what_html}'
+                f'</td></tr>'
+            )
+
+        blocks_html += (
+            f'<tr><td style="padding:18px 0 0 0;">'
+            f'<p style="margin:0 0 8px 0;font-size:12px;font-weight:700;'
+            f'letter-spacing:1px;text-transform:uppercase;color:{_BRAND_NAVY};'
+            f'font-family:Arial,sans-serif;">{segment_label}</p>'
+            f'{para_html}'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">{cards_html}</table>'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:{_BRAND_NAVY};
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      COMMERCIAL SEGMENT WATCH
+                    </td>
+                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {blocks_html}
+          </table>
+        </td>
+      </tr>"""
+
+
+# ---------------------------------------------------------------------------
 # Delivery suppression guardrail (Task 9)
 # ---------------------------------------------------------------------------
 
