@@ -1933,3 +1933,56 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
     assert row["executive_bullets"] is None
     # Legacy executive_summary still populated so delivery has a fallback:
     assert row["executive_summary"]
+
+
+# ===========================================================================
+# Task 6 — ingestion-side suppression accounting
+# ===========================================================================
+
+def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
+    """generate_macro_summary must accept counts and samples and persist them."""
+    counts = {"duplicate_url": 3, "llm_discard": 2}
+    samples = [
+        {"reason": "llm_discard", "url": "https://x.com/1", "title": "Bad article"},
+    ]
+    mock_supa = MagicMock()
+    payload = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action",  "body": "C."},
+        ],
+    }
+    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+        generate_macro_summary(
+            _make_articles(5),
+            screened_count=87,
+            suppression_breakdown=counts,
+            suppression_samples=samples,
+        )
+    row = _capture_upsert(mock_supa)
+    assert row["screened_count"] == 87
+    assert row["suppression_breakdown"] == counts
+    assert row["suppression_samples"] == samples
+
+
+def test_record_suppression_caps_samples_at_10_fifo():
+    """The suppression samples buffer must cap at 10 items, keeping the most recent."""
+    from ingestion_engine import _record_suppression
+
+    counts: dict = {}
+    samples: list = []
+    for i in range(15):
+        _record_suppression(
+            counts, samples,
+            reason="duplicate_url",
+            url=f"https://x.com/{i}",
+            title=f"Title {i}",
+        )
+    assert counts["duplicate_url"] == 15
+    assert len(samples) == 10
+    # Most recent 10 (5..14) should be retained.
+    assert samples[0]["title"] == "Title 5"
+    assert samples[-1]["title"] == "Title 14"

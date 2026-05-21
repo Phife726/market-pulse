@@ -195,6 +195,22 @@ def _scrape_fallback(url: str) -> Optional[str]:
     return text if text else None
 
 
+_SUPPRESSION_SAMPLES_CAP = 10
+
+
+def _record_suppression(
+    counts: dict,
+    samples: list,
+    *,
+    reason: str,
+    url: str,
+    title: str,
+) -> None:
+    """Increment the counter for `reason` and append a sample (FIFO cap = 10)."""
+    counts[reason] = counts.get(reason, 0) + 1
+    samples.append({"reason": reason, "url": url, "title": title})
+    if len(samples) > _SUPPRESSION_SAMPLES_CAP:
+        del samples[0]
 
 
 def _get_supabase() -> Client:
@@ -643,12 +659,23 @@ def _validate_executive_bullets(raw) -> Optional[list[dict]]:
     return cleaned
 
 
-def generate_macro_summary(articles: list[dict]) -> bool:
+def generate_macro_summary(
+    articles: list[dict],
+    *,
+    screened_count: Optional[int] = None,
+    suppression_breakdown: Optional[dict] = None,
+    suppression_samples: Optional[list] = None,
+) -> bool:
     """Generate a structured macro summary from today's stored articles.
 
     Writes dominant_condition (constrained enum) and executive_bullets (3-bullet
     JSON) to daily_summaries. Also populates legacy executive_summary and
     macro_sentiment columns for backward compatibility.
+
+    The optional keyword args persist ingestion-side suppression accounting:
+    - screened_count: total URLs discovered (stats["urls_discovered"])
+    - suppression_breakdown: reason-code counters dict
+    - suppression_samples: list of up to 10 suppressed-item samples
     """
     if not articles:
         logger.warning("No articles to summarize — skipping macro summary generation.")
@@ -739,6 +766,9 @@ def generate_macro_summary(articles: list[dict]) -> bool:
                 "executive_bullets": bullets,
                 "executive_summary": executive_summary,
                 "macro_sentiment": cond,
+                "screened_count": screened_count,
+                "suppression_breakdown": suppression_breakdown or {},
+                "suppression_samples": suppression_samples or [],
             },
             on_conflict="run_date,run_mode",
         ).execute()
@@ -752,13 +782,13 @@ def generate_macro_summary(articles: list[dict]) -> bool:
 def _log_stats(stats: dict) -> None:
     logger.info(
         "Pipeline complete — discovered: %d | duplicates skipped: %d | "
-        "semantic duplicates: %d | too short: %d | discards: %d | "
+        "semantic duplicates: %d | scrape failed: %d | discards: %d | "
         "scrapes attempted: %d | stored: %d | errors: %d",
         stats["urls_discovered"],
-        stats["urls_skipped_duplicate"],
-        stats.get("urls_skipped_semantic_duplicate", 0),
-        stats["urls_skipped_too_short"],
-        stats.get("urls_skipped_discard", 0),
+        stats.get("duplicate_url", 0),
+        stats.get("semantic_duplicate", 0),
+        stats.get("scrape_failed", 0),
+        stats.get("llm_discard", 0),
         stats["scrapes_attempted"],
         stats["insights_stored"],
         stats["errors"],
@@ -772,15 +802,17 @@ def execute_pipeline() -> None:
     scrapes_attempted = 0
     stats = {
         "urls_discovered": 0,
-        "urls_skipped_duplicate": 0,
-        "urls_skipped_semantic_duplicate": 0,
-        "urls_skipped_too_short": 0,
-        "urls_skipped_discard": 0,
         "scrapes_attempted": 0,
         "insights_stored": 0,
         "errors": 0,
+        # Reason-code counters (also become daily_summaries.suppression_breakdown)
+        "duplicate_url": 0,
+        "semantic_duplicate": 0,
+        "llm_discard": 0,
+        "scrape_failed": 0,
     }
     stored_articles_buffer: list[dict] = []
+    suppression_samples: list[dict] = []
 
     for target in targets:
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
@@ -806,13 +838,27 @@ def execute_pipeline() -> None:
                     PIPELINE_DEADLINE_SECONDS,
                 )
                 _log_stats(stats)
-                generate_macro_summary(stored_articles_buffer)
+                generate_macro_summary(
+                    stored_articles_buffer,
+                    screened_count=stats["urls_discovered"],
+                    suppression_breakdown={k: v for k, v in stats.items()
+                                           if k in {"duplicate_url", "semantic_duplicate",
+                                                    "llm_discard", "scrape_failed"}},
+                    suppression_samples=suppression_samples,
+                )
                 return
 
             if scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
                 _log_stats(stats)
-                generate_macro_summary(stored_articles_buffer)
+                generate_macro_summary(
+                    stored_articles_buffer,
+                    screened_count=stats["urls_discovered"],
+                    suppression_breakdown={k: v for k, v in stats.items()
+                                           if k in {"duplicate_url", "semantic_duplicate",
+                                                    "llm_discard", "scrape_failed"}},
+                    suppression_samples=suppression_samples,
+                )
                 return
 
             normalized = normalize_url(raw_url)
@@ -820,7 +866,8 @@ def execute_pipeline() -> None:
 
             if url_already_processed(url_hash):
                 logger.info("Duplicate — skipping: %s", normalized)
-                stats["urls_skipped_duplicate"] += 1
+                _record_suppression(stats, suppression_samples, reason="duplicate_url",
+                                    url=raw_url, title=serper_title)
                 continue
 
             is_dup, matched, score = is_semantic_duplicate(serper_title, seen_headlines)
@@ -829,7 +876,8 @@ def execute_pipeline() -> None:
                     "SEMANTIC_DUPLICATE — skipped: '%s' ~ '%s' | score: %d",
                     serper_title, matched, score,
                 )
-                stats["urls_skipped_semantic_duplicate"] += 1
+                _record_suppression(stats, suppression_samples, reason="semantic_duplicate",
+                                    url=raw_url, title=serper_title)
                 continue
 
             scrapes_attempted += 1
@@ -837,7 +885,8 @@ def execute_pipeline() -> None:
 
             article_text = scrape_article(raw_url, min_article_length)
             if article_text is None:
-                stats["urls_skipped_too_short"] += 1
+                _record_suppression(stats, suppression_samples, reason="scrape_failed",
+                                    url=raw_url, title=serper_title)
                 time.sleep(1.5)
                 continue
 
@@ -849,7 +898,8 @@ def execute_pipeline() -> None:
 
             if insight.get("americhem_impact") == "DISCARD":
                 logger.info("DISCARD — false positive: %s", normalized)
-                stats["urls_skipped_discard"] += 1
+                _record_suppression(stats, suppression_samples, reason="llm_discard",
+                                    url=raw_url, title=serper_title)
                 time.sleep(1.5)
                 continue
 
@@ -889,7 +939,14 @@ def execute_pipeline() -> None:
             time.sleep(1.5)
 
     _log_stats(stats)
-    generate_macro_summary(stored_articles_buffer)
+    generate_macro_summary(
+        stored_articles_buffer,
+        screened_count=stats["urls_discovered"],
+        suppression_breakdown={k: v for k, v in stats.items()
+                               if k in {"duplicate_url", "semantic_duplicate",
+                                        "llm_discard", "scrape_failed"}},
+        suppression_samples=suppression_samples,
+    )
 
 
 if __name__ == "__main__":
