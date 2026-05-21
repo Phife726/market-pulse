@@ -494,6 +494,50 @@ def fetch_macro_summary() -> dict | None:
         return None
 
 
+def _update_delivery_summary_counts(
+    *,
+    surfaced_count: int,
+    delivery_counts: dict,
+    delivery_samples: list,
+) -> None:
+    """Update today's daily_summaries row (filtered by run_mode) with delivery-side stats.
+
+    Non-critical: failures are logged but do not raise.
+    """
+    try:
+        from datetime import date as _date
+        supabase = _get_supabase()
+
+        # Fetch the existing breakdown/samples so we can merge ours in.
+        existing = (
+            supabase.table("daily_summaries")
+            .select("suppression_breakdown, suppression_samples")
+            .eq("run_date", _date.today().isoformat())
+            .eq("run_mode", _run_mode())
+            .limit(1)
+            .execute()
+        )
+        rows = existing.data or []
+        prior_breakdown = (rows[0].get("suppression_breakdown") if rows else None) or {}
+        prior_samples   = (rows[0].get("suppression_samples")   if rows else None) or []
+
+        merged_breakdown = dict(prior_breakdown)
+        for k, v in delivery_counts.items():
+            merged_breakdown[k] = merged_breakdown.get(k, 0) + int(v)
+
+        merged_samples = list(prior_samples) + list(delivery_samples)
+        if len(merged_samples) > _DELIVERY_SAMPLES_CAP:
+            merged_samples = merged_samples[-_DELIVERY_SAMPLES_CAP:]
+
+        supabase.table("daily_summaries").update({
+            "surfaced_count": surfaced_count,
+            "suppression_breakdown": merged_breakdown,
+            "suppression_samples": merged_samples,
+        }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
+    except Exception as exc:
+        logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # 2. Thematic routing helpers
 # ---------------------------------------------------------------------------
@@ -1001,97 +1045,104 @@ def generate_html_email(
     macro_summary: dict | None = None,
 ) -> str:
     config = _load_mp_config()
-    reporting_cfg             = config.get("reporting", {})
-    visible_threshold: int    = _config_int(reporting_cfg, "visible_impact_threshold", 6)
-    max_per_segment: int      = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
-    max_total_visible: int    = _config_int(reporting_cfg, "max_total_visible_articles", 12)
+    reporting_cfg          = config.get("reporting", {})
+    visible_threshold: int = _config_int(reporting_cfg, "visible_impact_threshold", 6)
+    max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
+    max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
 
-    # Zone 1 — Critical: old-style rows (no americhem_impact_score) with sentiment_score <= 3.
-    # New rows with low impact score are excluded from the report entirely (not shown as critical).
-    critical_hashes: set[str] = set()
-    critical: list[dict] = []
-    for r in data:
-        if r.get("americhem_impact_score") is None and (r.get("sentiment_score") or 5) <= 3:
-            critical_hashes.add(r.get("url_hash") or "")
-            critical.append(r)
+    # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
+    kept, delivery_sup_counts, delivery_sup_samples = _apply_delivery_suppression(data, config)
 
-    non_critical_all = [r for r in data if (r.get("url_hash") or "") not in critical_hashes]
+    # 2. Visibility filter.
+    visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]
+    below_threshold_count = len(kept) - len(visible_pool)
 
-    # Zone 2 — Thematic: articles at or above the visible impact threshold.
-    thematic_candidates = [r for r in non_critical_all if _effective_impact(r) >= visible_threshold]
-    original_groups = _group_for_thematic(thematic_candidates)
+    # 3. Group by commercial segment.
+    groups_full = _group_by_commercial_segment(visible_pool)
 
-    # Apply per-segment cap (highest-impact articles first within each group).
+    # 4. Per-segment cap (highest-impact articles first within each group).
     groups = {
         seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
-        for seg, arts in original_groups.items()
+        for seg, arts in groups_full.items()
     }
 
-    # Thin entries: articles never in any group (pass original_groups so capped-out
-    # articles are not re-admitted here).
-    thin_entries = _collect_thin_entries(thematic_candidates, original_groups)
-
-    # Apply total-visible cap across groups + thin_entries.
-    total_in_groups = sum(len(arts) for arts in groups.values())
-    if total_in_groups + len(thin_entries) > max_total_visible:
+    # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
+    total = sum(len(arts) for arts in groups.values())
+    if total > max_total_visible:
         all_visible = sorted(
-            [a for arts in groups.values() for a in arts] + thin_entries,
-            key=lambda x: _effective_impact(x),
+            [(seg, a) for seg, arts in groups.items() for a in arts],
+            key=lambda kv: _effective_impact(kv[1]),
             reverse=True,
         )[:max_total_visible]
-        selected_hashes = {a.get("url_hash") for a in all_visible}
-        groups = {
-            seg: [a for a in arts if a.get("url_hash") in selected_hashes]
-            for seg, arts in groups.items()
-        }
+        selected_hashes = {a.get("url_hash") for _, a in all_visible}
+        groups = {seg: [a for a in arts if a.get("url_hash") in selected_hashes]
+                  for seg, arts in groups.items()}
         groups = {seg: arts for seg, arts in groups.items() if arts}
-        thin_entries = [a for a in thin_entries if a.get("url_hash") in selected_hashes]
 
-    # Zone 3 — Peripheral: ungrouped moderate-impact articles from the thematic pool
-    # plus below-threshold OLD-style articles (new-style rows below threshold are excluded entirely).
-    # Use original_groups so capped-out articles don't leak into peripheral either.
-    peripheral_from_thematic = _collect_peripheral(thematic_candidates, original_groups)
-    below_threshold_legacy = [
-        r for r in non_critical_all
-        if _effective_impact(r) < visible_threshold
-        and r.get("americhem_impact_score") is None
-    ]
-    peripheral = sorted(
-        peripheral_from_thematic + below_threshold_legacy,
-        key=lambda x: _effective_impact(x),
+    # 6. Compute weak_relevance: rows in `kept` with effective impact 4-5 that
+    # didn't make it into any final group (the old Peripheral pool, now hidden).
+    final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
+    weak_relevance_count = sum(
+        1 for r in kept
+        if 4 <= _effective_impact(r) <= 5
+        and r.get("url_hash") not in final_hashes
     )
 
-    synthesis    = synthesize_thematic_paragraphs(groups)
+    # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
+    surfaced_count = sum(len(arts) for arts in groups.values())
 
-    sections_html = (
-        _render_section(
-            "CRITICAL", "Critical Disruptions",
-            "#EF4444", "#FEF2F2", "#B91C1C", critical,
-        )
-        + _render_thematic_section(groups, thin_entries, synthesis)
-        + _render_peripheral_section(peripheral)
+    # 8. Write delivery-side counts + surfaced_count back to today's row.
+    _update_delivery_summary_counts(
+        surfaced_count=surfaced_count,
+        delivery_counts={
+            **delivery_sup_counts,
+            "below_impact_threshold": below_threshold_count,
+            "weak_relevance": weak_relevance_count,
+        },
+        delivery_samples=delivery_sup_samples,
     )
 
+    # 9. Thematic synthesis paragraphs (existing helper, now keyed off the new groups).
+    multi_article_groups = {seg: arts for seg, arts in groups.items() if len(arts) >= 2}
+    synthesis = synthesize_thematic_paragraphs(multi_article_groups)
+
+    # 10. Build the HTML body.
+    sections_html = _render_segment_watch_section(groups, synthesis)
+
+    # Executive summary block (rendered via the existing helper, which Task 12 will
+    # upgrade to consume executive_bullets).
     exec_html = _render_exec_summary(macro_summary)
 
+    # Header counts. Null-safe handling is finalized in Task 13.
     today_str = datetime.now().strftime("%A, %B %d, %Y")
-    total     = len(data)
-    item_word = "item" if total == 1 else "items"
+    screened = (macro_summary or {}).get("screened_count")
+    if screened is None:
+        screened = len(data)
+    dominant_condition = (macro_summary or {}).get("dominant_condition") or (
+        macro_summary or {}
+    ).get("macro_sentiment") or ""
 
     macro_badge_html = ""
-    if macro_summary:
-        sentiment = macro_summary.get("macro_sentiment", "")
+    if dominant_condition:
         macro_badge_html = (
             f'<span style="background-color:rgba(127,176,105,0.2);'
             f'color:{_BRAND_GREEN};border:1px solid rgba(127,176,105,0.4);'
             f'padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;'
             f'font-family:Arial,sans-serif;letter-spacing:0.5px;">'
-            f'{sentiment}</span>'
+            f'{dominant_condition}</span>'
         )
 
     _test_mode = _is_test_mode()
     title_prefix = "[TEST] " if _test_mode else ""
     test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
+
+    # QA debug section is added in Task 14. Until then keep it empty.
+    qa_html = ""
+
+    subtitle = (
+        f"{today_str} &nbsp;&middot;&nbsp; "
+        f"{surfaced_count} surfaced signals from {screened} screened items"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1136,7 +1187,7 @@ def generate_html_email(
               <td style="background-color:{_BRAND_NAVY_DARK};padding:10px 32px;">
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
                   <tr>
-                    <td style="font-size:12px;color:rgba(255,255,255,0.65);font-family:Arial,sans-serif;">{today_str} &nbsp;&middot;&nbsp; {total} {item_word} today</td>
+                    <td style="font-size:12px;color:rgba(255,255,255,0.65);font-family:Arial,sans-serif;">{subtitle}</td>
                     <td align="right">{macro_badge_html}</td>
                   </tr>
                 </table>
@@ -1146,6 +1197,7 @@ def generate_html_email(
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             {exec_html}
             {sections_html}
+            {qa_html}
             <tr><td style="height:24px;"></td></tr>
           </table>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">

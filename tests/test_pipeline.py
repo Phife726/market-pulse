@@ -1309,8 +1309,12 @@ def test_generate_html_email_filters_below_impact_threshold(monkeypatch):
 def test_generate_html_email_groups_by_strategic_segment(monkeypatch):
     """Two new-style articles with the same strategic_segment are grouped under that label."""
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    art_a = _make_new_article("a", 8, strategic_segment="Healthcare", headline="Healthcare Headline A")
-    art_b = _make_new_article("b", 7, strategic_segment="Healthcare", headline="Healthcare Headline B")
+    # Use genuinely distinct headlines so delivery suppression doesn't flag them
+    # as semantic duplicates (token_sort_ratio threshold is 88).
+    art_a = _make_new_article("a", 8, strategic_segment="Healthcare",
+                              headline="Hospital network consolidation squeezes specialty polymer demand")
+    art_b = _make_new_article("b", 7, strategic_segment="Healthcare",
+                              headline="FDA clears new medical-grade compound for implantable devices")
 
     mock_client = _make_synthesis_mock({"Healthcare": "Healthcare synthesis paragraph."})
     with patch("delivery_engine._get_openai", return_value=mock_client), \
@@ -1369,12 +1373,20 @@ def test_render_card_falls_back_to_sentiment_score_for_old_rows():
 def test_generate_html_email_per_segment_cap(monkeypatch):
     """No more than max_per_segment articles from the same segment appear in the email."""
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    # 5 Healthcare articles, impacts 10 down to 6 — all above threshold
+    # 5 Healthcare articles with genuinely distinct headlines (avoids semantic-duplicate
+    # suppression which fires at token_sort_ratio >= 88).
+    _hc_headlines = [
+        "Hospital network merger squeezes specialty polymer volumes",
+        "FDA clears new implantable-grade compound for cardiac devices",
+        "Aging population drives record demand for medical-grade resins",
+        "Generic drug expansion pressures premium plastics pricing",
+        "Supply disruption at key resin plant delays surgical kit output",
+    ]
     articles = [
         _make_new_article(
             f"h{i}", americhem_impact_score=10 - i,
             strategic_segment="Healthcare",
-            headline=f"HC Headline {i}",
+            headline=_hc_headlines[i],
         )
         for i in range(5)
     ]
@@ -1390,12 +1402,12 @@ def test_generate_html_email_per_segment_cap(monkeypatch):
         html = generate_html_email(articles)
 
     # Top 3 by impact score (h0=10, h1=9, h2=8) must appear
-    assert "HC Headline 0" in html
-    assert "HC Headline 1" in html
-    assert "HC Headline 2" in html
+    assert _hc_headlines[0] in html
+    assert _hc_headlines[1] in html
+    assert _hc_headlines[2] in html
     # h3 (impact 7) and h4 (impact 6) must be excluded
-    assert "HC Headline 3" not in html
-    assert "HC Headline 4" not in html
+    assert _hc_headlines[3] not in html
+    assert _hc_headlines[4] not in html
 
 
 def test_generate_html_email_total_articles_cap(monkeypatch):
@@ -2387,3 +2399,129 @@ def test_render_segment_watch_section_renders_synthesis_paragraph():
     synth = {"Packaging": "Brand-owners are shifting toward recycled content."}
     html = _render_segment_watch_section(groups, synth)
     assert "Brand-owners are shifting toward recycled content." in html
+
+
+# ---------------------------------------------------------------------------
+# Task 11: generate_html_email() pipeline integration tests
+# ---------------------------------------------------------------------------
+
+def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
+    """surfaced_count must reflect the final visible-card list AFTER per-segment caps."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    rows = [
+        {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": f"HC {i}",
+         "americhem_impact": "Effect.", "source_url": f"https://x/{i}",
+         "entities_mentioned": ["Acme"]}
+        for i in range(5)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": 2,
+            "max_total_visible_articles": 12,
+        }
+    }
+
+    captured = {}
+    mock_supa = MagicMock()
+
+    def fake_update(payload):
+        captured["update"] = payload
+        return mock_supa.table.return_value.update.return_value
+
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._load_mp_config", return_value=config), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa):
+        generate_html_email(rows)
+
+    assert "update" in captured, "Expected an update() call to daily_summaries"
+    assert captured["update"]["surfaced_count"] == 2
+
+
+def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch):
+    """Delivery must write below_impact_threshold into suppression_breakdown via update()."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    rows = [
+        {"url_hash": "low", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 4, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": "Below threshold",
+         "americhem_impact": ".", "source_url": "https://x/1",
+         "entities_mentioned": ["Acme"]},
+        {"url_hash": "high", "commercial_segment": "Packaging",
+         "americhem_impact_score": 8, "sentiment_tag": "Positive",
+         "signal_type": "Customer", "headline": "Surfaced",
+         "americhem_impact": ".", "source_url": "https://x/2",
+         "entities_mentioned": ["Acme"]},
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": 3,
+            "max_total_visible_articles": 12,
+        }
+    }
+    captured = {}
+    mock_supa = MagicMock()
+
+    def fake_update(payload):
+        captured["update"] = payload
+        return mock_supa.table.return_value.update.return_value
+
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._load_mp_config", return_value=config), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa):
+        generate_html_email(rows)
+
+    breakdown = captured["update"]["suppression_breakdown"]
+    assert breakdown["below_impact_threshold"] == 1
+    assert captured["update"]["surfaced_count"] == 1
+
+
+def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatch):
+    """The update() call must be filtered by run_date AND run_mode."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    rows = [{
+        "url_hash": "a", "commercial_segment": "Healthcare",
+        "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+        "signal_type": "Customer", "headline": "H", "americhem_impact": ".",
+        "source_url": "https://x/a", "entities_mentioned": ["Acme"],
+    }]
+
+    eq_calls = []
+    mock_supa = MagicMock()
+
+    update_chain = MagicMock()
+    def fake_update_eq(col, val):
+        eq_calls.append((col, val))
+        return update_chain
+    update_chain.eq.side_effect = fake_update_eq
+    update_chain.eq.return_value = update_chain
+    update_chain.execute.return_value = MagicMock()
+
+    def fake_update(payload):
+        return update_chain
+    mock_supa.table.return_value.update.side_effect = fake_update
+
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa):
+        generate_html_email(rows)
+
+    keys = {c[0] for c in eq_calls}
+    assert "run_date" in keys, f"eq calls: {eq_calls}"
+    assert "run_mode" in keys, f"eq calls: {eq_calls}"
+    rm_calls = [c for c in eq_calls if c[0] == "run_mode"]
+    assert any(c[1] == "test" for c in rm_calls), f"Expected run_mode='test' in {rm_calls}"
