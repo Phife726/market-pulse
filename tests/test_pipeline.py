@@ -1647,6 +1647,7 @@ def test_config_int_returns_default_and_warns_for_bad_value(caplog):
     with caplog.at_level(logging.WARNING, logger="delivery_engine"):
         result = _config_int(cfg, "visible_impact_threshold", 6)
     assert result == 6
+    assert "visible_impact_threshold" in caplog.text
 
 
 # ===========================================================================
@@ -1697,7 +1698,6 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
     monkeypatch.setenv("SMTP_PASS", "re_test_key")
     monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
     monkeypatch.setenv("RECIPIENT_EMAILS", "jphifer@americhem.com")
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
     monkeypatch.setattr(_time, "sleep", lambda s: None)
 
     captured = {}
