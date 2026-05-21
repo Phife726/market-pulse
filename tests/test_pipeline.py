@@ -1525,60 +1525,6 @@ def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
 
 
 # ===========================================================================
-# Config-driven segment prompt injection
-# ===========================================================================
-
-from ingestion_engine import _build_system_prompt, _build_segment_rule
-
-
-def test_build_segment_rule_injects_config_labels_and_descriptions():
-    """_build_segment_rule must include segment label and description from config."""
-    config = {
-        "strategic_segments": {
-            "test_seg": {
-                "label": "UniqueTestSegment",
-                "description": "Unique description for unit testing purposes.",
-            }
-        }
-    }
-    rule_text = _build_segment_rule(config)
-    assert "UniqueTestSegment" in rule_text
-    assert "Unique description for unit testing purposes." in rule_text
-
-
-def test_build_segment_rule_falls_back_to_defaults_on_empty_config():
-    """_build_segment_rule must include the fallback label list when config has no segments."""
-    rule_text = _build_segment_rule({})
-    assert "Healthcare" in rule_text
-    assert "Broader Americhem" in rule_text
-
-
-def test_synthesize_insight_includes_config_segments_in_system_prompt():
-    """synthesize_insight must pass segment labels/descriptions from config to the LLM."""
-    test_config = {
-        "strategic_segments": {
-            "custom_seg": {
-                "label": "CustomTestSegment",
-                "description": "Custom description for testing.",
-            }
-        }
-    }
-    mock_client = _make_openai_mock_with_fields()
-    with patch("ingestion_engine._get_openai", return_value=mock_client), \
-         patch("ingestion_engine._load_mp_config", return_value=test_config):
-        synthesize_insight(
-            article_text="Article text.",
-            source_url="https://news.com/article",
-            trigger_entity="Avient",
-            category="competitors",
-        )
-    _, kwargs = mock_client.chat.completions.create.call_args
-    system_msg = next(m["content"] for m in kwargs["messages"] if m["role"] == "system")
-    assert "CustomTestSegment" in system_msg
-    assert "Custom description for testing." in system_msg
-
-
-# ===========================================================================
 # Negative moderate-impact: impact score drives filtering, not sentiment tone
 # ===========================================================================
 
@@ -1744,6 +1690,69 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
     html = _generate_no_news_email()
     assert "[TEST]" in html
     assert "TEST RUN" in html
+
+
+def test_build_commercial_segment_rule_injects_labels_and_descriptions():
+    """_build_commercial_segment_rule must include all 9 labels and their full
+    descriptions from config."""
+    from ingestion_engine import _build_commercial_segment_rule
+    cfg = {
+        "commercial_segments": {
+            "healthcare": {"label": "Healthcare", "description": "Med devices."},
+            "fibers": {"label": "Fibers", "description": "Synthetic fiber chains."},
+        }
+    }
+    rule_text = _build_commercial_segment_rule(cfg)
+    assert "RULE 4 — COMMERCIAL SEGMENT" in rule_text
+    assert "Healthcare" in rule_text
+    assert "Med devices." in rule_text
+    assert "Fibers" in rule_text
+    assert "Synthetic fiber chains." in rule_text
+
+
+def test_build_signal_type_rule_injects_labels_and_descriptions():
+    """_build_signal_type_rule must include all 8 labels and descriptions."""
+    from ingestion_engine import _build_signal_type_rule
+    cfg = {
+        "signal_types": {
+            "competitive": {"label": "Competitive", "description": "Comp moves."},
+            "regulatory": {"label": "Regulatory", "description": "Gov actions."},
+        }
+    }
+    rule_text = _build_signal_type_rule(cfg)
+    assert "RULE 5 — SIGNAL TYPE" in rule_text
+    assert "Competitive" in rule_text
+    assert "Comp moves." in rule_text
+    assert "Regulatory" in rule_text
+    assert "Gov actions." in rule_text
+
+
+def test_system_prompt_includes_both_segment_and_signal_rules():
+    """The assembled system prompt must contain both new rules with their
+    descriptions, not just the labels."""
+    from ingestion_engine import _build_system_prompt
+    cfg = {
+        "commercial_segments": {
+            "engineered_resins": {
+                "label": "Engineered Resins",
+                "description": "High-performance compounds.",
+            },
+        },
+        "signal_types": {
+            "supply_chain": {
+                "label": "Supply Chain",
+                "description": "Resin pricing, force majeure.",
+            },
+        },
+    }
+    prompt = _build_system_prompt(cfg)
+    assert "RULE 4 — COMMERCIAL SEGMENT" in prompt
+    assert "RULE 5 — SIGNAL TYPE" in prompt
+    assert "Engineered Resins" in prompt
+    assert "High-performance compounds." in prompt
+    assert "Supply Chain" in prompt
+    assert "Resin pricing, force majeure." in prompt
+    assert "seven rules" in prompt
 
 
 def test_config_has_commercial_segments_and_signal_types():

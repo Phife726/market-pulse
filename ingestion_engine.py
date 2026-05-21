@@ -25,9 +25,15 @@ _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MP_CONFIG: Optional[dict] = None
 
-_FALLBACK_SEGMENT_LIST = (
-    "Healthcare | Fibers | Packaging | Industrial | Raw Materials / Supply Chain | "
-    "Regulatory / Sustainability | Competitive / Customer Signal | Broader Americhem"
+_FALLBACK_COMMERCIAL_SEGMENT_LIST = (
+    "Healthcare | Fibers | Transportation - Automotive | "
+    "Transportation - Non-Automotive | Transportation - Aerospace | "
+    "Industrial | Packaging | Engineered Resins | Enterprise / Cross-Segment"
+)
+
+_FALLBACK_SIGNAL_TYPE_LIST = (
+    "Competitive | Customer | Regulatory | Sustainability | "
+    "Supply Chain | Technology | Macro | Other"
 )
 
 
@@ -44,11 +50,11 @@ def _load_mp_config() -> dict:
     return _MP_CONFIG
 
 
-def _build_segment_rule(config: dict) -> str:
-    """Return RULE 4 text with segment labels and descriptions injected from config."""
-    segments = config.get("strategic_segments") or {}
+def _build_commercial_segment_rule(config: dict) -> str:
+    """Return RULE 4 text with commercial segment labels and descriptions from config."""
+    segments = config.get("commercial_segments") or {}
     if not segments:
-        segment_block = _FALLBACK_SEGMENT_LIST
+        block = _FALLBACK_COMMERCIAL_SEGMENT_LIST
     else:
         lines = []
         for seg in segments.values():
@@ -58,15 +64,39 @@ def _build_segment_rule(config: dict) -> str:
             desc = (seg.get("description") or "").strip().replace("\n", " ")
             if label:
                 lines.append(f"  {label}: {desc}" if desc else f"  {label}")
-        segment_block = "\n".join(lines) if lines else _FALLBACK_SEGMENT_LIST
+        block = "\n".join(lines) if lines else _FALLBACK_COMMERCIAL_SEGMENT_LIST
 
-    return f"""RULE 4 — STRATEGIC SEGMENT:
-Assign the single best-fit segment label from this list:
+    return f"""RULE 4 — COMMERCIAL SEGMENT:
+Assign the single best-fit commercial segment for the affected end-market:
 
-{segment_block}
+{block}
 
-Choose "Broader Americhem" only when the article spans multiple segments or addresses
-general plastics/compounding industry trends without a dominant segment fit."""
+Choose "Enterprise / Cross-Segment" only when the article spans multiple segments
+or addresses Americhem-wide topics with no single end-market dominating."""
+
+
+def _build_signal_type_rule(config: dict) -> str:
+    """Return RULE 5 text with signal type labels and descriptions from config."""
+    signals = config.get("signal_types") or {}
+    if not signals:
+        block = _FALLBACK_SIGNAL_TYPE_LIST
+    else:
+        lines = []
+        for sig in signals.values():
+            if not isinstance(sig, dict):
+                continue
+            label = sig.get("label", "")
+            desc = (sig.get("description") or "").strip().replace("\n", " ")
+            if label:
+                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
+        block = "\n".join(lines) if lines else _FALLBACK_SIGNAL_TYPE_LIST
+
+    return f"""RULE 5 — SIGNAL TYPE:
+Assign the single kind of signal this article represents:
+
+{block}
+
+Prefer a named type over "Other" whenever possible."""
 
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "source set 238658",
@@ -354,7 +384,7 @@ a global manufacturer of custom color masterbatch, functional additives, and eng
 serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
 Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-six rules below before generating any output.
+seven rules below before generating any output.
 
 RULE 1 — ENTITY DISAMBIGUATION:
 Before scoring, verify that the named entity in this article is the correct one.
@@ -395,14 +425,16 @@ Score by weighting these factors:
 
 {rule4}
 
-RULE 5 — RIGOROUS IMPACT STATEMENT:
+{rule5}
+
+RULE 6 — RIGOROUS IMPACT STATEMENT:
 Always write a specific So-What for Americhem even for routine items.
 Identify which business unit or cost line could be affected and in what direction.
 If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
 Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
-RULE 6 — DOMAIN RELEVANCE FIREWALL:
+RULE 7 — DOMAIN RELEVANCE FIREWALL:
 Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
 absolutely zero connection to plastics, polymers, chemicals, materials, manufacturing,
 composites, packaging, or supply chain dynamics.
@@ -422,7 +454,8 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
   "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
   "americhem_impact_score": <integer 1-10 per Rule 3>,
   "impact_rationale": "<max 15 words explaining why this impact score was assigned>",
-  "strategic_segment": "<exactly one segment label from Rule 4>",
+  "commercial_segment": "<exact label from RULE 4>",
+  "signal_type": "<exact label from RULE 5>",
   "sentiment_rationale": "<max 10 words explaining exactly why this sentiment was assigned>",
   "recommended_action": "<one of: No action | Monitor | Flag to procurement | Share with sales | Escalate to leadership>",
   "source_url": "<MUST EXACTLY MATCH the URL provided in the user prompt>",
@@ -431,9 +464,10 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
 
 
 def _build_system_prompt(config: dict) -> str:
-    """Assemble the full system prompt, injecting segment taxonomy from config."""
-    rule4 = _build_segment_rule(config)
-    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4)
+    """Assemble the full system prompt, injecting commercial segment and signal type taxonomies."""
+    rule4 = _build_commercial_segment_rule(config)
+    rule5 = _build_signal_type_rule(config)
+    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4).replace("{rule5}", rule5)
 
 _VALID_ACTIONS: frozenset[str] = frozenset({
     "No action", "Monitor", "Flag to procurement",
