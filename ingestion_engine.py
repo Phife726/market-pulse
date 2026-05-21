@@ -476,6 +476,19 @@ _VALID_ACTIONS: frozenset[str] = frozenset({
 
 _VALID_SENTIMENT_TAGS: frozenset[str] = frozenset({"Negative", "Neutral", "Positive"})
 
+_VALID_COMMERCIAL_SEGMENTS: frozenset[str] = frozenset({
+    "Healthcare", "Fibers",
+    "Transportation - Automotive", "Transportation - Non-Automotive",
+    "Transportation - Aerospace",
+    "Industrial", "Packaging", "Engineered Resins",
+    "Enterprise / Cross-Segment",
+})
+
+_VALID_SIGNAL_TYPES: frozenset[str] = frozenset({
+    "Competitive", "Customer", "Regulatory", "Sustainability",
+    "Supply Chain", "Technology", "Macro", "Other",
+})
+
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
     client = _get_openai()
@@ -524,8 +537,22 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
     except (ValueError, TypeError, KeyError):
         insight["americhem_impact_score"] = 5
     insight.setdefault("impact_rationale", "")
-    if not (insight.get("strategic_segment") or "").strip():
-        insight["strategic_segment"] = "Broader Americhem"
+    # commercial_segment validation (RULE 4)
+    seg = (insight.get("commercial_segment") or "").strip() if isinstance(insight.get("commercial_segment"), str) else ""
+    if seg in _VALID_COMMERCIAL_SEGMENTS:
+        insight["commercial_segment"] = seg
+    else:
+        insight["commercial_segment"] = "Enterprise / Cross-Segment"
+
+    # signal_type validation (RULE 5)
+    sig = (insight.get("signal_type") or "").strip() if isinstance(insight.get("signal_type"), str) else ""
+    if sig in _VALID_SIGNAL_TYPES:
+        insight["signal_type"] = sig
+    else:
+        insight["signal_type"] = "Other"
+
+    # Drop legacy strategic_segment if the LLM still returns it.
+    insight.pop("strategic_segment", None)
     if not isinstance(insight["entities_mentioned"], list):
         insight["entities_mentioned"] = []
     insight.setdefault("source_publication", "")
@@ -765,7 +792,8 @@ def execute_pipeline() -> None:
                 "sentiment_tag": insight.get("sentiment_tag", "Neutral"),
                 "americhem_impact_score": insight.get("americhem_impact_score", 5),
                 "impact_rationale": insight.get("impact_rationale", ""),
-                "strategic_segment": insight.get("strategic_segment", "Broader Americhem"),
+                "commercial_segment": insight.get("commercial_segment", "Enterprise / Cross-Segment"),
+                "signal_type": insight.get("signal_type", "Other"),
             }
 
             if store_insight(payload):

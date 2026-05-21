@@ -1298,38 +1298,6 @@ def test_impact_score_defaults_on_bad_value(bad_value):
     assert result["americhem_impact_score"] == 5
 
 
-# ---------------------------------------------------------------------------
-# strategic_segment default
-# ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize("missing_value", [None, "", "  "])
-def test_strategic_segment_default(missing_value):
-    """Missing or blank strategic_segment defaults to 'Broader Americhem'."""
-    mock_client = _make_openai_mock_with_fields(strategic_segment=missing_value)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
-        result = synthesize_insight(
-            article_text="Article text.",
-            source_url="https://news.com/article",
-            trigger_entity="Avient",
-            category="competitors",
-        )
-    assert result is not None
-    assert result["strategic_segment"] == "Broader Americhem"
-
-
-def test_strategic_segment_preserved_when_valid():
-    """A valid strategic_segment value must be passed through unchanged."""
-    mock_client = _make_openai_mock_with_fields(strategic_segment="Healthcare")
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
-        result = synthesize_insight(
-            article_text="Article text.",
-            source_url="https://news.com/article",
-            trigger_entity="Avient",
-            category="competitors",
-        )
-    assert result is not None
-    assert result["strategic_segment"] == "Healthcare"
-
 
 # ---------------------------------------------------------------------------
 # Threshold filtering in generate_html_email()
@@ -1690,6 +1658,87 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
     html = _generate_no_news_email()
     assert "[TEST]" in html
     assert "TEST RUN" in html
+
+
+def _make_openai_mock_with_new_fields(**overrides) -> MagicMock:
+    """OpenAI mock that returns the new-style per-article payload."""
+    base = {
+        "headline": "Test Headline",
+        "americhem_impact": "Direct effect on compounding margin.",
+        "sentiment_score": 5,
+        "sentiment_tag": "Neutral",
+        "americhem_impact_score": 7,
+        "impact_rationale": "Direct feedstock cost effect.",
+        "commercial_segment": "Healthcare",
+        "signal_type": "Technology",
+        "source_url": "https://news.com/article",
+        "entities_mentioned": ["Avient"],
+    }
+    base.update(overrides)
+    msg = MagicMock(); msg.content = json.dumps(base)
+    choice = MagicMock(); choice.message = msg
+    completion = MagicMock(); completion.choices = [choice]
+    client = MagicMock()
+    client.chat.completions.create.return_value = completion
+    return client
+
+
+@pytest.mark.parametrize(
+    "valid_segment",
+    [
+        "Healthcare", "Fibers",
+        "Transportation - Automotive", "Transportation - Non-Automotive",
+        "Transportation - Aerospace",
+        "Industrial", "Packaging", "Engineered Resins",
+        "Enterprise / Cross-Segment",
+    ],
+)
+def test_synthesize_insight_preserves_valid_commercial_segment(valid_segment):
+    mock = _make_openai_mock_with_new_fields(commercial_segment=valid_segment)
+    with patch("ingestion_engine._get_openai", return_value=mock):
+        result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
+    assert result is not None
+    assert result["commercial_segment"] == valid_segment
+
+
+@pytest.mark.parametrize("bad_segment", [None, "", "  ", "NotASegment", 42])
+def test_synthesize_insight_defaults_invalid_commercial_segment(bad_segment):
+    mock = _make_openai_mock_with_new_fields(commercial_segment=bad_segment)
+    with patch("ingestion_engine._get_openai", return_value=mock):
+        result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
+    assert result is not None
+    assert result["commercial_segment"] == "Enterprise / Cross-Segment"
+
+
+@pytest.mark.parametrize(
+    "valid_signal",
+    ["Competitive", "Customer", "Regulatory", "Sustainability",
+     "Supply Chain", "Technology", "Macro", "Other"],
+)
+def test_synthesize_insight_preserves_valid_signal_type(valid_signal):
+    mock = _make_openai_mock_with_new_fields(signal_type=valid_signal)
+    with patch("ingestion_engine._get_openai", return_value=mock):
+        result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
+    assert result is not None
+    assert result["signal_type"] == valid_signal
+
+
+@pytest.mark.parametrize("bad_signal", [None, "", "BAD", 42])
+def test_synthesize_insight_defaults_invalid_signal_type(bad_signal):
+    mock = _make_openai_mock_with_new_fields(signal_type=bad_signal)
+    with patch("ingestion_engine._get_openai", return_value=mock):
+        result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
+    assert result is not None
+    assert result["signal_type"] == "Other"
+
+
+def test_synthesize_insight_drops_strategic_segment_field():
+    """If the LLM still returns strategic_segment, it must not appear in the result."""
+    mock = _make_openai_mock_with_new_fields(strategic_segment="LegacyValue")
+    with patch("ingestion_engine._get_openai", return_value=mock):
+        result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
+    assert result is not None
+    assert "strategic_segment" not in result
 
 
 def test_build_commercial_segment_rule_injects_labels_and_descriptions():
