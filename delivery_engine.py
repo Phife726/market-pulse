@@ -69,6 +69,302 @@ def _effective_impact(row: dict) -> int:
     return int(row.get("sentiment_score") or 5)
 
 
+_LEGACY_STRATEGIC_SEGMENT_MAP: dict[str, str] = {
+    "Healthcare":                    "Healthcare",
+    "Fibers":                        "Fibers",
+    "Packaging":                     "Packaging",
+    "Industrial":                    "Industrial",
+    "Raw Materials / Supply Chain":  "Enterprise / Cross-Segment",
+    "Regulatory / Sustainability":   "Enterprise / Cross-Segment",
+    "Competitive / Customer Signal": "Enterprise / Cross-Segment",
+    "Broader Americhem":             "Enterprise / Cross-Segment",
+}
+
+
+def _commercial_segment_of(row: dict) -> str:
+    """Return commercial_segment if set; else map legacy strategic_segment; else default."""
+    seg = (row.get("commercial_segment") or "").strip()
+    if seg:
+        return seg
+    legacy = (row.get("strategic_segment") or "").strip()
+    return _LEGACY_STRATEGIC_SEGMENT_MAP.get(legacy, "Enterprise / Cross-Segment")
+
+
+def _signal_type_of(row: dict) -> str:
+    """Return signal_type if set on the row; else 'Other'."""
+    sig = (row.get("signal_type") or "").strip()
+    return sig if sig else "Other"
+
+
+# ---------------------------------------------------------------------------
+# Task 10: Commercial segment grouping + new section renderer
+# ---------------------------------------------------------------------------
+
+def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
+    """Bucket items by their resolved commercial segment (new field or legacy fallback)."""
+    from collections import defaultdict
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        buckets[_commercial_segment_of(item)].append(item)
+    return dict(buckets)
+
+
+def _render_meta_strip(item: dict) -> str:
+    """Return the inline meta strip HTML span: 'Impact: X/10 · Tag · Signal: Y · [CRITICAL]'."""
+    score = item.get("americhem_impact_score")
+    tag = item.get("sentiment_tag") or ""
+
+    if score is not None and tag:
+        score_html = (
+            f'<span style="color:{_BRAND_NAVY};font-weight:600;">'
+            f'Impact: {int(score)}/10</span>'
+        )
+        tag_color = _SENTIMENT_TAG_COLORS.get(tag, "#6B7280")
+        tag_html = (
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+            f'<span style="color:{tag_color};font-weight:600;">{tag}</span>'
+        )
+        signal = (item.get("signal_type") or "").strip()
+        signal_html = (
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Signal: {signal}</span>'
+            if signal else ""
+        )
+    else:
+        # Legacy row: use sentiment_score for the score display.
+        legacy_score = item.get("sentiment_score") or 5
+        score_word, score_color = _sentiment_word(int(legacy_score))
+        score_html = (
+            f'<span style="color:{score_color};font-weight:600;">{score_word}</span>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Score: {legacy_score}/10</span>'
+        )
+        tag_html = ""
+        signal_html = ""
+
+    # CRITICAL badge for legacy low-sentiment rows.
+    critical_html = ""
+    if score is None:
+        legacy_sentiment = item.get("sentiment_score")
+        if legacy_sentiment is not None and int(legacy_sentiment) <= 3:
+            critical_html = (
+                '<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+                '<span style="color:#DC2626;font-weight:700;">CRITICAL</span>'
+            )
+
+    return f'{score_html}{tag_html}{signal_html}{critical_html}'
+
+
+def _render_segment_watch_section(
+    groups: dict[str, list[dict]],
+    synthesis: dict[str, str],
+) -> str:
+    """Render the Commercial Segment Watch section.
+
+    Each commercial segment becomes its own block. Within a segment, if a synthesis
+    paragraph exists, it appears above the article cards.
+    """
+    if not groups:
+        return ""
+
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: -max(int(a.get("americhem_impact_score") or a.get("sentiment_score") or 0)
+                            for a in kv[1]),
+    )
+
+    blocks_html = ""
+    for segment_label, articles in ordered:
+        para = synthesis.get(segment_label, "")
+        para_html = (
+            f'<p style="margin:0 0 10px 0;font-size:13px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
+            f'{para}</p>'
+        ) if para else ""
+
+        cards_html = ""
+        articles_sorted = sorted(
+            articles,
+            key=lambda x: -int(x.get("americhem_impact_score") or x.get("sentiment_score") or 0),
+        )
+        for art in articles_sorted:
+            meta = _render_meta_strip(art)
+            headline = art.get("headline", "")
+            source_url = art.get("source_url", "#")
+            americhem_impact = art.get("americhem_impact", "")
+            so_what_html = (
+                f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
+                f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+                f'<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
+                if americhem_impact else ""
+            )
+            cards_html += (
+                f'<tr><td style="padding:6px 0 10px 0;">'
+                f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
+                f'font-family:Arial,sans-serif;">{meta}</p>'
+                f'<a href="{source_url}" style="font-size:14px;font-weight:700;'
+                f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
+                f'text-decoration:none;line-height:1.35;">{headline}</a>'
+                f'{so_what_html}'
+                f'</td></tr>'
+            )
+
+        blocks_html += (
+            f'<tr><td style="padding:18px 0 0 0;">'
+            f'<p style="margin:0 0 8px 0;font-size:12px;font-weight:700;'
+            f'letter-spacing:1px;text-transform:uppercase;color:{_BRAND_NAVY};'
+            f'font-family:Arial,sans-serif;">{segment_label}</p>'
+            f'{para_html}'
+            f'<table width="100%" cellpadding="0" cellspacing="0" border="0">{cards_html}</table>'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:{_BRAND_NAVY};
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      COMMERCIAL SEGMENT WATCH
+                    </td>
+                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {blocks_html}
+          </table>
+        </td>
+      </tr>"""
+
+
+# ---------------------------------------------------------------------------
+# Delivery suppression guardrail (Task 9)
+# ---------------------------------------------------------------------------
+
+from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
+
+_DELIVERY_SAMPLES_CAP = 10
+
+
+def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
+    """Case-insensitive substring match: True if any pattern appears in haystack."""
+    h = (haystack or "").lower()
+    return any(p.lower() in h for p in patterns or [])
+
+
+def _contains_any_term(text: str, terms: list[str]) -> bool:
+    """True if any of `terms` appears in `text` (case-insensitive substring)."""
+    t = (text or "").lower()
+    return any(term.lower() in t for term in terms or [])
+
+
+def _apply_delivery_suppression(
+    rows: list[dict],
+    config: dict,
+) -> tuple[list[dict], dict, list[dict]]:
+    """Run the deterministic seven-rule guardrail over fetched rows.
+
+    Returns (kept_rows, counts_by_reason, samples_capped_at_10).
+    First matching rule wins; a row is counted once.
+    """
+    sup_cfg = config.get("delivery_suppression") or {}
+    counts: dict[str, int] = {}
+    samples: list[dict] = []
+    kept: list[dict] = []
+    kept_headlines: list[str] = []
+
+    threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
+    enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
+    override_action = sup_cfg.get("job_posting_override_action", "Escalate to leadership")
+
+    product_patterns   = sup_cfg.get("url_patterns_product_listing", [])
+    job_patterns       = sup_cfg.get("url_patterns_job_posting", [])
+    market_patterns    = sup_cfg.get("title_patterns_generic_market_report", [])
+    color_terms        = sup_cfg.get("color_terms", [])
+    plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
+
+    def _suppress(reason: str, row: dict) -> None:
+        counts[reason] = counts.get(reason, 0) + 1
+        samples.append({
+            "reason": reason,
+            "url": row.get("source_url", ""),
+            "title": row.get("headline", ""),
+        })
+        if len(samples) > _DELIVERY_SAMPLES_CAP:
+            del samples[0]
+
+    for row in rows:
+        url = row.get("source_url", "") or ""
+        headline = row.get("headline", "") or ""
+        americhem_impact = row.get("americhem_impact", "") or ""
+        entities = row.get("entities_mentioned") or []
+        entities_text = " ".join(str(e) for e in entities)
+        action = row.get("recommended_action", "")
+
+        # Rule 1: Enterprise / Cross-Segment with low impact
+        if sup_cfg.get("enable_enterprise_low_impact", True):
+            segment = _commercial_segment_of(row)
+            score = int(row.get("americhem_impact_score") or 0)
+            if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
+                _suppress("enterprise_cross_segment_low_impact", row)
+                continue
+
+        # Rule 2: Product listing URL
+        if sup_cfg.get("enable_product_listing", True) and _matches_any_pattern(url, product_patterns):
+            _suppress("product_listing", row)
+            continue
+
+        # Rule 3: Job posting URL (unless escalated)
+        if sup_cfg.get("enable_job_posting", True) and _matches_any_pattern(url, job_patterns):
+            if action != override_action:
+                _suppress("job_posting", row)
+                continue
+
+        # Rule 4: Generic market report title with empty entities
+        if sup_cfg.get("enable_generic_market_report", True):
+            if _matches_any_pattern(headline, market_patterns) and not entities:
+                _suppress("generic_market_report", row)
+                continue
+
+        # Rule 5: Unrelated color result
+        if sup_cfg.get("enable_unrelated_color_result", True):
+            if _contains_any_term(headline, color_terms):
+                # Check headline and entities only — not americhem_impact, which may
+                # contain negating language like "No plastics relevance." that would
+                # cause a false substring match on "plastic".
+                relevance_haystack = f"{headline} {entities_text}"
+                if not _contains_any_term(relevance_haystack, plastics_terms):
+                    _suppress("unrelated_color_result", row)
+                    continue
+
+        # Rule 6: Exact duplicate headline (case-insensitive)
+        if sup_cfg.get("enable_duplicate_headline", True):
+            if headline and any(h.lower() == headline.lower() for h in kept_headlines):
+                _suppress("duplicate_headline", row)
+                continue
+
+        # Rule 7: Semantic duplicate headline
+        # Lowercase before comparison — rapidfuzz 3.x no longer auto-lowercases,
+        # so case differences in proper nouns would otherwise deflate the score.
+        if sup_cfg.get("enable_semantic_duplicate_headline", True) and kept_headlines and headline:
+            hl_lower = headline.lower()
+            scores = [_token_sort_ratio(hl_lower, h.lower()) for h in kept_headlines]
+            if scores and max(scores) >= threshold:
+                _suppress("semantic_duplicate_headline", row)
+                continue
+
+        kept.append(row)
+        if headline:
+            kept_headlines.append(headline)
+
+    return kept, counts, samples
+
+
 def _config_int(cfg: dict, key: str, default: int) -> int:
     """Read an int from a config sub-dict, coercing strings and warning on bad values."""
     try:
@@ -82,9 +378,155 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
 # Run-mode detection
 # ---------------------------------------------------------------------------
 
+def _run_mode() -> str:
+    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
+    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
+
+
 def _is_test_mode() -> bool:
-    """Return True when MARKET_PULSE_RUN_MODE env var is set to 'test' (case-insensitive)."""
-    return os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test"
+    """Return True when MARKET_PULSE_RUN_MODE=test (case-insensitive)."""
+    return _run_mode() == "test"
+
+
+# ---------------------------------------------------------------------------
+# QA suppression-summary (test-mode only)
+# ---------------------------------------------------------------------------
+
+# Ownership of suppression reason codes.
+# Ingestion writes these on the upsert in generate_macro_summary(); delivery
+# must preserve them when updating the row.
+_INGESTION_SUPPRESSION_KEYS: frozenset[str] = frozenset({
+    "duplicate_url",
+    "semantic_duplicate",
+    "llm_discard",
+    "scrape_failed",
+})
+
+# Delivery owns these — they are recomputed on every render and must be
+# OVERWRITTEN on retry, never added to prior values.
+_DELIVERY_SUPPRESSION_KEYS: frozenset[str] = frozenset({
+    "below_impact_threshold",
+    "weak_relevance",
+    "duplicate_headline",
+    "semantic_duplicate_headline",
+    "product_listing",
+    "job_posting",
+    "generic_market_report",
+    "unrelated_color_result",
+    "enterprise_cross_segment_low_impact",
+})
+
+_QA_REASON_LABELS: dict[str, str] = {
+    "duplicate_url":                       "duplicate URL",
+    "semantic_duplicate":                  "semantic duplicate",
+    "llm_discard":                         "LLM discard",
+    "scrape_failed":                       "scrape failed",
+    "below_impact_threshold":              "below impact threshold",
+    "weak_relevance":                      "weak relevance (4-5, ungrouped)",
+    "duplicate_headline":                  "duplicate headline",
+    "semantic_duplicate_headline":         "semantic duplicate headline",
+    "product_listing":                     "product listing",
+    "job_posting":                         "job posting",
+    "generic_market_report":               "generic market report",
+    "unrelated_color_result":              "unrelated color result",
+    "enterprise_cross_segment_low_impact": "Enterprise / Cross-Segment, low impact",
+}
+
+
+def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
+    """Render the QA suppression summary block. Caller is responsible for gating
+    on test mode; this function does not check MARKET_PULSE_RUN_MODE itself."""
+    if not macro_summary:
+        return ""
+
+    screened = macro_summary.get("screened_count")
+    surfaced = macro_summary.get("surfaced_count")
+    breakdown = macro_summary.get("suppression_breakdown") or {}
+    samples = macro_summary.get("suppression_samples") or []
+
+    suppressed_total = sum(int(v) for v in breakdown.values())
+
+    rows_html = ""
+    # Stable display order: ingestion-side first, then delivery-side.
+    display_order = [
+        "duplicate_url", "semantic_duplicate", "llm_discard", "scrape_failed",
+        "below_impact_threshold", "weak_relevance",
+        "duplicate_headline", "semantic_duplicate_headline",
+        "product_listing", "job_posting", "generic_market_report",
+        "unrelated_color_result", "enterprise_cross_segment_low_impact",
+    ]
+    for code in display_order:
+        if code in breakdown:
+            label = _QA_REASON_LABELS.get(code, code)
+            rows_html += (
+                f'<tr><td style="padding:2px 0;font-size:12px;color:#374151;'
+                f'font-family:Arial,sans-serif;">'
+                f'&nbsp;&nbsp;{label}'
+                f'</td><td align="right" style="padding:2px 0;font-size:12px;'
+                f'color:#374151;font-family:Arial,sans-serif;">{breakdown[code]}</td></tr>'
+            )
+
+    samples_html = ""
+    for s in samples[-10:]:
+        reason_code = s.get("reason", "")
+        reason_label = _QA_REASON_LABELS.get(reason_code, reason_code)
+        title = s.get("title", "")
+        url = s.get("url", "")
+        samples_html += (
+            f'<tr><td style="padding:2px 0;font-size:11px;color:#6B7280;'
+            f'font-family:monospace;">'
+            f'[{reason_label}] "{title}" — {url}'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:#9CA3AF;
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      QA &middot; Suppression Summary
+                    </td>
+                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
+                           font-family:Arial,sans-serif;">
+                  Screened: {screened if screened is not None else '?'} &nbsp;&middot;&nbsp;
+                  Surfaced: {surfaced if surfaced is not None else '?'} &nbsp;&middot;&nbsp;
+                  Suppressed: {suppressed_total}
+                </p>
+                <p style="margin:8px 0 4px 0;font-size:11px;color:#6B7280;
+                           font-family:Arial,sans-serif;text-transform:uppercase;
+                           letter-spacing:1px;">
+                  By reason
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {rows_html}
+                </table>
+                <p style="margin:12px 0 4px 0;font-size:11px;color:#6B7280;
+                           font-family:Arial,sans-serif;text-transform:uppercase;
+                           letter-spacing:1px;">
+                  Last 10 suppressed items
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {samples_html}
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +614,12 @@ def fetch_macro_summary() -> dict | None:
         supabase = _get_supabase()
         result = (
             supabase.table("daily_summaries")
-            .select("run_date, executive_summary, macro_sentiment")
+            .select(
+                "run_date, run_mode, executive_summary, macro_sentiment, "
+                "dominant_condition, executive_bullets, screened_count, "
+                "surfaced_count, suppression_breakdown, suppression_samples"
+            )
+            .eq("run_mode", _run_mode())
             .gte("run_date", min_run_date)
             .order("run_date", desc=True)
             .limit(1)
@@ -186,6 +633,64 @@ def fetch_macro_summary() -> dict | None:
     except Exception as exc:
         logger.error("Failed to fetch macro summary: %s", exc)
         return None
+
+
+def _update_delivery_summary_counts(
+    *,
+    surfaced_count: int,
+    delivery_counts: dict,
+    delivery_samples: list,
+) -> None:
+    """Update today's daily_summaries row (filtered by run_mode) with delivery-side stats.
+
+    Non-critical: failures are logged but do not raise.
+    """
+    try:
+        from datetime import date as _date
+        supabase = _get_supabase()
+
+        # Fetch the existing breakdown/samples so we can merge ours in.
+        existing = (
+            supabase.table("daily_summaries")
+            .select("suppression_breakdown, suppression_samples")
+            .eq("run_date", _date.today().isoformat())
+            .eq("run_mode", _run_mode())
+            .limit(1)
+            .execute()
+        )
+        rows = existing.data or []
+        prior_breakdown = (rows[0].get("suppression_breakdown") if rows else None) or {}
+        prior_samples   = (rows[0].get("suppression_samples")   if rows else None) or []
+
+        # Start from the prior breakdown but drop delivery-owned keys so this
+        # render can write fresh values for them. Ingestion-owned keys and any
+        # unknown future codes are preserved.
+        merged_breakdown = {
+            k: v for k, v in prior_breakdown.items()
+            if k not in _DELIVERY_SUPPRESSION_KEYS
+        }
+        for k, v in delivery_counts.items():
+            merged_breakdown[k] = int(v)
+
+        # Dedupe samples by (reason, url, title) before capping so retries don't
+        # produce duplicates of the same suppressed item.
+        seen: set[tuple] = set()
+        deduped_samples: list[dict] = []
+        for sample in list(prior_samples) + list(delivery_samples):
+            key = (sample.get("reason"), sample.get("url"), sample.get("title"))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped_samples.append(sample)
+        merged_samples = deduped_samples[-_DELIVERY_SAMPLES_CAP:]
+
+        supabase.table("daily_summaries").update({
+            "surfaced_count": surfaced_count,
+            "suppression_breakdown": merged_breakdown,
+            "suppression_samples": merged_samples,
+        }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
+    except Exception as exc:
+        logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -490,12 +995,64 @@ def _render_thematic_section(
 # 3. HTML generation helpers
 # ---------------------------------------------------------------------------
 
+def _render_executive_bullets(bullets: list[dict]) -> str:
+    """Render the 3-bullet executive summary body.
+
+    Each bullet uses bold label + body text. Labels come from the data, which
+    guarantees they match the configured executive_bullet_labels enforced by
+    ingestion's _validate_executive_bullets().
+    """
+    items_html = ""
+    for b in bullets:
+        label = b.get("label", "")
+        body = b.get("body", "")
+        items_html += (
+            f'<tr><td style="padding:2px 0;font-size:13px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+            f'&bull;&nbsp;<strong>{label}:</strong> {body}'
+            f'</td></tr>'
+        )
+    return (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
+        f'{items_html}</table>'
+    )
+
+
 def _render_exec_summary(macro_summary: dict | None) -> str:
+    """Render the Executive Summary row.
+
+    Prefers structured executive_bullets; falls back to legacy executive_summary prose.
+    Returns empty string when no summary data is present.
+    """
     if not macro_summary:
         return ""
 
-    sentiment    = macro_summary.get("macro_sentiment", "")
-    summary_text = macro_summary.get("executive_summary", "")
+    bullets = macro_summary.get("executive_bullets")
+    legacy_text = macro_summary.get("executive_summary") or ""
+    condition = (
+        macro_summary.get("dominant_condition")
+        or macro_summary.get("macro_sentiment")
+        or ""
+    )
+
+    if bullets:
+        body_html = _render_executive_bullets(bullets)
+    elif legacy_text:
+        body_html = (
+            f'<p style="margin:0;font-size:14px;color:#1a2a45;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
+            f'{legacy_text}</p>'
+        )
+    else:
+        return ""
+
+    badge_html = ""
+    if condition:
+        badge_html = (
+            f'&nbsp;<span style="background-color:{_BRAND_NAVY};color:#ffffff;'
+            f'padding:2px 10px;border-radius:20px;font-size:10px;font-weight:600;'
+            f'letter-spacing:0.5px;">{condition}</span>'
+        )
 
     return f"""
       <tr>
@@ -507,15 +1064,9 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
                 <p style="margin:0 0 8px 0;font-size:10px;font-weight:700;
                            letter-spacing:1.5px;color:{_BRAND_NAVY};
                            font-family:Arial,sans-serif;text-transform:uppercase;">
-                  Executive Summary &nbsp;
-                  <span style="background-color:{_BRAND_NAVY};color:#ffffff;
-                                padding:2px 10px;border-radius:20px;
-                                font-size:10px;font-weight:600;
-                                letter-spacing:0.5px;">{sentiment}</span>
+                  Executive Summary{badge_html}
                 </p>
-                <p style="margin:0;font-size:14px;color:#1a2a45;
-                           font-family:Georgia,'Times New Roman',serif;
-                           line-height:1.65;">{summary_text}</p>
+                {body_html}
               </td>
             </tr>
           </table>
@@ -695,97 +1246,103 @@ def generate_html_email(
     macro_summary: dict | None = None,
 ) -> str:
     config = _load_mp_config()
-    reporting_cfg             = config.get("reporting", {})
-    visible_threshold: int    = _config_int(reporting_cfg, "visible_impact_threshold", 6)
-    max_per_segment: int      = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
-    max_total_visible: int    = _config_int(reporting_cfg, "max_total_visible_articles", 12)
+    reporting_cfg          = config.get("reporting", {})
+    visible_threshold: int = _config_int(reporting_cfg, "visible_impact_threshold", 6)
+    max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
+    max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
 
-    # Zone 1 — Critical: old-style rows (no americhem_impact_score) with sentiment_score <= 3.
-    # New rows with low impact score are excluded from the report entirely (not shown as critical).
-    critical_hashes: set[str] = set()
-    critical: list[dict] = []
-    for r in data:
-        if r.get("americhem_impact_score") is None and (r.get("sentiment_score") or 5) <= 3:
-            critical_hashes.add(r.get("url_hash") or "")
-            critical.append(r)
+    # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
+    kept, delivery_sup_counts, delivery_sup_samples = _apply_delivery_suppression(data, config)
 
-    non_critical_all = [r for r in data if (r.get("url_hash") or "") not in critical_hashes]
+    # 2. Visibility filter.
+    visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]
+    below_threshold_count = len(kept) - len(visible_pool)
 
-    # Zone 2 — Thematic: articles at or above the visible impact threshold.
-    thematic_candidates = [r for r in non_critical_all if _effective_impact(r) >= visible_threshold]
-    original_groups = _group_for_thematic(thematic_candidates)
+    # 3. Group by commercial segment.
+    groups_full = _group_by_commercial_segment(visible_pool)
 
-    # Apply per-segment cap (highest-impact articles first within each group).
+    # 4. Per-segment cap (highest-impact articles first within each group).
     groups = {
         seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
-        for seg, arts in original_groups.items()
+        for seg, arts in groups_full.items()
     }
 
-    # Thin entries: articles never in any group (pass original_groups so capped-out
-    # articles are not re-admitted here).
-    thin_entries = _collect_thin_entries(thematic_candidates, original_groups)
-
-    # Apply total-visible cap across groups + thin_entries.
-    total_in_groups = sum(len(arts) for arts in groups.values())
-    if total_in_groups + len(thin_entries) > max_total_visible:
+    # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
+    total = sum(len(arts) for arts in groups.values())
+    if total > max_total_visible:
         all_visible = sorted(
-            [a for arts in groups.values() for a in arts] + thin_entries,
-            key=lambda x: _effective_impact(x),
+            [(seg, a) for seg, arts in groups.items() for a in arts],
+            key=lambda kv: _effective_impact(kv[1]),
             reverse=True,
         )[:max_total_visible]
-        selected_hashes = {a.get("url_hash") for a in all_visible}
-        groups = {
-            seg: [a for a in arts if a.get("url_hash") in selected_hashes]
-            for seg, arts in groups.items()
-        }
+        selected_hashes = {a.get("url_hash") for _, a in all_visible}
+        groups = {seg: [a for a in arts if a.get("url_hash") in selected_hashes]
+                  for seg, arts in groups.items()}
         groups = {seg: arts for seg, arts in groups.items() if arts}
-        thin_entries = [a for a in thin_entries if a.get("url_hash") in selected_hashes]
 
-    # Zone 3 — Peripheral: ungrouped moderate-impact articles from the thematic pool
-    # plus below-threshold OLD-style articles (new-style rows below threshold are excluded entirely).
-    # Use original_groups so capped-out articles don't leak into peripheral either.
-    peripheral_from_thematic = _collect_peripheral(thematic_candidates, original_groups)
-    below_threshold_legacy = [
-        r for r in non_critical_all
-        if _effective_impact(r) < visible_threshold
-        and r.get("americhem_impact_score") is None
-    ]
-    peripheral = sorted(
-        peripheral_from_thematic + below_threshold_legacy,
-        key=lambda x: _effective_impact(x),
+    # 6. Compute weak_relevance: rows in `kept` with effective impact 4-5 that
+    # didn't make it into any final group (the old Peripheral pool, now hidden).
+    final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
+    weak_relevance_count = sum(
+        1 for r in kept
+        if 4 <= _effective_impact(r) <= 5
+        and r.get("url_hash") not in final_hashes
     )
 
-    synthesis    = synthesize_thematic_paragraphs(groups)
+    # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
+    surfaced_count = sum(len(arts) for arts in groups.values())
 
-    sections_html = (
-        _render_section(
-            "CRITICAL", "Critical Disruptions",
-            "#EF4444", "#FEF2F2", "#B91C1C", critical,
-        )
-        + _render_thematic_section(groups, thin_entries, synthesis)
-        + _render_peripheral_section(peripheral)
+    # 8. Write delivery-side counts + surfaced_count back to today's row.
+    _update_delivery_summary_counts(
+        surfaced_count=surfaced_count,
+        delivery_counts={
+            **delivery_sup_counts,
+            "below_impact_threshold": below_threshold_count,
+            "weak_relevance": weak_relevance_count,
+        },
+        delivery_samples=delivery_sup_samples,
     )
 
+    # 9. Thematic synthesis paragraphs (existing helper, now keyed off the new groups).
+    multi_article_groups = {seg: arts for seg, arts in groups.items() if len(arts) >= 2}
+    synthesis = synthesize_thematic_paragraphs(multi_article_groups)
+
+    # 10. Build the HTML body.
+    sections_html = _render_segment_watch_section(groups, synthesis)
+
+    # Executive summary block (rendered via the existing helper, which Task 12 will
+    # upgrade to consume executive_bullets).
     exec_html = _render_exec_summary(macro_summary)
 
+    # Header counts. Null-safe handling is finalized in Task 13.
     today_str = datetime.now().strftime("%A, %B %d, %Y")
-    total     = len(data)
-    item_word = "item" if total == 1 else "items"
+    screened = (macro_summary or {}).get("screened_count")
+    if screened is None:
+        screened = len(data)
+    dominant_condition = (macro_summary or {}).get("dominant_condition") or (
+        macro_summary or {}
+    ).get("macro_sentiment") or ""
 
     macro_badge_html = ""
-    if macro_summary:
-        sentiment = macro_summary.get("macro_sentiment", "")
+    if dominant_condition:
         macro_badge_html = (
             f'<span style="background-color:rgba(127,176,105,0.2);'
             f'color:{_BRAND_GREEN};border:1px solid rgba(127,176,105,0.4);'
             f'padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;'
             f'font-family:Arial,sans-serif;letter-spacing:0.5px;">'
-            f'{sentiment}</span>'
+            f'{dominant_condition}</span>'
         )
 
     _test_mode = _is_test_mode()
     title_prefix = "[TEST] " if _test_mode else ""
     test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
+
+    qa_html = _render_qa_debug_section(macro_summary) if _test_mode else ""
+
+    subtitle = (
+        f"{today_str} &nbsp;&middot;&nbsp; "
+        f"{surfaced_count} surfaced signals from {screened} screened items"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -830,7 +1387,7 @@ def generate_html_email(
               <td style="background-color:{_BRAND_NAVY_DARK};padding:10px 32px;">
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
                   <tr>
-                    <td style="font-size:12px;color:rgba(255,255,255,0.65);font-family:Arial,sans-serif;">{today_str} &nbsp;&middot;&nbsp; {total} {item_word} today</td>
+                    <td style="font-size:12px;color:rgba(255,255,255,0.65);font-family:Arial,sans-serif;">{subtitle}</td>
                     <td align="right">{macro_badge_html}</td>
                   </tr>
                 </table>
@@ -840,6 +1397,7 @@ def generate_html_email(
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             {exec_html}
             {sections_html}
+            {qa_html}
             <tr><td style="height:24px;"></td></tr>
           </table>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">

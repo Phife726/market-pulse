@@ -17,6 +17,12 @@ from supabase import create_client, Client
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+
+def _run_mode() -> str:
+    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
+    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
+
+
 MAX_DAILY_SCRAPES = 150
 OPENAI_MODEL = "gpt-5.4-nano"
 PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
@@ -25,9 +31,15 @@ _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MP_CONFIG: Optional[dict] = None
 
-_FALLBACK_SEGMENT_LIST = (
-    "Healthcare | Fibers | Packaging | Industrial | Raw Materials / Supply Chain | "
-    "Regulatory / Sustainability | Competitive / Customer Signal | Broader Americhem"
+_FALLBACK_COMMERCIAL_SEGMENT_LIST = (
+    "Healthcare | Fibers | Transportation - Automotive | "
+    "Transportation - Non-Automotive | Transportation - Aerospace | "
+    "Industrial | Packaging | Engineered Resins | Enterprise / Cross-Segment"
+)
+
+_FALLBACK_SIGNAL_TYPE_LIST = (
+    "Competitive | Customer | Regulatory | Sustainability | "
+    "Supply Chain | Technology | Macro | Other"
 )
 
 
@@ -44,11 +56,11 @@ def _load_mp_config() -> dict:
     return _MP_CONFIG
 
 
-def _build_segment_rule(config: dict) -> str:
-    """Return RULE 4 text with segment labels and descriptions injected from config."""
-    segments = config.get("strategic_segments") or {}
+def _build_commercial_segment_rule(config: dict) -> str:
+    """Return RULE 4 text with commercial segment labels and descriptions from config."""
+    segments = config.get("commercial_segments") or {}
     if not segments:
-        segment_block = _FALLBACK_SEGMENT_LIST
+        block = _FALLBACK_COMMERCIAL_SEGMENT_LIST
     else:
         lines = []
         for seg in segments.values():
@@ -58,15 +70,39 @@ def _build_segment_rule(config: dict) -> str:
             desc = (seg.get("description") or "").strip().replace("\n", " ")
             if label:
                 lines.append(f"  {label}: {desc}" if desc else f"  {label}")
-        segment_block = "\n".join(lines) if lines else _FALLBACK_SEGMENT_LIST
+        block = "\n".join(lines) if lines else _FALLBACK_COMMERCIAL_SEGMENT_LIST
 
-    return f"""RULE 4 — STRATEGIC SEGMENT:
-Assign the single best-fit segment label from this list:
+    return f"""RULE 4 — COMMERCIAL SEGMENT:
+Assign the single best-fit commercial segment for the affected end-market:
 
-{segment_block}
+{block}
 
-Choose "Broader Americhem" only when the article spans multiple segments or addresses
-general plastics/compounding industry trends without a dominant segment fit."""
+Choose "Enterprise / Cross-Segment" only when the article spans multiple segments
+or addresses Americhem-wide topics with no single end-market dominating."""
+
+
+def _build_signal_type_rule(config: dict) -> str:
+    """Return RULE 5 text with signal type labels and descriptions from config."""
+    signals = config.get("signal_types") or {}
+    if not signals:
+        block = _FALLBACK_SIGNAL_TYPE_LIST
+    else:
+        lines = []
+        for sig in signals.values():
+            if not isinstance(sig, dict):
+                continue
+            label = sig.get("label", "")
+            desc = (sig.get("description") or "").strip().replace("\n", " ")
+            if label:
+                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
+        block = "\n".join(lines) if lines else _FALLBACK_SIGNAL_TYPE_LIST
+
+    return f"""RULE 5 — SIGNAL TYPE:
+Assign the single kind of signal this article represents:
+
+{block}
+
+Prefer a named type over "Other" whenever possible."""
 
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "source set 238658",
@@ -159,6 +195,22 @@ def _scrape_fallback(url: str) -> Optional[str]:
     return text if text else None
 
 
+_SUPPRESSION_SAMPLES_CAP = 10
+
+
+def _record_suppression(
+    counts: dict,
+    samples: list,
+    *,
+    reason: str,
+    url: str,
+    title: str,
+) -> None:
+    """Increment the counter for `reason` and append a sample (FIFO cap = 10)."""
+    counts[reason] = counts.get(reason, 0) + 1
+    samples.append({"reason": reason, "url": url, "title": title})
+    if len(samples) > _SUPPRESSION_SAMPLES_CAP:
+        del samples[0]
 
 
 def _get_supabase() -> Client:
@@ -354,7 +406,7 @@ a global manufacturer of custom color masterbatch, functional additives, and eng
 serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
 Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-six rules below before generating any output.
+seven rules below before generating any output.
 
 RULE 1 — ENTITY DISAMBIGUATION:
 Before scoring, verify that the named entity in this article is the correct one.
@@ -395,14 +447,16 @@ Score by weighting these factors:
 
 {rule4}
 
-RULE 5 — RIGOROUS IMPACT STATEMENT:
+{rule5}
+
+RULE 6 — RIGOROUS IMPACT STATEMENT:
 Always write a specific So-What for Americhem even for routine items.
 Identify which business unit or cost line could be affected and in what direction.
 If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
 Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
-RULE 6 — DOMAIN RELEVANCE FIREWALL:
+RULE 7 — DOMAIN RELEVANCE FIREWALL:
 Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
 absolutely zero connection to plastics, polymers, chemicals, materials, manufacturing,
 composites, packaging, or supply chain dynamics.
@@ -422,7 +476,8 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
   "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
   "americhem_impact_score": <integer 1-10 per Rule 3>,
   "impact_rationale": "<max 15 words explaining why this impact score was assigned>",
-  "strategic_segment": "<exactly one segment label from Rule 4>",
+  "commercial_segment": "<exact label from RULE 4>",
+  "signal_type": "<exact label from RULE 5>",
   "sentiment_rationale": "<max 10 words explaining exactly why this sentiment was assigned>",
   "recommended_action": "<one of: No action | Monitor | Flag to procurement | Share with sales | Escalate to leadership>",
   "source_url": "<MUST EXACTLY MATCH the URL provided in the user prompt>",
@@ -431,9 +486,10 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
 
 
 def _build_system_prompt(config: dict) -> str:
-    """Assemble the full system prompt, injecting segment taxonomy from config."""
-    rule4 = _build_segment_rule(config)
-    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4)
+    """Assemble the full system prompt, injecting commercial segment and signal type taxonomies."""
+    rule4 = _build_commercial_segment_rule(config)
+    rule5 = _build_signal_type_rule(config)
+    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4).replace("{rule5}", rule5)
 
 _VALID_ACTIONS: frozenset[str] = frozenset({
     "No action", "Monitor", "Flag to procurement",
@@ -441,6 +497,29 @@ _VALID_ACTIONS: frozenset[str] = frozenset({
 })
 
 _VALID_SENTIMENT_TAGS: frozenset[str] = frozenset({"Negative", "Neutral", "Positive"})
+
+_VALID_COMMERCIAL_SEGMENTS: frozenset[str] = frozenset({
+    "Healthcare", "Fibers",
+    "Transportation - Automotive", "Transportation - Non-Automotive",
+    "Transportation - Aerospace",
+    "Industrial", "Packaging", "Engineered Resins",
+    "Enterprise / Cross-Segment",
+})
+
+_VALID_SIGNAL_TYPES: frozenset[str] = frozenset({
+    "Competitive", "Customer", "Regulatory", "Sustainability",
+    "Supply Chain", "Technology", "Macro", "Other",
+})
+
+_VALID_MACRO_CONDITIONS: frozenset[str] = frozenset({
+    "Competitive Pressure", "Supply Volatility", "Demand Expansion",
+    "Demand Softness", "Regulatory Pressure", "Sustainability Pull",
+    "Commercial Opportunity", "Mixed / Watch", "Low Signal",
+})
+
+_EXEC_BULLET_LABELS: tuple[str, ...] = (
+    "Market pressure", "Supply chain watch", "Commercial action",
+)
 
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
@@ -490,8 +569,22 @@ def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, 
     except (ValueError, TypeError, KeyError):
         insight["americhem_impact_score"] = 5
     insight.setdefault("impact_rationale", "")
-    if not (insight.get("strategic_segment") or "").strip():
-        insight["strategic_segment"] = "Broader Americhem"
+    # commercial_segment validation (RULE 4)
+    seg = (insight.get("commercial_segment") or "").strip() if isinstance(insight.get("commercial_segment"), str) else ""
+    if seg in _VALID_COMMERCIAL_SEGMENTS:
+        insight["commercial_segment"] = seg
+    else:
+        insight["commercial_segment"] = "Enterprise / Cross-Segment"
+
+    # signal_type validation (RULE 5)
+    sig = (insight.get("signal_type") or "").strip() if isinstance(insight.get("signal_type"), str) else ""
+    if sig in _VALID_SIGNAL_TYPES:
+        insight["signal_type"] = sig
+    else:
+        insight["signal_type"] = "Other"
+
+    # Drop legacy strategic_segment if the LLM still returns it.
+    insight.pop("strategic_segment", None)
     if not isinstance(insight["entities_mentioned"], list):
         insight["entities_mentioned"] = []
     insight.setdefault("source_publication", "")
@@ -544,11 +637,45 @@ def store_insight(payload: dict) -> bool:
         return False
 
 
-def generate_macro_summary(articles: list[dict]) -> bool:
-    """Generate a macro executive summary from today's stored articles.
+def _validate_executive_bullets(raw) -> Optional[list[dict]]:
+    """Return the bullets list if valid; None otherwise (delivery falls back to prose).
 
-    Calls the configured OpenAI model with all article headlines and impacts, then upserts
-    a single row into daily_summaries keyed on today's run_date.
+    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in order,
+    and non-empty string body fields.
+    """
+    if not isinstance(raw, list) or len(raw) != 3:
+        return None
+    cleaned: list[dict] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            return None
+        label = item.get("label")
+        body = item.get("body")
+        if label != _EXEC_BULLET_LABELS[i]:
+            return None
+        if not isinstance(body, str) or not body.strip():
+            return None
+        cleaned.append({"label": label, "body": body.strip()})
+    return cleaned
+
+
+def generate_macro_summary(
+    articles: list[dict],
+    *,
+    screened_count: Optional[int] = None,
+    suppression_breakdown: Optional[dict] = None,
+    suppression_samples: Optional[list] = None,
+) -> bool:
+    """Generate a structured macro summary from today's stored articles.
+
+    Writes dominant_condition (constrained enum) and executive_bullets (3-bullet
+    JSON) to daily_summaries. Also populates legacy executive_summary and
+    macro_sentiment columns for backward compatibility.
+
+    The optional keyword args persist ingestion-side suppression accounting:
+    - screened_count: total URLs discovered (stats["urls_discovered"])
+    - suppression_breakdown: reason-code counters dict
+    - suppression_samples: list of up to 10 suppressed-item samples
     """
     if not articles:
         logger.warning("No articles to summarize — skipping macro summary generation.")
@@ -558,19 +685,36 @@ def generate_macro_summary(articles: list[dict]) -> bool:
 
     article_digest = "\n".join(
         f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
-        f"(Score {a.get('sentiment_score', '')}/10): {a.get('americhem_impact', '')}"
+        f"(Impact {a.get('americhem_impact_score', a.get('sentiment_score', ''))}/10): "
+        f"{a.get('americhem_impact', '')}"
         for a in articles
+    )
+
+    macro_conditions_text = ", ".join(sorted(_VALID_MACRO_CONDITIONS))
+    label_a, label_b, label_c = _EXEC_BULLET_LABELS
+
+    system_prompt = (
+        "You are a senior Americhem commercial intelligence analyst writing the morning brief\n"
+        "for GMMs and Sales leaders. Output ONLY a JSON object with two keys.\n\n"
+        "1. dominant_condition — pick exactly one value from this list that best describes\n"
+        "   today's overall commercial weather across the digest:\n"
+        f"     {macro_conditions_text}\n\n"
+        "2. executive_bullets — exactly three objects, in this order, with these exact labels:\n"
+        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>"}}\n'
+        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>"}}\n'
+        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>"}}\n\n'
+        '   Each body must reference specific named entities or segments from the digest.\n'
+        '   Do NOT hedge ("may", "could", "potentially") without a specific data point.\n'
+        '   Do NOT write generic statements ("monitor closely", "remain vigilant").\n\n'
+        '   Low-signal special case:\n'
+        '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
+        '   literal string "No action required." The other two bullets MUST describe the\n'
+        '   absence of meaningful signal.'
     )
 
     user_prompt = (
         f"Today's market intelligence digest for Americhem ({len(articles)} articles):\n\n"
-        f"{article_digest}\n\n"
-        f"Generate a JSON object with exactly two keys:\n"
-        f"- executive_summary: A 3-sentence macro summary of today's most important market movements "
-        f"and their implications for Americhem's supply chain and commercial position.\n"
-        f"- macro_sentiment: One word or short phrase describing overall market tone "
-        f"(e.g. Stable, Bearish, Volatile, Cautiously Optimistic, Bullish).\n"
-        f"Output ONLY the JSON object."
+        f"{article_digest}\n\nOutput ONLY the JSON object."
     )
 
     try:
@@ -578,7 +722,7 @@ def generate_macro_summary(articles: list[dict]) -> bool:
             model=OPENAI_MODEL,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": "You are a senior market intelligence analyst. Output only valid JSON."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
@@ -587,11 +731,29 @@ def generate_macro_summary(articles: list[dict]) -> bool:
         if content is None:
             raise ValueError("OpenAI returned empty content for macro summary")
         parsed = json.loads(content)
-        executive_summary = parsed["executive_summary"]
-        macro_sentiment = parsed["macro_sentiment"]
     except Exception as exc:
         logger.error("Failed to generate macro summary from OpenAI: %s", exc)
         return False
+
+    # Validate dominant_condition.
+    cond_raw = parsed.get("dominant_condition")
+    if cond_raw not in _VALID_MACRO_CONDITIONS:
+        cond = "Low Signal" if len(articles) < 3 else "Mixed / Watch"
+    else:
+        cond = cond_raw
+
+    # Validate executive_bullets.
+    bullets = _validate_executive_bullets(parsed.get("executive_bullets"))
+
+    # Low Signal: force the third bullet body.
+    if bullets is not None and cond == "Low Signal":
+        bullets[2] = {"label": _EXEC_BULLET_LABELS[2], "body": "No action required."}
+
+    # Legacy executive_summary string for backward compat.
+    if bullets is not None:
+        executive_summary = " ".join(f"{b['label']}: {b['body']}" for b in bullets)
+    else:
+        executive_summary = "Macro summary unavailable today."
 
     try:
         from datetime import date
@@ -599,12 +761,18 @@ def generate_macro_summary(articles: list[dict]) -> bool:
         supabase.table("daily_summaries").upsert(
             {
                 "run_date": date.today().isoformat(),
+                "run_mode": _run_mode(),
+                "dominant_condition": cond,
+                "executive_bullets": bullets,
                 "executive_summary": executive_summary,
-                "macro_sentiment": macro_sentiment,
+                "macro_sentiment": cond,
+                "screened_count": screened_count,
+                "suppression_breakdown": suppression_breakdown or {},
+                "suppression_samples": suppression_samples or [],
             },
-            on_conflict="run_date",
+            on_conflict="run_date,run_mode",
         ).execute()
-        logger.info("Macro summary upserted — sentiment: %s", macro_sentiment)
+        logger.info("Macro summary upserted — condition: %s", cond)
         return True
     except Exception as exc:
         logger.error("Failed to upsert macro summary to Supabase: %s", exc)
@@ -614,13 +782,13 @@ def generate_macro_summary(articles: list[dict]) -> bool:
 def _log_stats(stats: dict) -> None:
     logger.info(
         "Pipeline complete — discovered: %d | duplicates skipped: %d | "
-        "semantic duplicates: %d | too short: %d | discards: %d | "
+        "semantic duplicates: %d | scrape failed: %d | discards: %d | "
         "scrapes attempted: %d | stored: %d | errors: %d",
         stats["urls_discovered"],
-        stats["urls_skipped_duplicate"],
-        stats.get("urls_skipped_semantic_duplicate", 0),
-        stats["urls_skipped_too_short"],
-        stats.get("urls_skipped_discard", 0),
+        stats.get("duplicate_url", 0),
+        stats.get("semantic_duplicate", 0),
+        stats.get("scrape_failed", 0),
+        stats.get("llm_discard", 0),
         stats["scrapes_attempted"],
         stats["insights_stored"],
         stats["errors"],
@@ -634,15 +802,17 @@ def execute_pipeline() -> None:
     scrapes_attempted = 0
     stats = {
         "urls_discovered": 0,
-        "urls_skipped_duplicate": 0,
-        "urls_skipped_semantic_duplicate": 0,
-        "urls_skipped_too_short": 0,
-        "urls_skipped_discard": 0,
         "scrapes_attempted": 0,
         "insights_stored": 0,
         "errors": 0,
+        # Reason-code counters (also become daily_summaries.suppression_breakdown)
+        "duplicate_url": 0,
+        "semantic_duplicate": 0,
+        "llm_discard": 0,
+        "scrape_failed": 0,
     }
     stored_articles_buffer: list[dict] = []
+    suppression_samples: list[dict] = []
 
     for target in targets:
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
@@ -668,13 +838,27 @@ def execute_pipeline() -> None:
                     PIPELINE_DEADLINE_SECONDS,
                 )
                 _log_stats(stats)
-                generate_macro_summary(stored_articles_buffer)
+                generate_macro_summary(
+                    stored_articles_buffer,
+                    screened_count=stats["urls_discovered"],
+                    suppression_breakdown={k: v for k, v in stats.items()
+                                           if k in {"duplicate_url", "semantic_duplicate",
+                                                    "llm_discard", "scrape_failed"}},
+                    suppression_samples=suppression_samples,
+                )
                 return
 
             if scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
                 _log_stats(stats)
-                generate_macro_summary(stored_articles_buffer)
+                generate_macro_summary(
+                    stored_articles_buffer,
+                    screened_count=stats["urls_discovered"],
+                    suppression_breakdown={k: v for k, v in stats.items()
+                                           if k in {"duplicate_url", "semantic_duplicate",
+                                                    "llm_discard", "scrape_failed"}},
+                    suppression_samples=suppression_samples,
+                )
                 return
 
             normalized = normalize_url(raw_url)
@@ -682,7 +866,8 @@ def execute_pipeline() -> None:
 
             if url_already_processed(url_hash):
                 logger.info("Duplicate — skipping: %s", normalized)
-                stats["urls_skipped_duplicate"] += 1
+                _record_suppression(stats, suppression_samples, reason="duplicate_url",
+                                    url=raw_url, title=serper_title)
                 continue
 
             is_dup, matched, score = is_semantic_duplicate(serper_title, seen_headlines)
@@ -691,7 +876,8 @@ def execute_pipeline() -> None:
                     "SEMANTIC_DUPLICATE — skipped: '%s' ~ '%s' | score: %d",
                     serper_title, matched, score,
                 )
-                stats["urls_skipped_semantic_duplicate"] += 1
+                _record_suppression(stats, suppression_samples, reason="semantic_duplicate",
+                                    url=raw_url, title=serper_title)
                 continue
 
             scrapes_attempted += 1
@@ -699,7 +885,8 @@ def execute_pipeline() -> None:
 
             article_text = scrape_article(raw_url, min_article_length)
             if article_text is None:
-                stats["urls_skipped_too_short"] += 1
+                _record_suppression(stats, suppression_samples, reason="scrape_failed",
+                                    url=raw_url, title=serper_title)
                 time.sleep(1.5)
                 continue
 
@@ -711,7 +898,8 @@ def execute_pipeline() -> None:
 
             if insight.get("americhem_impact") == "DISCARD":
                 logger.info("DISCARD — false positive: %s", normalized)
-                stats["urls_skipped_discard"] += 1
+                _record_suppression(stats, suppression_samples, reason="llm_discard",
+                                    url=raw_url, title=serper_title)
                 time.sleep(1.5)
                 continue
 
@@ -731,7 +919,8 @@ def execute_pipeline() -> None:
                 "sentiment_tag": insight.get("sentiment_tag", "Neutral"),
                 "americhem_impact_score": insight.get("americhem_impact_score", 5),
                 "impact_rationale": insight.get("impact_rationale", ""),
-                "strategic_segment": insight.get("strategic_segment", "Broader Americhem"),
+                "commercial_segment": insight.get("commercial_segment", "Enterprise / Cross-Segment"),
+                "signal_type": insight.get("signal_type", "Other"),
             }
 
             if store_insight(payload):
@@ -750,7 +939,14 @@ def execute_pipeline() -> None:
             time.sleep(1.5)
 
     _log_stats(stats)
-    generate_macro_summary(stored_articles_buffer)
+    generate_macro_summary(
+        stored_articles_buffer,
+        screened_count=stats["urls_discovered"],
+        suppression_breakdown={k: v for k, v in stats.items()
+                               if k in {"duplicate_url", "semantic_duplicate",
+                                        "llm_discard", "scrape_failed"}},
+        suppression_samples=suppression_samples,
+    )
 
 
 if __name__ == "__main__":

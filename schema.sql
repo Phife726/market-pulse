@@ -22,7 +22,10 @@ create table if not exists daily_intelligence (
     americhem_impact_score smallint check (americhem_impact_score between 1 and 10),
     impact_rationale text,
     strategic_segment text,
-    include_in_report boolean default true
+    include_in_report boolean default true,
+    -- Commercial intelligence brief fields (migration 002)
+    commercial_segment text,
+    signal_type text
 );
 
 -- Unique index to prevent duplicate entries for normalized article URLs.
@@ -50,11 +53,25 @@ create table if not exists daily_summaries (
     created_at timestamptz not null default now(),
     run_date date not null,
     executive_summary text not null,
-    macro_sentiment text not null
+    macro_sentiment text not null,
+    -- Commercial intelligence brief fields (migration 002)
+    run_mode text not null default 'production',
+    dominant_condition text,
+    executive_bullets jsonb,
+    screened_count integer,
+    surfaced_count integer,
+    suppression_breakdown jsonb,
+    suppression_samples jsonb
 );
 
-create unique index if not exists idx_daily_summaries_run_date_unique
-    on daily_summaries (run_date);
+create unique index if not exists idx_daily_summaries_run_date_mode_unique
+    on daily_summaries (run_date, run_mode);
+
+create index if not exists idx_daily_intelligence_commercial_segment
+    on daily_intelligence (commercial_segment);
+
+create index if not exists idx_daily_intelligence_signal_type
+    on daily_intelligence (signal_type);
 
 create or replace view todays_intelligence as
 select
