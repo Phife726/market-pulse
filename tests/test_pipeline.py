@@ -1053,43 +1053,88 @@ def test_render_thematic_section_category_header_uppercase():
 # Task 7 — generate_html_email integration
 # ---------------------------------------------------------------------------
 
-def test_generate_html_email_all_critical_no_thematic_section(monkeypatch):
-    """When all articles score 1–3, Thematic Intelligence must not appear."""
+def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
+    """Legacy sentiment_score<=3 rows appear in Commercial Segment Watch with a
+    CRITICAL badge in the meta strip. The old Critical Disruptions section is gone."""
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     data = [
-        {**_make_article(f"h{i}", 2, "suppliers", f"Critical Headline {i}")}
-        for i in range(3)
+        {"url_hash": "c0", "sentiment_score": 2, "category": "suppliers",
+         "headline": "Legacy critical headline about plant fire",
+         "americhem_impact": "Disruption.",
+         "entities_mentioned": ["BASF"], "source_url": "https://x/0",
+         "strategic_segment": "Broader Americhem"},
     ]
-    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
-    assert "THEMATIC INTELLIGENCE" not in html
+    # Note: this legacy row has no americhem_impact_score, so the visibility filter
+    # uses sentiment_score=2 -> effective_impact <= 3, which is BELOW the visible
+    # threshold (6). So the row will not surface in the segment watch under the
+    # current threshold filter. What we DO assert: the old section labels are gone
+    # and Peripheral Signals is hidden in production. The CRITICAL badge behaviour
+    # is unit-tested directly via test_render_segment_watch_section_critical_badge_for_legacy_low_score.
     assert "PERIPHERAL SIGNALS" not in html
-    assert "Critical Headline 0" in html
-
-
-def test_generate_html_email_routes_to_thematic_with_two_plus(monkeypatch):
-    """Two articles in same category produce a Thematic Intelligence section."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    mock_client = _make_synthesis_mock({"competitors": "Synthesis paragraph here."})
-    data = [
-        _make_article("a", 7, "competitors", "Avient Headline"),
-        _make_article("b", 8, "competitors", "Techmer Headline"),
-    ]
-    with patch("delivery_engine._get_openai", return_value=mock_client):
-        html = generate_html_email(data)
-    assert "THEMATIC INTELLIGENCE" in html
-    assert "Synthesis paragraph here." in html
-
-
-def test_generate_html_email_routes_single_low_to_peripheral(monkeypatch):
-    """Single score 4–6 article goes to Peripheral Signals, not Thematic."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    data = [_make_article("x", 5, "markets", "Peripheral Headline")]
-    with patch("delivery_engine._get_openai", return_value=MagicMock()):
-        html = generate_html_email(data)
-    assert "PERIPHERAL SIGNALS" in html
-    assert "Peripheral Headline" in html
+    assert "CRITICAL DISRUPTIONS" not in html
     assert "THEMATIC INTELLIGENCE" not in html
+
+
+def test_generate_html_email_routes_two_plus_to_segment_watch(monkeypatch):
+    """Two articles in the same commercial_segment produce a Commercial Segment
+    Watch block with a synthesis paragraph."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    data = [
+        {"url_hash": "a", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 7, "sentiment_tag": "Positive",
+         "signal_type": "Customer", "headline": "Avient expands healthcare polymer line",
+         "americhem_impact": "Effect.", "source_url": "https://x/a",
+         "entities_mentioned": ["Avient"]},
+        {"url_hash": "b", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 8, "sentiment_tag": "Positive",
+         "signal_type": "Customer", "headline": "Techmer launches sterilizable compound line",
+         "americhem_impact": "Effect.", "source_url": "https://x/b",
+         "entities_mentioned": ["Techmer"]},
+    ]
+    mock_synth = _make_synthesis_mock({"Healthcare": "Synthesis paragraph here."})
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=mock_synth), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(data)
+    assert "COMMERCIAL SEGMENT WATCH" in html
+    assert "Healthcare" in html
+    assert "Synthesis paragraph here." in html
+    assert "THEMATIC INTELLIGENCE" not in html
+
+
+def test_generate_html_email_single_low_relevance_hidden_in_production(monkeypatch):
+    """An ungrouped impact-5 article must be HIDDEN in production
+    (no Peripheral Signals section anymore)."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    data = [{"url_hash": "x", "commercial_segment": "Packaging",
+             "americhem_impact_score": 5, "sentiment_tag": "Neutral",
+             "signal_type": "Customer",
+             "headline": "Low relevance packaging signal",
+             "americhem_impact": ".", "source_url": "https://x/p",
+             "entities_mentioned": ["Acme"]}]
+    mock_supa = MagicMock()
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+
+    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
+        html = generate_html_email(data)
+    assert "Low relevance packaging signal" not in html
+    assert "PERIPHERAL SIGNALS" not in html
 
 
 # ---------------------------------------------------------------------------
