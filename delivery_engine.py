@@ -11,7 +11,7 @@ import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
-from suppression_ledger import SuppressionLedger, label_for, DELIVERY_CODES
+from suppression_ledger import SuppressionLedger, label_for
 
 logging.basicConfig(
     level=logging.INFO,
