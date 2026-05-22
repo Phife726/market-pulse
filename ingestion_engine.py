@@ -9,6 +9,8 @@ from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
 from typing import Optional
 
+from suppression_ledger import SuppressionLedger
+
 import requests
 import yaml
 from openai import OpenAI
@@ -194,23 +196,6 @@ def _scrape_fallback(url: str) -> Optional[str]:
     text = extractor.get_text()
     return text if text else None
 
-
-_SUPPRESSION_SAMPLES_CAP = 10
-
-
-def _record_suppression(
-    counts: dict,
-    samples: list,
-    *,
-    reason: str,
-    url: str,
-    title: str,
-) -> None:
-    """Increment the counter for `reason` and append a sample (FIFO cap = 10)."""
-    counts[reason] = counts.get(reason, 0) + 1
-    samples.append({"reason": reason, "url": url, "title": title})
-    if len(samples) > _SUPPRESSION_SAMPLES_CAP:
-        del samples[0]
 
 
 def _get_supabase() -> Client:
@@ -779,16 +764,16 @@ def generate_macro_summary(
         return False
 
 
-def _log_stats(stats: dict) -> None:
+def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
     logger.info(
         "Pipeline complete — discovered: %d | duplicates skipped: %d | "
         "semantic duplicates: %d | scrape failed: %d | discards: %d | "
         "scrapes attempted: %d | stored: %d | errors: %d",
         stats["urls_discovered"],
-        stats.get("duplicate_url", 0),
-        stats.get("semantic_duplicate", 0),
-        stats.get("scrape_failed", 0),
-        stats.get("llm_discard", 0),
+        breakdown.get("duplicate_url", 0),
+        breakdown.get("semantic_duplicate", 0),
+        breakdown.get("scrape_failed", 0),
+        breakdown.get("llm_discard", 0),
         stats["scrapes_attempted"],
         stats["insights_stored"],
         stats["errors"],
@@ -805,14 +790,9 @@ def execute_pipeline() -> None:
         "scrapes_attempted": 0,
         "insights_stored": 0,
         "errors": 0,
-        # Reason-code counters (also become daily_summaries.suppression_breakdown)
-        "duplicate_url": 0,
-        "semantic_duplicate": 0,
-        "llm_discard": 0,
-        "scrape_failed": 0,
     }
     stored_articles_buffer: list[dict] = []
-    suppression_samples: list[dict] = []
+    suppression_ledger = SuppressionLedger.for_ingestion()
 
     for target in targets:
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
@@ -837,27 +817,21 @@ def execute_pipeline() -> None:
                     "Pipeline deadline (%ds) reached mid-batch — stopping early.",
                     PIPELINE_DEADLINE_SECONDS,
                 )
-                _log_stats(stats)
+                _log_stats(stats, suppression_ledger.breakdown)
                 generate_macro_summary(
                     stored_articles_buffer,
                     screened_count=stats["urls_discovered"],
-                    suppression_breakdown={k: v for k, v in stats.items()
-                                           if k in {"duplicate_url", "semantic_duplicate",
-                                                    "llm_discard", "scrape_failed"}},
-                    suppression_samples=suppression_samples,
+                    **suppression_ledger.to_row(),
                 )
                 return
 
             if scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
-                _log_stats(stats)
+                _log_stats(stats, suppression_ledger.breakdown)
                 generate_macro_summary(
                     stored_articles_buffer,
                     screened_count=stats["urls_discovered"],
-                    suppression_breakdown={k: v for k, v in stats.items()
-                                           if k in {"duplicate_url", "semantic_duplicate",
-                                                    "llm_discard", "scrape_failed"}},
-                    suppression_samples=suppression_samples,
+                    **suppression_ledger.to_row(),
                 )
                 return
 
@@ -866,8 +840,9 @@ def execute_pipeline() -> None:
 
             if url_already_processed(url_hash):
                 logger.info("Duplicate — skipping: %s", normalized)
-                _record_suppression(stats, suppression_samples, reason="duplicate_url",
-                                    url=raw_url, title=serper_title)
+                suppression_ledger = suppression_ledger.record(
+                    "duplicate_url", url=raw_url, title=serper_title,
+                )
                 continue
 
             is_dup, matched, score = is_semantic_duplicate(serper_title, seen_headlines)
@@ -876,8 +851,9 @@ def execute_pipeline() -> None:
                     "SEMANTIC_DUPLICATE — skipped: '%s' ~ '%s' | score: %d",
                     serper_title, matched, score,
                 )
-                _record_suppression(stats, suppression_samples, reason="semantic_duplicate",
-                                    url=raw_url, title=serper_title)
+                suppression_ledger = suppression_ledger.record(
+                    "semantic_duplicate", url=raw_url, title=serper_title,
+                )
                 continue
 
             scrapes_attempted += 1
@@ -885,8 +861,9 @@ def execute_pipeline() -> None:
 
             article_text = scrape_article(raw_url, min_article_length)
             if article_text is None:
-                _record_suppression(stats, suppression_samples, reason="scrape_failed",
-                                    url=raw_url, title=serper_title)
+                suppression_ledger = suppression_ledger.record(
+                    "scrape_failed", url=raw_url, title=serper_title,
+                )
                 time.sleep(1.5)
                 continue
 
@@ -898,8 +875,9 @@ def execute_pipeline() -> None:
 
             if insight.get("americhem_impact") == "DISCARD":
                 logger.info("DISCARD — false positive: %s", normalized)
-                _record_suppression(stats, suppression_samples, reason="llm_discard",
-                                    url=raw_url, title=serper_title)
+                suppression_ledger = suppression_ledger.record(
+                    "llm_discard", url=raw_url, title=serper_title,
+                )
                 time.sleep(1.5)
                 continue
 
@@ -938,14 +916,11 @@ def execute_pipeline() -> None:
 
             time.sleep(1.5)
 
-    _log_stats(stats)
+    _log_stats(stats, suppression_ledger.breakdown)
     generate_macro_summary(
         stored_articles_buffer,
         screened_count=stats["urls_discovered"],
-        suppression_breakdown={k: v for k, v in stats.items()
-                               if k in {"duplicate_url", "semantic_duplicate",
-                                        "llm_discard", "scrape_failed"}},
-        suppression_samples=suppression_samples,
+        **suppression_ledger.to_row(),
     )
 
 

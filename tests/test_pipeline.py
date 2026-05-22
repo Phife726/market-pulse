@@ -1881,26 +1881,6 @@ def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
     assert row["suppression_samples"] == samples
 
 
-def test_record_suppression_caps_samples_at_10_fifo():
-    """The suppression samples buffer must cap at 10 items, keeping the most recent."""
-    from ingestion_engine import _record_suppression
-
-    counts: dict = {}
-    samples: list = []
-    for i in range(15):
-        _record_suppression(
-            counts, samples,
-            reason="duplicate_url",
-            url=f"https://x.com/{i}",
-            title=f"Title {i}",
-        )
-    assert counts["duplicate_url"] == 15
-    assert len(samples) == 10
-    # Most recent 10 (5..14) should be retained.
-    assert samples[0]["title"] == "Title 5"
-    assert samples[-1]["title"] == "Title 14"
-
-
 # ===========================================================================
 # Task 7 — run-mode isolation in delivery fetch_macro_summary()
 # ===========================================================================
@@ -2012,34 +1992,34 @@ def _row(**overrides) -> dict:
 def test_apply_delivery_suppression_drops_enterprise_low_impact():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=5)]
-    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"enterprise_cross_segment_low_impact": 1}
-    assert samples[0]["reason"] == "enterprise_cross_segment_low_impact"
+    assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 1}
+    assert ledger.samples[0].to_dict()["reason"] == "enterprise_cross_segment_low_impact"
 
 
 def test_apply_delivery_suppression_keeps_enterprise_high_impact():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=8)]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_product_listing():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://example.com/product/widget")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"product_listing": 1}
+    assert dict(ledger.breakdown) == {"product_listing": 1}
 
 
 def test_apply_delivery_suppression_drops_job_posting():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/12345")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"job_posting": 1}
+    assert dict(ledger.breakdown) == {"job_posting": 1}
 
 
 def test_apply_delivery_suppression_job_posting_escalate_override():
@@ -2047,27 +2027,27 @@ def test_apply_delivery_suppression_job_posting_escalate_override():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/ceo-move",
                  recommended_action="Escalate to leadership")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_generic_market_report_no_entities():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market Size 2026-2032",
                  entities_mentioned=[])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"generic_market_report": 1}
+    assert dict(ledger.breakdown) == {"generic_market_report": 1}
 
 
 def test_apply_delivery_suppression_keeps_generic_market_report_with_entities():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market 2026 Report",
                  entities_mentioned=["Avient"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_unrelated_color_result():
@@ -2075,9 +2055,9 @@ def test_apply_delivery_suppression_drops_unrelated_color_result():
     rows = [_row(headline="What extension cord colors mean",
                  americhem_impact="No plastics relevance.",
                  entities_mentioned=["DIY Network"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"unrelated_color_result": 1}
+    assert dict(ledger.breakdown) == {"unrelated_color_result": 1}
 
 
 def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
@@ -2085,19 +2065,19 @@ def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
     rows = [_row(headline="New masterbatch colors for automotive interiors",
                  americhem_impact="Drives masterbatch demand.",
                  entities_mentioned=["BASF"])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_drops_exact_duplicate_headline():
     from delivery_engine import _apply_delivery_suppression
     rows = [_row(url_hash="a", headline="Plant fire halts production"),
             _row(url_hash="b", headline="Plant fire halts production")]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
     assert kept[0]["url_hash"] == "a"
-    assert counts == {"duplicate_headline": 1}
+    assert dict(ledger.breakdown) == {"duplicate_headline": 1}
 
 
 def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
@@ -2106,9 +2086,9 @@ def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
         _row(url_hash="a", headline="Plant fire halts production at BASF site"),
         _row(url_hash="b", headline="BASF plant fire halts production at site"),
     ]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
-    assert counts == {"semantic_duplicate_headline": 1}
+    assert dict(ledger.breakdown) == {"semantic_duplicate_headline": 1}
 
 
 def test_apply_delivery_suppression_first_match_wins():
@@ -2118,18 +2098,18 @@ def test_apply_delivery_suppression_first_match_wins():
     rows = [_row(source_url="https://amazon.com/product/123",
                  headline="Plastic Market Report 2026",
                  entities_mentioned=[])]
-    kept, counts, _ = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts == {"product_listing": 1}  # NOT generic_market_report
+    assert dict(ledger.breakdown) == {"product_listing": 1}  # NOT generic_market_report
 
 
 def test_apply_delivery_suppression_disabled_rule_allows_through():
     from delivery_engine import _apply_delivery_suppression
     cfg = _supp_config(enable_product_listing=False)
     rows = [_row(source_url="https://example.com/product/widget")]
-    kept, counts, _ = _apply_delivery_suppression(rows, cfg)
+    kept, ledger = _apply_delivery_suppression(rows, cfg)
     assert len(kept) == 1
-    assert counts == {}
+    assert dict(ledger.breakdown) == {}
 
 
 def test_apply_delivery_suppression_samples_capped_at_10():
@@ -2139,10 +2119,10 @@ def test_apply_delivery_suppression_samples_capped_at_10():
              headline=f"Product {i}")
         for i in range(15)
     ]
-    kept, counts, samples = _apply_delivery_suppression(rows, _supp_config())
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
-    assert counts["product_listing"] == 15
-    assert len(samples) == 10
+    assert ledger.breakdown["product_listing"] == 15
+    assert len(ledger.samples) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -2610,6 +2590,7 @@ def test_render_qa_debug_section_uses_friendly_labels():
 def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     """Delivery-owned keys must be REPLACED, not added, on retry. Ingestion-owned
     keys must be preserved unchanged."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     prior = {
@@ -2630,12 +2611,12 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
+    ledger = (SuppressionLedger.for_delivery()
+              .record_count("below_impact_threshold", 5)
+              .record_count("weak_relevance", 2))
+
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts={"below_impact_threshold": 5, "weak_relevance": 2},
-            delivery_samples=[],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
 
     merged = captured["update"]["suppression_breakdown"]
     # Ingestion-owned keys preserved unchanged:
@@ -2647,8 +2628,9 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
 
 
 def test_update_delivery_summary_counts_idempotent_on_retry():
-    """Two consecutive calls with the same delivery_counts must produce the same
+    """Two consecutive calls with the same ledger must produce the same
     final breakdown — no doubling."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     captured = {}
@@ -2679,23 +2661,17 @@ def test_update_delivery_summary_counts_idempotent_on_retry():
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
-    delivery_counts = {"below_impact_threshold": 22, "product_listing": 5}
-    sample = {"reason": "product_listing", "url": "https://amazon.com/p/1", "title": "Plastic tote"}
+    ledger = (SuppressionLedger.for_delivery()
+              .record_count("below_impact_threshold", 22)
+              .record("product_listing", url="https://amazon.com/p/1", title="Plastic tote")
+              .record_count("product_listing", 4))  # total product_listing = 5
 
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts=delivery_counts,
-            delivery_samples=[sample],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
         first_breakdown = dict(captured["update"]["suppression_breakdown"])
         first_samples = list(captured["update"]["suppression_samples"])
 
-        _update_delivery_summary_counts(
-            surfaced_count=6,
-            delivery_counts=delivery_counts,
-            delivery_samples=[sample],
-        )
+        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
         second_breakdown = dict(captured["update"]["suppression_breakdown"])
         second_samples = list(captured["update"]["suppression_samples"])
 
@@ -2710,6 +2686,7 @@ def test_update_delivery_summary_counts_idempotent_on_retry():
 
 def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
     """Unknown keys in the existing breakdown (e.g., future codes) must be preserved."""
+    from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
 
     prior = {"some_future_reason": 99, "duplicate_url": 5}
@@ -2724,14 +2701,65 @@ def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
     mock_supa.table.return_value.update.side_effect = fake_update
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
 
+    ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
+
     with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(
-            surfaced_count=1,
-            delivery_counts={"below_impact_threshold": 2},
-            delivery_samples=[],
-        )
+        _update_delivery_summary_counts(surfaced_count=1, ledger=ledger)
 
     merged = captured["update"]["suppression_breakdown"]
     assert merged["some_future_reason"] == 99
     assert merged["duplicate_url"] == 5
     assert merged["below_impact_threshold"] == 2
+
+
+def test_delivery_suppression_idempotent_on_same_day_retry():
+    """Running delivery twice in the same day with the same inputs must
+    produce identical persisted breakdown and samples."""
+    from suppression_ledger import SuppressionLedger
+    from delivery_engine import _update_delivery_summary_counts
+
+    captured = {}
+    mock_supa = MagicMock()
+
+    def fake_select_chain(*args, **kwargs):
+        return mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.side_effect = fake_select_chain
+    mock_supa.table.return_value.select.return_value.eq.return_value = mock_supa.table.return_value.select.return_value
+    mock_supa.table.return_value.select.return_value.limit.return_value = mock_supa.table.return_value.select.return_value
+
+    # Track prior state across calls.
+    state = {"prior_breakdown": {}, "prior_samples": []}
+
+    def fake_execute_select():
+        return MagicMock(data=[{
+            "suppression_breakdown": dict(state["prior_breakdown"]),
+            "suppression_samples": list(state["prior_samples"]),
+        }])
+    mock_supa.table.return_value.select.return_value.execute.side_effect = fake_execute_select
+
+    def fake_update(payload):
+        captured["update"] = payload
+        # Simulate the write landing on the row for the next .select() read.
+        state["prior_breakdown"] = payload["suppression_breakdown"]
+        state["prior_samples"] = payload["suppression_samples"]
+        return mock_supa.table.return_value.update.return_value
+    mock_supa.table.return_value.update.side_effect = fake_update
+    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+
+    ledger = (SuppressionLedger.for_delivery()
+              .record("duplicate_headline", url="u", title="t")
+              .record_count("below_impact_threshold", 3))
+
+    with patch("delivery_engine._get_supabase", return_value=mock_supa):
+        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+        first_breakdown = dict(captured["update"]["suppression_breakdown"])
+        first_samples = list(captured["update"]["suppression_samples"])
+
+        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+        second_breakdown = dict(captured["update"]["suppression_breakdown"])
+        second_samples = list(captured["update"]["suppression_samples"])
+
+    assert first_breakdown == second_breakdown, \
+        f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
+    assert first_samples == second_samples, \
+        f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"

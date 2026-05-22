@@ -11,6 +11,8 @@ import yaml
 from openai import OpenAI
 from supabase import create_client, Client
 
+from suppression_ledger import SuppressionLedger, label_for
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -248,9 +250,6 @@ def _render_segment_watch_section(
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
 
-_DELIVERY_SAMPLES_CAP = 10
-
-
 def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
     """Case-insensitive substring match: True if any pattern appears in haystack."""
     h = (haystack or "").lower()
@@ -266,15 +265,14 @@ def _contains_any_term(text: str, terms: list[str]) -> bool:
 def _apply_delivery_suppression(
     rows: list[dict],
     config: dict,
-) -> tuple[list[dict], dict, list[dict]]:
+) -> tuple[list[dict], SuppressionLedger]:
     """Run the deterministic seven-rule guardrail over fetched rows.
 
-    Returns (kept_rows, counts_by_reason, samples_capped_at_10).
-    First matching rule wins; a row is counted once.
+    Returns (kept_rows, ledger). First matching rule wins; each suppressed
+    row is counted once and contributes at most one sample (deduped).
     """
     sup_cfg = config.get("delivery_suppression") or {}
-    counts: dict[str, int] = {}
-    samples: list[dict] = []
+    ledger = SuppressionLedger.for_delivery()
     kept: list[dict] = []
     kept_headlines: list[str] = []
 
@@ -287,16 +285,6 @@ def _apply_delivery_suppression(
     market_patterns    = sup_cfg.get("title_patterns_generic_market_report", [])
     color_terms        = sup_cfg.get("color_terms", [])
     plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
-
-    def _suppress(reason: str, row: dict) -> None:
-        counts[reason] = counts.get(reason, 0) + 1
-        samples.append({
-            "reason": reason,
-            "url": row.get("source_url", ""),
-            "title": row.get("headline", ""),
-        })
-        if len(samples) > _DELIVERY_SAMPLES_CAP:
-            del samples[0]
 
     for row in rows:
         url = row.get("source_url", "") or ""
@@ -311,24 +299,28 @@ def _apply_delivery_suppression(
             segment = _commercial_segment_of(row)
             score = int(row.get("americhem_impact_score") or 0)
             if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
-                _suppress("enterprise_cross_segment_low_impact", row)
+                ledger = ledger.record(
+                    "enterprise_cross_segment_low_impact",
+                    url=url,
+                    title=headline,
+                )
                 continue
 
         # Rule 2: Product listing URL
         if sup_cfg.get("enable_product_listing", True) and _matches_any_pattern(url, product_patterns):
-            _suppress("product_listing", row)
+            ledger = ledger.record("product_listing", url=url, title=headline)
             continue
 
         # Rule 3: Job posting URL (unless escalated)
         if sup_cfg.get("enable_job_posting", True) and _matches_any_pattern(url, job_patterns):
             if action != override_action:
-                _suppress("job_posting", row)
+                ledger = ledger.record("job_posting", url=url, title=headline)
                 continue
 
         # Rule 4: Generic market report title with empty entities
         if sup_cfg.get("enable_generic_market_report", True):
             if _matches_any_pattern(headline, market_patterns) and not entities:
-                _suppress("generic_market_report", row)
+                ledger = ledger.record("generic_market_report", url=url, title=headline)
                 continue
 
         # Rule 5: Unrelated color result
@@ -339,13 +331,13 @@ def _apply_delivery_suppression(
                 # cause a false substring match on "plastic".
                 relevance_haystack = f"{headline} {entities_text}"
                 if not _contains_any_term(relevance_haystack, plastics_terms):
-                    _suppress("unrelated_color_result", row)
+                    ledger = ledger.record("unrelated_color_result", url=url, title=headline)
                     continue
 
         # Rule 6: Exact duplicate headline (case-insensitive)
         if sup_cfg.get("enable_duplicate_headline", True):
             if headline and any(h.lower() == headline.lower() for h in kept_headlines):
-                _suppress("duplicate_headline", row)
+                ledger = ledger.record("duplicate_headline", url=url, title=headline)
                 continue
 
         # Rule 7: Semantic duplicate headline
@@ -355,14 +347,14 @@ def _apply_delivery_suppression(
             hl_lower = headline.lower()
             scores = [_token_sort_ratio(hl_lower, h.lower()) for h in kept_headlines]
             if scores and max(scores) >= threshold:
-                _suppress("semantic_duplicate_headline", row)
+                ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
                 continue
 
         kept.append(row)
         if headline:
             kept_headlines.append(headline)
 
-    return kept, counts, samples
+    return kept, ledger
 
 
 def _config_int(cfg: dict, key: str, default: int) -> int:
@@ -392,45 +384,6 @@ def _is_test_mode() -> bool:
 # QA suppression-summary (test-mode only)
 # ---------------------------------------------------------------------------
 
-# Ownership of suppression reason codes.
-# Ingestion writes these on the upsert in generate_macro_summary(); delivery
-# must preserve them when updating the row.
-_INGESTION_SUPPRESSION_KEYS: frozenset[str] = frozenset({
-    "duplicate_url",
-    "semantic_duplicate",
-    "llm_discard",
-    "scrape_failed",
-})
-
-# Delivery owns these — they are recomputed on every render and must be
-# OVERWRITTEN on retry, never added to prior values.
-_DELIVERY_SUPPRESSION_KEYS: frozenset[str] = frozenset({
-    "below_impact_threshold",
-    "weak_relevance",
-    "duplicate_headline",
-    "semantic_duplicate_headline",
-    "product_listing",
-    "job_posting",
-    "generic_market_report",
-    "unrelated_color_result",
-    "enterprise_cross_segment_low_impact",
-})
-
-_QA_REASON_LABELS: dict[str, str] = {
-    "duplicate_url":                       "duplicate URL",
-    "semantic_duplicate":                  "semantic duplicate",
-    "llm_discard":                         "LLM discard",
-    "scrape_failed":                       "scrape failed",
-    "below_impact_threshold":              "below impact threshold",
-    "weak_relevance":                      "weak relevance (4-5, ungrouped)",
-    "duplicate_headline":                  "duplicate headline",
-    "semantic_duplicate_headline":         "semantic duplicate headline",
-    "product_listing":                     "product listing",
-    "job_posting":                         "job posting",
-    "generic_market_report":               "generic market report",
-    "unrelated_color_result":              "unrelated color result",
-    "enterprise_cross_segment_low_impact": "Enterprise / Cross-Segment, low impact",
-}
 
 
 def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
@@ -457,7 +410,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     ]
     for code in display_order:
         if code in breakdown:
-            label = _QA_REASON_LABELS.get(code, code)
+            label = label_for(code)
             rows_html += (
                 f'<tr><td style="padding:2px 0;font-size:12px;color:#374151;'
                 f'font-family:Arial,sans-serif;">'
@@ -469,7 +422,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     samples_html = ""
     for s in samples[-10:]:
         reason_code = s.get("reason", "")
-        reason_label = _QA_REASON_LABELS.get(reason_code, reason_code)
+        reason_label = label_for(reason_code)
         title = s.get("title", "")
         url = s.get("url", "")
         samples_html += (
@@ -638,18 +591,17 @@ def fetch_macro_summary() -> dict | None:
 def _update_delivery_summary_counts(
     *,
     surfaced_count: int,
-    delivery_counts: dict,
-    delivery_samples: list,
+    ledger: SuppressionLedger,
 ) -> None:
-    """Update today's daily_summaries row (filtered by run_mode) with delivery-side stats.
+    """Update today's daily_summaries row with delivery-side surfaced count
+    and merged suppression accounting. Idempotent on same-day retry — the
+    merge semantics live in SuppressionLedger.merge_with().
 
-    Non-critical: failures are logged but do not raise.
-    """
+    Non-critical: failures are logged but do not raise."""
     try:
         from datetime import date as _date
         supabase = _get_supabase()
 
-        # Fetch the existing breakdown/samples so we can merge ours in.
         existing = (
             supabase.table("daily_summaries")
             .select("suppression_breakdown, suppression_samples")
@@ -658,36 +610,13 @@ def _update_delivery_summary_counts(
             .limit(1)
             .execute()
         )
-        rows = existing.data or []
-        prior_breakdown = (rows[0].get("suppression_breakdown") if rows else None) or {}
-        prior_samples   = (rows[0].get("suppression_samples")   if rows else None) or []
-
-        # Start from the prior breakdown but drop delivery-owned keys so this
-        # render can write fresh values for them. Ingestion-owned keys and any
-        # unknown future codes are preserved.
-        merged_breakdown = {
-            k: v for k, v in prior_breakdown.items()
-            if k not in _DELIVERY_SUPPRESSION_KEYS
-        }
-        for k, v in delivery_counts.items():
-            merged_breakdown[k] = int(v)
-
-        # Dedupe samples by (reason, url, title) before capping so retries don't
-        # produce duplicates of the same suppressed item.
-        seen: set[tuple] = set()
-        deduped_samples: list[dict] = []
-        for sample in list(prior_samples) + list(delivery_samples):
-            key = (sample.get("reason"), sample.get("url"), sample.get("title"))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped_samples.append(sample)
-        merged_samples = deduped_samples[-_DELIVERY_SAMPLES_CAP:]
+        prior_row = (existing.data or [None])[0]
+        prior = SuppressionLedger.from_row("delivery", prior_row)
+        merged = ledger.merge_with(prior)
 
         supabase.table("daily_summaries").update({
             "surfaced_count": surfaced_count,
-            "suppression_breakdown": merged_breakdown,
-            "suppression_samples": merged_samples,
+            **merged.to_row(),
         }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
     except Exception as exc:
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
@@ -1020,7 +949,7 @@ def generate_html_email(
     max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, delivery_sup_counts, delivery_sup_samples = _apply_delivery_suppression(data, config)
+    kept, delivery_ledger = _apply_delivery_suppression(data, config)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]
@@ -1061,14 +990,12 @@ def generate_html_email(
     surfaced_count = sum(len(arts) for arts in groups.values())
 
     # 8. Write delivery-side counts + surfaced_count back to today's row.
+    delivery_ledger = (delivery_ledger
+                       .record_count("below_impact_threshold", below_threshold_count)
+                       .record_count("weak_relevance", weak_relevance_count))
     _update_delivery_summary_counts(
         surfaced_count=surfaced_count,
-        delivery_counts={
-            **delivery_sup_counts,
-            "below_impact_threshold": below_threshold_count,
-            "weak_relevance": weak_relevance_count,
-        },
-        delivery_samples=delivery_sup_samples,
+        ledger=delivery_ledger,
     )
 
     # 9. Thematic synthesis paragraphs (existing helper, now keyed off the new groups).
