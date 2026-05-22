@@ -105,6 +105,21 @@ def test_record_caps_samples_at_ten_fifo():
     assert led.breakdown == {"duplicate_url": 15}
 
 
+def test_record_preserves_first_sample_position_on_duplicate():
+    """A re-recorded sample does NOT move to the end of the samples tuple —
+    the first observed position is the authoritative one (audit trail)."""
+    ledger = SuppressionLedger.for_delivery()
+    ledger = ledger.record("product_listing", url="u1", title="t1")
+    ledger = ledger.record("job_posting",     url="u2", title="t2")
+    ledger = ledger.record("product_listing", url="u1", title="t1")
+
+    assert [s.reason for s in ledger.samples] == [
+        "product_listing",
+        "job_posting",
+    ]
+    assert ledger.breakdown["product_listing"] == 2
+
+
 def test_record_count_increments_breakdown_only():
     led = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 7)
     assert led.breakdown == {"below_impact_threshold": 7}
