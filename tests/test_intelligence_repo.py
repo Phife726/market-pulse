@@ -462,3 +462,44 @@ def test_supabase_update_delivery_counts_raises_on_error(supabase_repo):
             run_date="2026-05-26", run_mode="production",
             surfaced_count=0, ledger_row={},
         )
+
+
+# ---------------------------------------------------------------------------
+# Singleton lifecycle
+# ---------------------------------------------------------------------------
+
+def test_repo_singleton_returns_same_instance(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test_key")
+    _reset_repo()
+    a = _repo()
+    b = _repo()
+    assert a is b
+
+
+def test_reset_repo_rebuilds_singleton(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test_key")
+    _reset_repo()
+    first = _repo()
+    _reset_repo()
+    second = _repo()
+    assert first is not second
+
+
+def test_repo_is_monkeypatchable_at_consumer(monkeypatch):
+    """Consumer modules do `from daily_intelligence_repo import _repo`,
+    binding the name at import time. Tests patch at the CONSUMER module
+    (e.g. `ingestion_engine._repo`) — patching `daily_intelligence_repo._repo`
+    after the consumer has imported would have no effect.
+
+    This test simulates a consumer: it has its own bound `_repo`,
+    and we patch that binding."""
+    import types
+    consumer = types.ModuleType("fake_consumer")
+    from daily_intelligence_repo import _repo as repo_accessor
+    consumer._repo = repo_accessor
+
+    fake = InMemoryIntelligenceRepo()
+    monkeypatch.setattr(consumer, "_repo", lambda: fake)
+    assert consumer._repo() is fake
