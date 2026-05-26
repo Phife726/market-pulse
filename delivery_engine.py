@@ -549,27 +549,21 @@ def _update_delivery_summary_counts(
     and merged suppression accounting. Idempotent on same-day retry — the
     merge semantics live in SuppressionLedger.merge_with().
 
-    Non-critical: failures are logged but do not raise."""
+    Non-critical: a failed write is logged but does not raise. Keeps the
+    email-sending path resilient to transient Supabase outages."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    run_mode = _run_mode()
     try:
-        from datetime import date as _date
-        supabase = _get_supabase()
-
-        existing = (
-            supabase.table("daily_summaries")
-            .select("suppression_breakdown, suppression_samples")
-            .eq("run_date", _date.today().isoformat())
-            .eq("run_mode", _run_mode())
-            .limit(1)
-            .execute()
-        )
-        prior_row = (existing.data or [None])[0]
+        prior_row = _repo().get_delivery_state(run_date=today, run_mode=run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
         merged = ledger.merge_with(prior)
-
-        supabase.table("daily_summaries").update({
-            "surfaced_count": surfaced_count,
-            **merged.to_row(),
-        }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
+        _repo().update_delivery_counts(
+            run_date=today,
+            run_mode=run_mode,
+            surfaced_count=surfaced_count,
+            ledger_row=merged.to_row(),
+        )
     except Exception as exc:
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
 

@@ -2273,7 +2273,11 @@ def test_render_segment_watch_section_renders_synthesis_paragraph():
 
 def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
     """surfaced_count must reflect the final visible-card list AFTER per-segment caps."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
+
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     rows = [
         {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
          "americhem_impact_score": 8, "sentiment_tag": "Neutral",
@@ -2290,29 +2294,31 @@ def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
         }
     }
 
-    captured = {}
-    mock_supa = MagicMock()
-
-    def fake_update(payload):
-        captured["update"] = payload
-        return mock_supa.table.return_value.update.return_value
-
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {}, "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._load_mp_config", return_value=config), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa):
+         patch("delivery_engine._load_mp_config", return_value=config):
         generate_html_email(rows)
 
-    assert "update" in captured, "Expected an update() call to daily_summaries"
-    assert captured["update"]["surfaced_count"] == 2
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    assert stored is not None, "Expected an update() call to daily_summaries"
+    assert stored["surfaced_count"] == 2
 
 
 def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch):
     """Delivery must write below_impact_threshold into suppression_breakdown via update()."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
+
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     rows = [
         {"url_hash": "low", "commercial_segment": "Healthcare",
          "americhem_impact_score": 4, "sentiment_tag": "Neutral",
@@ -2332,29 +2338,30 @@ def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch
             "max_total_visible_articles": 12,
         }
     }
-    captured = {}
-    mock_supa = MagicMock()
-
-    def fake_update(payload):
-        captured["update"] = payload
-        return mock_supa.table.return_value.update.return_value
-
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {}, "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._load_mp_config", return_value=config), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa):
+         patch("delivery_engine._load_mp_config", return_value=config):
         generate_html_email(rows)
 
-    breakdown = captured["update"]["suppression_breakdown"]
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    breakdown = stored["suppression_breakdown"]
     assert breakdown["below_impact_threshold"] == 1
-    assert captured["update"]["surfaced_count"] == 1
+    assert stored["surfaced_count"] == 1
 
 
 def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatch):
     """The update() call must be filtered by run_date AND run_mode."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
+
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
     rows = [{
@@ -2364,33 +2371,37 @@ def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatc
         "source_url": "https://x/a", "entities_mentioned": ["Acme"],
     }]
 
-    eq_calls = []
-    mock_supa = MagicMock()
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {}, "suppression_samples": [],
+    })
+    update_calls = []
+    real_update = fake.update_delivery_counts
 
-    update_chain = MagicMock()
-    def fake_update_eq(col, val):
-        eq_calls.append((col, val))
-        return update_chain
-    update_chain.eq.side_effect = fake_update_eq
-    update_chain.eq.return_value = update_chain
-    update_chain.execute.return_value = MagicMock()
-
-    def fake_update(payload):
-        return update_chain
-    mock_supa.table.return_value.update.side_effect = fake_update
-
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    def spy_update(*, run_date, run_mode, surfaced_count, ledger_row):
+        update_calls.append({"run_date": run_date, "run_mode": run_mode})
+        return real_update(
+            run_date=run_date, run_mode=run_mode,
+            surfaced_count=surfaced_count, ledger_row=ledger_row,
+        )
+    fake.update_delivery_counts = spy_update
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa):
+         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         generate_html_email(rows)
 
-    keys = {c[0] for c in eq_calls}
-    assert "run_date" in keys, f"eq calls: {eq_calls}"
-    assert "run_mode" in keys, f"eq calls: {eq_calls}"
-    rm_calls = [c for c in eq_calls if c[0] == "run_mode"]
-    assert any(c[1] == "test" for c in rm_calls), f"Expected run_mode='test' in {rm_calls}"
+    assert update_calls, f"Expected update_delivery_counts call. calls={update_calls}"
+    keys = set()
+    for call in update_calls:
+        keys.update(call.keys())
+    assert "run_date" in keys, f"calls: {update_calls}"
+    assert "run_mode" in keys, f"calls: {update_calls}"
+    rm_values = [c["run_mode"] for c in update_calls]
+    assert any(v == "test" for v in rm_values), f"Expected run_mode='test' in {rm_values}"
 
 
 def test_render_executive_bullets_renders_three_labeled_bullets():
@@ -2624,6 +2635,8 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     keys must be preserved unchanged."""
     from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
 
     prior = {
         "duplicate_url": 10,            # ingestion-owned
@@ -2632,25 +2645,25 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
         "weak_relevance": 7,            # delivery-owned (must be replaced)
     }
 
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
-        data=[{"suppression_breakdown": prior, "suppression_samples": []}]
-    )
-    captured = {}
-    def fake_update(payload):
-        captured["update"] = payload
-        return mock_supa.table.return_value.update.return_value
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": prior,
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
 
     ledger = (SuppressionLedger.for_delivery()
               .record_count("below_impact_threshold", 5)
               .record_count("weak_relevance", 2))
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
+    _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
 
-    merged = captured["update"]["suppression_breakdown"]
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    merged = stored["suppression_breakdown"]
     # Ingestion-owned keys preserved unchanged:
     assert merged["duplicate_url"] == 10
     assert merged["semantic_duplicate"] == 2
@@ -2659,53 +2672,39 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
     assert merged["weak_relevance"] == 2
 
 
-def test_update_delivery_summary_counts_idempotent_on_retry():
+def test_update_delivery_summary_counts_idempotent_on_retry(monkeypatch):
     """Two consecutive calls with the same ledger must produce the same
     final breakdown — no doubling."""
     from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
 
-    captured = {}
-    mock_supa = MagicMock()
-
-    def fake_select_chain(*args, **kwargs):
-        return mock_supa.table.return_value.select.return_value
-    mock_supa.table.return_value.select.side_effect = fake_select_chain
-    mock_supa.table.return_value.select.return_value.eq.return_value = mock_supa.table.return_value.select.return_value
-    mock_supa.table.return_value.select.return_value.limit.return_value = mock_supa.table.return_value.select.return_value
-
-    # Track prior state across calls.
-    state = {"prior_breakdown": {"duplicate_url": 10}, "prior_samples": []}
-
-    def fake_execute_select():
-        return MagicMock(data=[{
-            "suppression_breakdown": dict(state["prior_breakdown"]),
-            "suppression_samples": list(state["prior_samples"]),
-        }])
-    mock_supa.table.return_value.select.return_value.execute.side_effect = fake_execute_select
-
-    def fake_update(payload):
-        captured["update"] = payload
-        # Simulate the write landing on the row for the next .select() read.
-        state["prior_breakdown"] = payload["suppression_breakdown"]
-        state["prior_samples"] = payload["suppression_samples"]
-        return mock_supa.table.return_value.update.return_value
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {"duplicate_url": 10},
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
 
     ledger = (SuppressionLedger.for_delivery()
               .record_count("below_impact_threshold", 22)
               .record("product_listing", url="https://amazon.com/p/1", title="Plastic tote")
               .record_count("product_listing", 4))  # total product_listing = 5
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
-        first_breakdown = dict(captured["update"]["suppression_breakdown"])
-        first_samples = list(captured["update"]["suppression_samples"])
+    _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    first_breakdown = dict(stored["suppression_breakdown"])
+    first_samples = list(stored["suppression_samples"])
 
-        _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
-        second_breakdown = dict(captured["update"]["suppression_breakdown"])
-        second_samples = list(captured["update"]["suppression_samples"])
+    _update_delivery_summary_counts(surfaced_count=6, ledger=ledger)
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    second_breakdown = dict(stored["suppression_breakdown"])
+    second_samples = list(stored["suppression_samples"])
 
     assert first_breakdown == second_breakdown, \
         f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
@@ -2716,80 +2715,68 @@ def test_update_delivery_summary_counts_idempotent_on_retry():
         f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"
 
 
-def test_update_delivery_summary_counts_preserves_unknown_prior_keys():
+def test_update_delivery_summary_counts_preserves_unknown_prior_keys(monkeypatch):
     """Unknown keys in the existing breakdown (e.g., future codes) must be preserved."""
     from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
 
     prior = {"some_future_reason": 99, "duplicate_url": 5}
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
-        data=[{"suppression_breakdown": prior, "suppression_samples": []}]
-    )
-    captured = {}
-    def fake_update(payload):
-        captured["update"] = payload
-        return mock_supa.table.return_value.update.return_value
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": prior,
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
 
     ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(surfaced_count=1, ledger=ledger)
+    _update_delivery_summary_counts(surfaced_count=1, ledger=ledger)
 
-    merged = captured["update"]["suppression_breakdown"]
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    merged = stored["suppression_breakdown"]
     assert merged["some_future_reason"] == 99
     assert merged["duplicate_url"] == 5
     assert merged["below_impact_threshold"] == 2
 
 
-def test_delivery_suppression_idempotent_on_same_day_retry():
+def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
     """Running delivery twice in the same day with the same inputs must
     produce identical persisted breakdown and samples."""
     from suppression_ledger import SuppressionLedger
     from delivery_engine import _update_delivery_summary_counts
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    from datetime import date
 
-    captured = {}
-    mock_supa = MagicMock()
-
-    def fake_select_chain(*args, **kwargs):
-        return mock_supa.table.return_value.select.return_value
-    mock_supa.table.return_value.select.side_effect = fake_select_chain
-    mock_supa.table.return_value.select.return_value.eq.return_value = mock_supa.table.return_value.select.return_value
-    mock_supa.table.return_value.select.return_value.limit.return_value = mock_supa.table.return_value.select.return_value
-
-    # Track prior state across calls.
-    state = {"prior_breakdown": {}, "prior_samples": []}
-
-    def fake_execute_select():
-        return MagicMock(data=[{
-            "suppression_breakdown": dict(state["prior_breakdown"]),
-            "suppression_samples": list(state["prior_samples"]),
-        }])
-    mock_supa.table.return_value.select.return_value.execute.side_effect = fake_execute_select
-
-    def fake_update(payload):
-        captured["update"] = payload
-        # Simulate the write landing on the row for the next .select() read.
-        state["prior_breakdown"] = payload["suppression_breakdown"]
-        state["prior_samples"] = payload["suppression_samples"]
-        return mock_supa.table.return_value.update.return_value
-    mock_supa.table.return_value.update.side_effect = fake_update
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {},
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
 
     ledger = (SuppressionLedger.for_delivery()
               .record("duplicate_headline", url="u", title="t")
               .record_count("below_impact_threshold", 3))
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
-        first_breakdown = dict(captured["update"]["suppression_breakdown"])
-        first_samples = list(captured["update"]["suppression_samples"])
+    _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    first_breakdown = dict(stored["suppression_breakdown"])
+    first_samples = list(stored["suppression_samples"])
 
-        _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
-        second_breakdown = dict(captured["update"]["suppression_breakdown"])
-        second_samples = list(captured["update"]["suppression_samples"])
+    _update_delivery_summary_counts(surfaced_count=5, ledger=ledger)
+    stored = fake.get_delivery_state(run_date=today, run_mode="production")
+    second_breakdown = dict(stored["suppression_breakdown"])
+    second_samples = list(stored["suppression_samples"])
 
     assert first_breakdown == second_breakdown, \
         f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
@@ -3092,3 +3079,58 @@ def test_fetch_macro_summary_returns_none_when_missing(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     assert fetch_macro_summary() is None
+
+
+def test_update_delivery_summary_counts_merges_with_prior(monkeypatch):
+    """The same-day-retry merge: prior delivery counts are preserved through
+    ingestion-owned codes; new delivery-owned codes overwrite."""
+    from delivery_engine import _update_delivery_summary_counts
+    from suppression_ledger import SuppressionLedger
+    from datetime import date
+
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    # Seed a prior row mimicking ingestion having already written.
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {"duplicate_url": 5, "below_impact_threshold": 9},
+        "suppression_samples": [{"reason": "duplicate_url", "url": "u", "title": "t"}],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+
+    new_ledger = (
+        SuppressionLedger.for_delivery()
+        .record_count("below_impact_threshold", 3)
+        .record_count("product_listing", 1)
+    )
+    _update_delivery_summary_counts(surfaced_count=4, ledger=new_ledger)
+
+    got = fake.get_delivery_state(run_date=today, run_mode="production")
+    assert got["surfaced_count"] == 4
+    # Ingestion-owned code preserved from prior.
+    assert got["suppression_breakdown"]["duplicate_url"] == 5
+    # Delivery-owned code overwritten by this run.
+    assert got["suppression_breakdown"]["below_impact_threshold"] == 3
+    assert got["suppression_breakdown"]["product_listing"] == 1
+
+
+def test_update_delivery_summary_counts_swallows_write_failure(monkeypatch, caplog):
+    """A failed metadata write must not block the email — preserves the
+    existing 'Non-critical' operational decision."""
+    from delivery_engine import _update_delivery_summary_counts
+    from suppression_ledger import SuppressionLedger
+
+    failing = MagicMock()
+    failing.get_delivery_state.return_value = None
+    failing.update_delivery_counts.side_effect = RuntimeError("DB down")
+    monkeypatch.setattr("delivery_engine._repo", lambda: failing)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+
+    # Should not raise.
+    _update_delivery_summary_counts(
+        surfaced_count=0,
+        ledger=SuppressionLedger.for_delivery(),
+    )
+    assert "Failed to update delivery counts" in caplog.text
