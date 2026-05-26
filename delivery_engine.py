@@ -611,6 +611,19 @@ def _update_delivery_summary_counts(
 # 2. Thematic synthesis
 # ---------------------------------------------------------------------------
 
+# Cross-reference: an identical-body constant lives in ingestion_engine.py.
+# Both prompts are gated in CI by tests that assert the same anchor substrings;
+# if you reword this, reword the ingestion_engine.py copy in lockstep.
+_ENGLISH_OUTPUT_RULE = (
+    "All human-readable generated strings must be written in clear business English, "
+    "regardless of the source article's language. Translate non-English source "
+    "content into English. Preserve proper nouns — company names, product names, "
+    "brand names, source publications, locations, URLs, and quoted legal or product "
+    "identifiers — in their original form when translation would reduce precision. "
+    "Enum/taxonomy fields must use the configured English labels exactly."
+)
+
+
 def synthesize_thematic_paragraphs(
     groups: dict[str, list[dict]],
 ) -> dict[str, str]:
@@ -642,6 +655,7 @@ def synthesize_thematic_paragraphs(
     grouped_text = "\n".join(lines).strip()
 
     system_prompt = (
+        f"OUTPUT LANGUAGE:\n{_ENGLISH_OUTPUT_RULE}\n\n"
         "You are a market intelligence analyst for Americhem, a specialty plastics compounder.\n\n"
         "For each CATEGORY block below, write exactly one synthesis paragraph (2–3 sentences).\n"
         "The paragraph must:\n"

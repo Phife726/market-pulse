@@ -20,7 +20,6 @@ from ingestion_engine import (
     synthesize_insight,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1698,7 +1697,7 @@ def test_system_prompt_includes_both_segment_and_signal_rules():
     assert "High-performance compounds." in prompt
     assert "Supply Chain" in prompt
     assert "Resin pricing, force majeure." in prompt
-    assert "seven rules" in prompt
+    assert "eight rules" in prompt
 
 
 def test_config_has_commercial_segments_and_signal_types():
@@ -2780,3 +2779,123 @@ def test_delivery_suppression_idempotent_on_same_day_retry():
         f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
     assert first_samples == second_samples, \
         f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"
+
+
+# ---------------------------------------------------------------------------
+# 7. English-output rule — prompt-contract tests
+# ---------------------------------------------------------------------------
+
+_ENGLISH_ANCHORS = ("business English", "regardless of the source article")
+
+
+def _assert_english_anchors_present(prompt_text: str) -> None:
+    for anchor in _ENGLISH_ANCHORS:
+        assert anchor in prompt_text, (
+            f"Expected English-output anchor {anchor!r} in prompt, but it was missing.\n"
+            f"Prompt:\n{prompt_text}"
+        )
+
+
+def test_ingestion_system_prompt_contains_english_rule():
+    """RULE 0 — OUTPUT LANGUAGE must be present in the assembled ingestion prompt."""
+    from ingestion_engine import _build_system_prompt, _load_mp_config
+
+    prompt = _build_system_prompt(_load_mp_config())
+    _assert_english_anchors_present(prompt)
+
+
+def test_macro_summary_system_prompt_contains_english_rule():
+    """The macro-summary system prompt must include the English-output directive."""
+    from ingestion_engine import generate_macro_summary
+
+    mock_message = MagicMock()
+    mock_message.content = json.dumps(
+        {
+            "dominant_condition": "Mixed / Watch",
+            "executive_bullets": [
+                {"label": "Market pressure", "body": "Stub bullet body."},
+                {"label": "Supply chain watch", "body": "Stub bullet body."},
+                {"label": "Commercial action", "body": "Stub bullet body."},
+            ],
+        }
+    )
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client), patch(
+        "ingestion_engine._get_supabase", return_value=mock_supabase
+    ):
+        generate_macro_summary(
+            [
+                {
+                    "category": "competitors",
+                    "headline": "Stub headline",
+                    "sentiment_score": 5,
+                    "americhem_impact": "Stub impact.",
+                }
+            ]
+        )
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    system_message = kwargs["messages"][0]["content"]
+    _assert_english_anchors_present(system_message)
+
+
+def test_thematic_synthesis_system_prompt_contains_english_rule():
+    """The thematic-synthesis system prompt must include the English-output directive."""
+    mock_message = MagicMock()
+    mock_message.content = json.dumps({"Healthcare": "Stub paragraph."})
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    stub_article = {
+        "headline": "Stub headline",
+        "sentiment_tag": "Neutral",
+        "americhem_impact": "Stub impact.",
+        "entities_mentioned": ["Stub Co."],
+        "americhem_impact_score": 7,
+    }
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        synthesize_thematic_paragraphs({"Healthcare": [stub_article, stub_article]})
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    system_message = kwargs["messages"][0]["content"]
+    _assert_english_anchors_present(system_message)
+
+
+def test_synthesize_insight_non_english_body_keeps_english_directive():
+    """Regression: a Chinese article body must reach synthesize_insight with the
+    English-output directive intact in the system prompt, and the source-language
+    body must be forwarded verbatim in the user prompt (no client-side translation)."""
+    chinese_body = "中文测试文本 — Teknor Apex 推出含 70% PCR 的 Crealen R PP 汽车内饰再生材料。"
+
+    mock_client = _make_openai_mock(5)
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = synthesize_insight(
+            article_text=chinese_body,
+            source_url="https://example.cn/article",
+            trigger_entity="Teknor Apex",
+            category="competitors",
+        )
+
+    assert result is not None
+    _, kwargs = mock_client.chat.completions.create.call_args
+    system_message = kwargs["messages"][0]["content"]
+    user_message = kwargs["messages"][1]["content"]
+    _assert_english_anchors_present(system_message)
+    assert chinese_body in user_message, (
+        "Source-language article body should be forwarded verbatim to the LLM; "
+        "no client-side translation should occur."
+    )
