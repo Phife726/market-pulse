@@ -15,7 +15,6 @@ from daily_intelligence_repo import _repo
 import requests
 import yaml
 from openai import OpenAI
-from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -196,13 +195,6 @@ def _scrape_fallback(url: str) -> Optional[str]:
         return None
     text = extractor.get_text()
     return text if text else None
-
-
-
-def _get_supabase() -> Client:
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
 
 
 def _get_openai() -> OpenAI:

@@ -1762,7 +1762,6 @@ def _make_articles(n: int) -> list[dict]:
 
 def _capture_summary(fake_repo) -> dict:
     """Return the most recent summary row stored in the fake repo."""
-    from daily_intelligence_repo import InMemoryIntelligenceRepo  # noqa: F401
     from datetime import date
     row = fake_repo.get_delivery_state(
         run_date=date.today().isoformat(),
