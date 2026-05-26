@@ -64,11 +64,34 @@ def _load_mp_config() -> dict:
 
 
 def _effective_impact(row: dict) -> int:
-    """Return routing score: americhem_impact_score preferred, sentiment_score fallback."""
+    """Return routing score: americhem_impact_score preferred, sentiment_score fallback.
+
+    Robust to malformed values — invalid americhem_impact_score falls back to
+    sentiment_score; invalid sentiment_score falls back to 5. Bad row data
+    should degrade the score, not crash the delivery run."""
     score = row.get("americhem_impact_score")
     if score is not None:
-        return int(score)
-    return int(row.get("sentiment_score") or 5)
+        try:
+            return int(score)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid americhem_impact_score %r for row %r; falling back to sentiment_score.",
+                score,
+                row.get("source_url") or row.get("headline") or row.get("url_hash"),
+            )
+
+    fallback = row.get("sentiment_score")
+    if fallback is not None:
+        try:
+            return int(fallback)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid sentiment_score %r for row %r; using default score 5.",
+                fallback,
+                row.get("source_url") or row.get("headline") or row.get("url_hash"),
+            )
+
+    return 5
 
 
 def _alert_tier(row: dict) -> str:
@@ -543,7 +566,7 @@ def _update_delivery_summary_counts(
     today = _date.today().isoformat()
     run_mode = _run_mode()
     try:
-        prior_row = _repo().get_delivery_state(run_date=today, run_mode=run_mode)
+        prior_row = _repo().require_delivery_state(run_date=today, run_mode=run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
         merged = ledger.merge_with(prior)
         _repo().update_delivery_counts(

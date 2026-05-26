@@ -34,6 +34,7 @@ class IntelligenceRepo(Protocol):
     def upsert_summary(self, row: dict) -> None: ...
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]: ...
     def get_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]: ...
+    def require_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]: ...
     def update_delivery_counts(
         self,
         *,
@@ -149,6 +150,24 @@ class SupabaseIntelligenceRepo:
             logger.error("Supabase get_delivery_state failed: %s", exc)
             return None
 
+    def require_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]:
+        """Strict read for the same-day-retry merge in delivery_engine.
+
+        Same query as get_delivery_state but does NOT swallow exceptions. Callers
+        that read prior state before writing must distinguish 'no row' from
+        'read failed' — silently overwriting on failure would corrupt prior
+        suppression accounting. Returns the row dict or None if no row exists."""
+        result = (
+            self._supabase().table("daily_summaries")
+            .select("suppression_breakdown, suppression_samples")
+            .eq("run_date", run_date)
+            .eq("run_mode", run_mode)
+            .limit(1)
+            .execute()
+        )
+        rows = result.data or []
+        return rows[0] if rows else None
+
     def update_delivery_counts(
         self,
         *,
@@ -251,6 +270,12 @@ class InMemoryIntelligenceRepo:
     def get_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]:
         row = self._summaries.get((run_date, run_mode))
         return dict(row) if row is not None else None
+
+    def require_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]:
+        """In-memory fake equivalent — same behavior as get_delivery_state
+        (the fake has no read-failure mode by default). Tests that want to
+        simulate read failure should use a custom stub repo instead."""
+        return self.get_delivery_state(run_date, run_mode)
 
     def update_delivery_counts(
         self,

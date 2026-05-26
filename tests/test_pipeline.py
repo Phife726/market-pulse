@@ -3107,3 +3107,84 @@ def test_update_delivery_summary_counts_swallows_write_failure(monkeypatch, capl
         ledger=SuppressionLedger.for_delivery(),
     )
     assert "Failed to update delivery counts" in caplog.text
+
+
+def test_update_delivery_summary_counts_aborts_write_on_prior_read_failure(monkeypatch, caplog):
+    """If require_delivery_state raises, the caller must NOT call
+    update_delivery_counts — otherwise the write would overwrite prior
+    ingestion-owned suppression state with an empty ledger."""
+    from delivery_engine import _update_delivery_summary_counts
+    from suppression_ledger import SuppressionLedger
+
+    class _ReadFailingRepo:
+        def require_delivery_state(self, *, run_date, run_mode):
+            raise RuntimeError("read failed")
+
+        def update_delivery_counts(self, *args, **kwargs):
+            raise AssertionError(
+                "update_delivery_counts must NOT be called after prior-state "
+                "read failure — otherwise prior suppression state is overwritten"
+            )
+
+    monkeypatch.setattr("delivery_engine._repo", lambda: _ReadFailingRepo())
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+
+    # Must not raise.
+    _update_delivery_summary_counts(
+        surfaced_count=4,
+        ledger=SuppressionLedger.for_delivery(),
+    )
+    assert "Failed to update delivery counts" in caplog.text
+
+
+def test_update_delivery_summary_counts_writes_when_no_prior_row(monkeypatch):
+    """When require_delivery_state returns None (no prior row), the write
+    must still proceed — that's the fresh-row path, not a failure."""
+    from delivery_engine import _update_delivery_summary_counts
+    from suppression_ledger import SuppressionLedger
+    from datetime import date
+
+    fake = InMemoryIntelligenceRepo()
+    today = date.today().isoformat()
+    # Seed a row so update_delivery_counts has somewhere to write
+    # (the in-memory fake's update is silent no-op without a row, mimicking
+    # Supabase UPDATE-WHERE-no-match). For the fresh-row case in production,
+    # daily_summaries already has an ingestion-written row before delivery
+    # rendering — we mimic that here without seeding any suppression state.
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "x",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+
+    ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
+    _update_delivery_summary_counts(surfaced_count=3, ledger=ledger)
+
+    got = fake.get_delivery_state(run_date=today, run_mode="production")
+    assert got["surfaced_count"] == 3
+    assert got["suppression_breakdown"] == {"below_impact_threshold": 2}
+
+
+def test_effective_impact_falls_back_when_americhem_impact_score_is_malformed():
+    """Bad americhem_impact_score → fall back to sentiment_score."""
+    from delivery_engine import _effective_impact, _alert_tier
+    row = {"americhem_impact_score": "bad", "sentiment_score": 8}
+    assert _effective_impact(row) == 8
+    assert _alert_tier(row) == "STRATEGIC"
+
+
+def test_effective_impact_uses_default_when_both_scores_malformed():
+    """Bad in both fields → default to 5 (routine), do not raise."""
+    from delivery_engine import _effective_impact, _alert_tier
+    row = {"americhem_impact_score": "bad", "sentiment_score": "also bad"}
+    assert _effective_impact(row) == 5
+    assert _alert_tier(row) == "ROUTINE"
+
+
+def test_effective_impact_uses_default_when_both_scores_missing():
+    """Missing scores → default to 5 (unchanged behavior)."""
+    from delivery_engine import _effective_impact, _alert_tier
+    row = {"headline": "test"}
+    assert _effective_impact(row) == 5
+    assert _alert_tier(row) == "ROUTINE"

@@ -548,3 +548,60 @@ def test_repo_is_monkeypatchable_at_consumer(monkeypatch):
     fake = InMemoryIntelligenceRepo()
     monkeypatch.setattr(consumer, "_repo", lambda: fake)
     assert consumer._repo() is fake
+
+
+def test_in_memory_require_delivery_state_returns_existing_row():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({
+        "run_date": "2026-05-26", "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "y",
+        "suppression_breakdown": {"duplicate_url": 3},
+    })
+    got = repo.require_delivery_state(run_date="2026-05-26", run_mode="production")
+    assert got is not None
+    assert got["suppression_breakdown"] == {"duplicate_url": 3}
+
+
+def test_in_memory_require_delivery_state_returns_none_when_missing():
+    """Strict reader still uses None to mean 'no row exists' — only
+    distinguishes from get_delivery_state in the read-failure case."""
+    repo = InMemoryIntelligenceRepo()
+    assert repo.require_delivery_state(run_date="2026-05-26", run_mode="production") is None
+
+
+def test_supabase_require_delivery_state_does_not_swallow_errors(supabase_repo):
+    """Unlike get_delivery_state, require_delivery_state raises on read failure.
+    This is what prevents read-failure → overwrite-prior-state corruption."""
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = RuntimeError("read failed")
+    with pytest.raises(RuntimeError, match="read failed"):
+        repo.require_delivery_state(run_date="2026-05-26", run_mode="production")
+
+
+def test_supabase_require_delivery_state_returns_row_on_success(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .eq.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = [{"suppression_breakdown": {"x": 1}}]
+    got = repo.require_delivery_state(run_date="2026-05-26", run_mode="production")
+    assert got == {"suppression_breakdown": {"x": 1}}
+
+
+def test_supabase_require_delivery_state_returns_none_when_no_row(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .eq.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = []
+    assert repo.require_delivery_state(run_date="2026-05-26", run_mode="production") is None
