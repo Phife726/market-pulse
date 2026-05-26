@@ -107,6 +107,43 @@ def test_fetch_recent_returns_independent_copies():
     assert again[0]["headline"] == "Original"
 
 
+def test_in_memory_fetch_recent_accepts_timezone_aware_created_at_strings():
+    """Supabase returns ISO timestamps with an explicit UTC offset
+    (`...+00:00`). The fake must compare them against its naive cutoff
+    without raising TypeError on aware/naive mismatch."""
+    now = datetime(2026, 5, 26, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: now)
+
+    repo.upsert_insight(
+        {
+            "url_hash": "aware-recent",
+            "headline": "Aware recent",
+            "created_at": "2026-05-26T10:00:00+00:00",
+        }
+    )
+
+    rows = repo.fetch_recent(hours=3)
+
+    assert [row["url_hash"] for row in rows] == ["aware-recent"]
+
+
+def test_in_memory_fetch_recent_excludes_old_timezone_aware_created_at_strings():
+    """An aware timestamp outside the lookback window must still filter out
+    cleanly (i.e. comparison happens, no TypeError)."""
+    now = datetime(2026, 5, 26, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: now)
+
+    repo.upsert_insight(
+        {
+            "url_hash": "aware-old",
+            "headline": "Aware old",
+            "created_at": "2026-05-26T08:00:00+00:00",
+        }
+    )
+
+    assert repo.fetch_recent(hours=3) == []
+
+
 def test_recent_headlines_returns_set_of_headlines():
     fixed_now = datetime(2026, 5, 26, 12, 0, 0)
     repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)

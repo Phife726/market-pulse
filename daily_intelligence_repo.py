@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Protocol
 
 from supabase import create_client, Client
@@ -167,6 +167,32 @@ class SupabaseIntelligenceRepo:
         )
 
 
+def _coerce_created_at(value: object) -> Optional[datetime]:
+    """Normalize a stored created_at value into a naive UTC datetime.
+
+    Supabase returns ISO strings with an explicit UTC offset (e.g.
+    "2026-05-26T10:00:00+00:00"). datetime.fromisoformat() parses those
+    as timezone-aware, but the fake's _now()/cutoff are naive (from
+    datetime.utcnow()). Comparing aware to naive raises TypeError.
+
+    Strategy: parse, then if the result is tz-aware, convert to UTC and
+    strip tzinfo so all comparisons stay naive-UTC. Return None on
+    unparseable or unsupported types so callers can skip the row.
+    """
+    if isinstance(value, str):
+        try:
+            ts = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    elif isinstance(value, datetime):
+        ts = value
+    else:
+        return None
+    if ts.tzinfo is not None:
+        return ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts
+
+
 class InMemoryIntelligenceRepo:
     """Faithful in-memory fake. Honors the same invariants the schema enforces:
     - url_hash is unique on daily_intelligence (upsert semantics).
@@ -196,17 +222,10 @@ class InMemoryIntelligenceRepo:
 
     def fetch_recent(self, hours: int) -> list[dict]:
         cutoff = self._now() - timedelta(hours=hours)
-        rows = []
+        rows: list[dict] = []
         for row in self._articles.values():
-            created = row.get("created_at")
-            if isinstance(created, str):
-                try:
-                    ts = datetime.fromisoformat(created)
-                except ValueError:
-                    continue
-            elif isinstance(created, datetime):
-                ts = created
-            else:
+            ts = _coerce_created_at(row.get("created_at"))
+            if ts is None:
                 continue
             if ts >= cutoff:
                 rows.append(dict(row))
