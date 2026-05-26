@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse
 from typing import Optional
 
 from suppression_ledger import SuppressionLedger
+from daily_intelligence_repo import _repo
 
 import requests
 import yaml
@@ -312,19 +313,7 @@ def compute_url_hash(normalized_url: str) -> str:
 
 
 def url_already_processed(url_hash: str) -> bool:
-    try:
-        supabase = _get_supabase()
-        result = (
-            supabase.table("daily_intelligence")
-            .select("url_hash")
-            .eq("url_hash", url_hash)
-            .limit(1)
-            .execute()
-        )
-        return len(result.data) > 0
-    except Exception as exc:
-        logger.error("Supabase duplicate-check failed for hash %s: %s", url_hash, exc)
-        return False
+    return _repo().exists_by_hash(url_hash)
 
 
 def scrape_article(url: str, min_length: int) -> Optional[str]:

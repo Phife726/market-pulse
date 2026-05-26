@@ -2899,3 +2899,20 @@ def test_synthesize_insight_non_english_body_keeps_english_directive():
         "Source-language article body should be forwarded verbatim to the LLM; "
         "no client-side translation should occur."
     )
+
+
+# ---------------------------------------------------------------------------
+# Repository wiring — ingestion paths route through _repo()
+# ---------------------------------------------------------------------------
+
+from daily_intelligence_repo import InMemoryIntelligenceRepo
+
+
+def test_url_already_processed_routes_through_repo(monkeypatch):
+    """url_already_processed returns True iff the InMemory fake reports a hit."""
+    from ingestion_engine import url_already_processed
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_insight({"url_hash": "abc123", "headline": "Test"})
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+    assert url_already_processed("abc123") is True
+    assert url_already_processed("never_seen") is False
