@@ -1429,6 +1429,13 @@ def test_commercial_segment_of_defaults_when_missing():
     assert _commercial_segment_of({"commercial_segment": ""}) == "Enterprise / Cross-Segment"
 
 
+def test_commercial_segment_of_defaults_for_whitespace_only():
+    """A whitespace-only commercial_segment must default to Enterprise / Cross-Segment,
+    not produce a blank segment bucket."""
+    from delivery_engine import _commercial_segment_of
+    assert _commercial_segment_of({"commercial_segment": "   "}) == "Enterprise / Cross-Segment"
+
+
 def test_signal_type_of_prefers_new_field():
     from delivery_engine import _signal_type_of
     assert _signal_type_of({"signal_type": "Regulatory"}) == "Regulatory"

@@ -73,7 +73,8 @@ def _effective_impact(row: dict) -> int:
 
 def _commercial_segment_of(row: dict) -> str:
     """Return commercial_segment if set; else default."""
-    return (row.get("commercial_segment") or "Enterprise / Cross-Segment").strip()
+    seg = (row.get("commercial_segment") or "").strip()
+    return seg or "Enterprise / Cross-Segment"
 
 
 def _signal_type_of(row: dict) -> str:
