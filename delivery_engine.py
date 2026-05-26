@@ -9,9 +9,9 @@ from typing import Optional
 import requests
 import yaml
 from openai import OpenAI
-from supabase import create_client, Client
 
 from suppression_ledger import SuppressionLedger, label_for
+from daily_intelligence_repo import _repo
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,11 +64,45 @@ def _load_mp_config() -> dict:
 
 
 def _effective_impact(row: dict) -> int:
-    """Return routing score: americhem_impact_score preferred, sentiment_score fallback."""
+    """Return routing score: americhem_impact_score preferred, sentiment_score fallback.
+
+    Robust to malformed values — invalid americhem_impact_score falls back to
+    sentiment_score; invalid sentiment_score falls back to 5. Bad row data
+    should degrade the score, not crash the delivery run."""
     score = row.get("americhem_impact_score")
     if score is not None:
-        return int(score)
-    return int(row.get("sentiment_score") or 5)
+        try:
+            return int(score)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid americhem_impact_score %r for row %r; falling back to sentiment_score.",
+                score,
+                row.get("source_url") or row.get("headline") or row.get("url_hash"),
+            )
+
+    fallback = row.get("sentiment_score")
+    if fallback is not None:
+        try:
+            return int(fallback)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid sentiment_score %r for row %r; using default score 5.",
+                fallback,
+                row.get("source_url") or row.get("headline") or row.get("url_hash"),
+            )
+
+    return 5
+
+
+def _alert_tier(row: dict) -> str:
+    """Return the alert tier label for a row: CRITICAL / STRATEGIC / ROUTINE.
+    Computed from _effective_impact — used only for batch logging."""
+    impact = _effective_impact(row)
+    if impact <= 3:
+        return "CRITICAL"
+    if impact >= 8:
+        return "STRATEGIC"
+    return "ROUTINE"
 
 
 def _commercial_segment_of(row: dict) -> str:
@@ -489,88 +523,32 @@ def _get_openai() -> OpenAI:
 
 
 # ---------------------------------------------------------------------------
-# Client factory
-# ---------------------------------------------------------------------------
-
-def _get_supabase() -> Client:
-    """Return an authenticated Supabase client using env credentials."""
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
-
-
-# ---------------------------------------------------------------------------
 # 1. Data fetch — with Monday 72-hour lookback
 # ---------------------------------------------------------------------------
 
 def fetch_todays_intelligence() -> list[dict]:
-    try:
-        supabase = _get_supabase()
-        is_monday = datetime.now().weekday() == 0
-        lookback_hours = 72 if is_monday else 24
-        if is_monday:
-            logger.info("Monday detected — extending lookback to 72 hours.")
-
-        cutoff = (datetime.utcnow() - timedelta(hours=lookback_hours)).isoformat()
-
-        result = (
-            supabase.table("daily_intelligence")
-            .select("*")
-            .gte("created_at", cutoff)
-            .order("americhem_impact_score", desc=True)
-            .execute()
-        )
-
-        records: list[dict] = []
-        for row in result.data or []:
-            impact = _effective_impact(row)
-            if impact <= 3:
-                row["alert_tier"] = "CRITICAL"
-            elif impact >= 8:
-                row["alert_tier"] = "STRATEGIC"
-            else:
-                row["alert_tier"] = "ROUTINE"
-            records.append(row)
-
-        logger.info(
-            "Fetched %d intelligence record(s) (lookback: %dh).",
-            len(records),
-            lookback_hours,
-        )
-        return records
-
-    except Exception as exc:
-        logger.error("Failed to fetch intelligence from Supabase: %s", exc)
-        return []
+    is_monday = datetime.now().weekday() == 0
+    lookback_hours = 72 if is_monday else 24
+    if is_monday:
+        logger.info("Monday detected — extending lookback to 72 hours.")
+    rows = _repo().fetch_recent(hours=lookback_hours)
+    logger.info(
+        "Fetched %d intelligence record(s) (lookback: %dh).",
+        len(rows), lookback_hours,
+    )
+    return rows
 
 
 def fetch_macro_summary() -> dict | None:
-    try:
-        from datetime import date
-
-        min_run_date = (date.today() - timedelta(days=1)).isoformat()
-        supabase = _get_supabase()
-        result = (
-            supabase.table("daily_summaries")
-            .select(
-                "run_date, run_mode, executive_summary, macro_sentiment, "
-                "dominant_condition, executive_bullets, screened_count, "
-                "surfaced_count, suppression_breakdown, suppression_samples"
-            )
-            .eq("run_mode", _run_mode())
-            .gte("run_date", min_run_date)
-            .order("run_date", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if result.data:
-            return result.data[0]
-
+    from datetime import date
+    min_run_date = (date.today() - timedelta(days=1)).isoformat()
+    summary = _repo().fetch_latest_summary(
+        run_mode=_run_mode(),
+        min_date=min_run_date,
+    )
+    if summary is None:
         logger.warning("No macro summary found for run_date >= %s.", min_run_date)
-        return None
-    except Exception as exc:
-        logger.error("Failed to fetch macro summary: %s", exc)
-        return None
+    return summary
 
 
 def _update_delivery_summary_counts(
@@ -582,27 +560,21 @@ def _update_delivery_summary_counts(
     and merged suppression accounting. Idempotent on same-day retry — the
     merge semantics live in SuppressionLedger.merge_with().
 
-    Non-critical: failures are logged but do not raise."""
+    Non-critical: a failed write is logged but does not raise. Keeps the
+    email-sending path resilient to transient Supabase outages."""
+    from datetime import date as _date
+    today = _date.today().isoformat()
+    run_mode = _run_mode()
     try:
-        from datetime import date as _date
-        supabase = _get_supabase()
-
-        existing = (
-            supabase.table("daily_summaries")
-            .select("suppression_breakdown, suppression_samples")
-            .eq("run_date", _date.today().isoformat())
-            .eq("run_mode", _run_mode())
-            .limit(1)
-            .execute()
-        )
-        prior_row = (existing.data or [None])[0]
+        prior_row = _repo().require_delivery_state(run_date=today, run_mode=run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
         merged = ledger.merge_with(prior)
-
-        supabase.table("daily_summaries").update({
-            "surfaced_count": surfaced_count,
-            **merged.to_row(),
-        }).eq("run_date", _date.today().isoformat()).eq("run_mode", _run_mode()).execute()
+        _repo().update_delivery_counts(
+            run_date=today,
+            run_mode=run_mode,
+            surfaced_count=surfaced_count,
+            ledger_row=merged.to_row(),
+        )
     except Exception as exc:
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
 
@@ -1257,9 +1229,9 @@ def execute_pipeline() -> None:
         send_email(html)
         return
 
-    critical_count  = sum(1 for r in data if r.get("alert_tier") == "CRITICAL")
-    strategic_count = sum(1 for r in data if r.get("alert_tier") == "STRATEGIC")
-    routine_count   = sum(1 for r in data if r.get("alert_tier") == "ROUTINE")
+    critical_count  = sum(1 for r in data if _alert_tier(r) == "CRITICAL")
+    strategic_count = sum(1 for r in data if _alert_tier(r) == "STRATEGIC")
+    routine_count   = sum(1 for r in data if _alert_tier(r) == "ROUTINE")
     logger.info(
         "Rendering email — critical: %d | strategic: %d | routine: %d",
         critical_count, strategic_count, routine_count,
