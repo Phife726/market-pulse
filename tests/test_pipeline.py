@@ -3023,3 +3023,45 @@ def test_generate_macro_summary_propagates_repo_write_failure(monkeypatch):
                 {"category": "competitors", "headline": "x",
                  "sentiment_score": 5, "americhem_impact": "y"}
             ])
+
+
+# ---------------------------------------------------------------------------
+# Repository wiring — delivery paths route through _repo()
+# ---------------------------------------------------------------------------
+
+from datetime import datetime
+
+
+def test_fetch_todays_intelligence_routes_through_repo(monkeypatch):
+    """fetch_todays_intelligence returns repo.fetch_recent rows verbatim
+    (alert_tier decoration is no longer this function's job)."""
+    from delivery_engine import fetch_todays_intelligence
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_insight({
+        "url_hash": "a", "headline": "Alpha",
+        "americhem_impact_score": 8, "sentiment_score": 7,
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    rows = fetch_todays_intelligence()
+    assert len(rows) == 1
+    assert rows[0]["headline"] == "Alpha"
+    assert "alert_tier" not in rows[0]   # decoration moved to caller
+
+
+def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
+    """Monday detection still drives the lookback parameter."""
+    import delivery_engine
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    fake.fetch_recent.return_value = []
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    # Force "today" to be a Monday for this test.
+    fixed_monday = datetime(2026, 5, 25, 9, 0, 0)  # Monday
+    class _FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_monday
+    monkeypatch.setattr(delivery_engine, "datetime", _FixedDateTime)
+
+    delivery_engine.fetch_todays_intelligence()
+    fake.fetch_recent.assert_called_once_with(hours=72)

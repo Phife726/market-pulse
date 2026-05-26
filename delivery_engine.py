@@ -12,6 +12,7 @@ from openai import OpenAI
 from supabase import create_client, Client
 
 from suppression_ledger import SuppressionLedger, label_for
+from daily_intelligence_repo import _repo
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,6 +70,17 @@ def _effective_impact(row: dict) -> int:
     if score is not None:
         return int(score)
     return int(row.get("sentiment_score") or 5)
+
+
+def _alert_tier(row: dict) -> str:
+    """Return the alert tier label for a row: CRITICAL / STRATEGIC / ROUTINE.
+    Computed from _effective_impact — used only for batch logging."""
+    impact = _effective_impact(row)
+    if impact <= 3:
+        return "CRITICAL"
+    if impact >= 8:
+        return "STRATEGIC"
+    return "ROUTINE"
 
 
 def _commercial_segment_of(row: dict) -> str:
@@ -504,44 +516,16 @@ def _get_supabase() -> Client:
 # ---------------------------------------------------------------------------
 
 def fetch_todays_intelligence() -> list[dict]:
-    try:
-        supabase = _get_supabase()
-        is_monday = datetime.now().weekday() == 0
-        lookback_hours = 72 if is_monday else 24
-        if is_monday:
-            logger.info("Monday detected — extending lookback to 72 hours.")
-
-        cutoff = (datetime.utcnow() - timedelta(hours=lookback_hours)).isoformat()
-
-        result = (
-            supabase.table("daily_intelligence")
-            .select("*")
-            .gte("created_at", cutoff)
-            .order("americhem_impact_score", desc=True)
-            .execute()
-        )
-
-        records: list[dict] = []
-        for row in result.data or []:
-            impact = _effective_impact(row)
-            if impact <= 3:
-                row["alert_tier"] = "CRITICAL"
-            elif impact >= 8:
-                row["alert_tier"] = "STRATEGIC"
-            else:
-                row["alert_tier"] = "ROUTINE"
-            records.append(row)
-
-        logger.info(
-            "Fetched %d intelligence record(s) (lookback: %dh).",
-            len(records),
-            lookback_hours,
-        )
-        return records
-
-    except Exception as exc:
-        logger.error("Failed to fetch intelligence from Supabase: %s", exc)
-        return []
+    is_monday = datetime.now().weekday() == 0
+    lookback_hours = 72 if is_monday else 24
+    if is_monday:
+        logger.info("Monday detected — extending lookback to 72 hours.")
+    rows = _repo().fetch_recent(hours=lookback_hours)
+    logger.info(
+        "Fetched %d intelligence record(s) (lookback: %dh).",
+        len(rows), lookback_hours,
+    )
+    return rows
 
 
 def fetch_macro_summary() -> dict | None:
@@ -1257,9 +1241,9 @@ def execute_pipeline() -> None:
         send_email(html)
         return
 
-    critical_count  = sum(1 for r in data if r.get("alert_tier") == "CRITICAL")
-    strategic_count = sum(1 for r in data if r.get("alert_tier") == "STRATEGIC")
-    routine_count   = sum(1 for r in data if r.get("alert_tier") == "ROUTINE")
+    critical_count  = sum(1 for r in data if _alert_tier(r) == "CRITICAL")
+    strategic_count = sum(1 for r in data if _alert_tier(r) == "STRATEGIC")
+    routine_count   = sum(1 for r in data if _alert_tier(r) == "ROUTINE")
     logger.info(
         "Rendering email — critical: %d | strategic: %d | routine: %d",
         critical_count, strategic_count, routine_count,
