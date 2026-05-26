@@ -10,11 +10,11 @@ from urllib.parse import urlparse, urlunparse
 from typing import Optional
 
 from suppression_ledger import SuppressionLedger
+from daily_intelligence_repo import _repo
 
 import requests
 import yaml
 from openai import OpenAI
-from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -197,13 +197,6 @@ def _scrape_fallback(url: str) -> Optional[str]:
     return text if text else None
 
 
-
-def _get_supabase() -> Client:
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
-
-
 def _get_openai() -> OpenAI:
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
@@ -312,19 +305,7 @@ def compute_url_hash(normalized_url: str) -> str:
 
 
 def url_already_processed(url_hash: str) -> bool:
-    try:
-        supabase = _get_supabase()
-        result = (
-            supabase.table("daily_intelligence")
-            .select("url_hash")
-            .eq("url_hash", url_hash)
-            .limit(1)
-            .execute()
-        )
-        return len(result.data) > 0
-    except Exception as exc:
-        logger.error("Supabase duplicate-check failed for hash %s: %s", url_hash, exc)
-        return False
+    return _repo().exists_by_hash(url_hash)
 
 
 def scrape_article(url: str, min_length: int) -> Optional[str]:
@@ -615,31 +596,15 @@ def is_semantic_duplicate(candidate: str, seen_headlines: set[str]) -> tuple[boo
 
 
 def _hydrate_seen_headlines() -> set[str]:
-    try:
-        supabase = _get_supabase()
-        cutoff = (datetime.utcnow() - timedelta(hours=72)).isoformat()
-        result = (
-            supabase.table("daily_intelligence")
-            .select("headline")
-            .gte("created_at", cutoff)
-            .execute()
-        )
-        headlines = {str(row["headline"]) for row in result.data or []}
-        logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
-        return headlines
-    except Exception as exc:
-        logger.error("Failed to hydrate seen_headlines — semantic dedup disabled: %s", exc)
-        return set()
+    headlines = _repo().recent_headlines(hours=72)
+    logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
+    return headlines
 
 
-def store_insight(payload: dict) -> bool:
-    try:
-        supabase = _get_supabase()
-        supabase.table("daily_intelligence").upsert(payload, on_conflict="url_hash").execute()
-        return True
-    except Exception as exc:
-        logger.error("Supabase upsert failed: %s", exc)
-        return False
+def store_insight(payload: dict) -> None:
+    """Persist an article insight. Raises on Supabase failure — callers in
+    execute_pipeline catch and bump stats['errors'] so the batch continues."""
+    _repo().upsert_insight(payload)
 
 
 def _validate_executive_bullets(raw) -> Optional[list[dict]]:
@@ -761,28 +726,20 @@ def generate_macro_summary(
     else:
         executive_summary = "Macro summary unavailable today."
 
-    try:
-        from datetime import date
-        supabase = _get_supabase()
-        supabase.table("daily_summaries").upsert(
-            {
-                "run_date": date.today().isoformat(),
-                "run_mode": _run_mode(),
-                "dominant_condition": cond,
-                "executive_bullets": bullets,
-                "executive_summary": executive_summary,
-                "macro_sentiment": cond,
-                "screened_count": screened_count,
-                "suppression_breakdown": suppression_breakdown or {},
-                "suppression_samples": suppression_samples or [],
-            },
-            on_conflict="run_date,run_mode",
-        ).execute()
-        logger.info("Macro summary upserted — condition: %s", cond)
-        return True
-    except Exception as exc:
-        logger.error("Failed to upsert macro summary to Supabase: %s", exc)
-        return False
+    from datetime import date
+    _repo().upsert_summary({
+        "run_date": date.today().isoformat(),
+        "run_mode": _run_mode(),
+        "dominant_condition": cond,
+        "executive_bullets": bullets,
+        "executive_summary": executive_summary,
+        "macro_sentiment": cond,
+        "screened_count": screened_count,
+        "suppression_breakdown": suppression_breakdown or {},
+        "suppression_samples": suppression_samples or [],
+    })
+    logger.info("Macro summary upserted — condition: %s", cond)
+    return True
 
 
 def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
@@ -922,7 +879,12 @@ def execute_pipeline() -> None:
                 "signal_type": insight.get("signal_type", "Other"),
             }
 
-            if store_insight(payload):
+            try:
+                store_insight(payload)
+            except Exception as exc:
+                logger.error("Failed to store insight for %s: %s", normalized, exc)
+                stats["errors"] += 1
+            else:
                 logger.info(
                     "Stored [impact=%d, sentiment=%s] %s",
                     insight.get("americhem_impact_score", 5),
@@ -932,8 +894,6 @@ def execute_pipeline() -> None:
                 stats["insights_stored"] += 1
                 stored_articles_buffer.append(payload)
                 seen_headlines.add(insight["headline"])
-            else:
-                stats["errors"] += 1
 
             time.sleep(1.5)
 
