@@ -2803,3 +2803,47 @@ def test_ingestion_system_prompt_contains_english_rule():
 
     prompt = _build_system_prompt(_load_mp_config())
     _assert_english_anchors_present(prompt)
+
+
+def test_macro_summary_system_prompt_contains_english_rule():
+    """The macro-summary system prompt must include the English-output directive."""
+    from ingestion_engine import generate_macro_summary
+
+    mock_message = MagicMock()
+    mock_message.content = json.dumps(
+        {
+            "dominant_condition": "Mixed / Watch",
+            "executive_bullets": [
+                {"label": "Market pressure", "body": "Stub bullet body."},
+                {"label": "Supply chain watch", "body": "Stub bullet body."},
+                {"label": "Commercial action", "body": "Stub bullet body."},
+            ],
+        }
+    )
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    mock_supabase = MagicMock()
+    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client), patch(
+        "ingestion_engine._get_supabase", return_value=mock_supabase
+    ):
+        generate_macro_summary(
+            [
+                {
+                    "category": "competitors",
+                    "headline": "Stub headline",
+                    "sentiment_score": 5,
+                    "americhem_impact": "Stub impact.",
+                }
+            ]
+        )
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    system_message = kwargs["messages"][0]["content"]
+    _assert_english_anchors_present(system_message)

@@ -699,6 +699,7 @@ def generate_macro_summary(
     label_a, label_b, label_c = _EXEC_BULLET_LABELS
 
     system_prompt = (
+        f"OUTPUT LANGUAGE:\n{_ENGLISH_OUTPUT_RULE}\n\n"
         "You are a senior Americhem commercial intelligence analyst writing the morning brief\n"
         "for GMMs and Sales leaders. Output ONLY a JSON object with two keys.\n\n"
         "1. dominant_condition — pick exactly one value from this list that best describes\n"
