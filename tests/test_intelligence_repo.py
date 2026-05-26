@@ -7,7 +7,7 @@ Two layers:
   assert each method targets the right table, on_conflict, and filters.
 """
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -17,6 +17,14 @@ from daily_intelligence_repo import (
     _repo,
     _reset_repo,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_repo_singleton():
+    """Ensure each test sees a clean repo singleton — prevents state from
+    one test's _repo() call from leaking into the next."""
+    yield
+    _reset_repo()
 
 
 # ---------------------------------------------------------------------------
