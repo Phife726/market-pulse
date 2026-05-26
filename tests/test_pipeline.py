@@ -2926,3 +2926,23 @@ def test_hydrate_seen_headlines_routes_through_repo(monkeypatch):
     fake.upsert_insight({"url_hash": "b", "headline": "Beta"})
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
     assert _hydrate_seen_headlines() == {"Alpha", "Beta"}
+
+
+def test_store_insight_routes_through_repo(monkeypatch):
+    """store_insight upserts via the repo and returns the fake's stored row."""
+    from ingestion_engine import store_insight
+    fake = InMemoryIntelligenceRepo()
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+    store_insight({"url_hash": "abc", "headline": "Stored"})
+    rows = fake.fetch_recent(hours=24)
+    assert rows[0]["headline"] == "Stored"
+
+
+def test_store_insight_raises_on_repo_write_failure(monkeypatch):
+    """The repo's write methods raise; store_insight propagates."""
+    from ingestion_engine import store_insight
+    failing = MagicMock()
+    failing.upsert_insight.side_effect = RuntimeError("write blew up")
+    monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
+    with pytest.raises(RuntimeError, match="write blew up"):
+        store_insight({"url_hash": "abc", "headline": "x"})

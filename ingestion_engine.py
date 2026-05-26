@@ -609,14 +609,10 @@ def _hydrate_seen_headlines() -> set[str]:
     return headlines
 
 
-def store_insight(payload: dict) -> bool:
-    try:
-        supabase = _get_supabase()
-        supabase.table("daily_intelligence").upsert(payload, on_conflict="url_hash").execute()
-        return True
-    except Exception as exc:
-        logger.error("Supabase upsert failed: %s", exc)
-        return False
+def store_insight(payload: dict) -> None:
+    """Persist an article insight. Raises on Supabase failure — callers in
+    execute_pipeline catch and bump stats['errors'] so the batch continues."""
+    _repo().upsert_insight(payload)
 
 
 def _validate_executive_bullets(raw) -> Optional[list[dict]]:
@@ -899,7 +895,12 @@ def execute_pipeline() -> None:
                 "signal_type": insight.get("signal_type", "Other"),
             }
 
-            if store_insight(payload):
+            try:
+                store_insight(payload)
+            except Exception as exc:
+                logger.error("Failed to store insight for %s: %s", normalized, exc)
+                stats["errors"] += 1
+            else:
                 logger.info(
                     "Stored [impact=%d, sentiment=%s] %s",
                     insight.get("americhem_impact_score", 5),
@@ -909,8 +910,6 @@ def execute_pipeline() -> None:
                 stats["insights_stored"] += 1
                 stored_articles_buffer.append(payload)
                 seen_headlines.add(insight["headline"])
-            else:
-                stats["errors"] += 1
 
             time.sleep(1.5)
 
