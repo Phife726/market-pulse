@@ -2469,12 +2469,7 @@ def test_header_falls_back_to_len_data_when_screened_null(monkeypatch):
     ], "dominant_condition": "Competitive Pressure",
        "screened_count": None, "surfaced_count": None}
 
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2494,12 +2489,7 @@ def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
              "dominant_condition": None, "macro_sentiment": None,
              "screened_count": 5, "surfaced_count": 1}
 
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2542,12 +2532,8 @@ def test_qa_debug_section_appears_in_test_mode(monkeypatch):
              "title": "Best extension cord colors"},
         ],
     }
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
 
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2582,12 +2568,8 @@ def test_qa_debug_section_absent_in_production(monkeypatch):
                                  "url": "https://amazon.com/product/1",
                                  "title": "Pretty plastic tote"}],
     }
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
 
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 

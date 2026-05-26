@@ -9,7 +9,6 @@ from typing import Optional
 import requests
 import yaml
 from openai import OpenAI
-from supabase import create_client, Client
 
 from suppression_ledger import SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
@@ -498,17 +497,6 @@ OPENAI_MODEL = "gpt-5.4-nano"
 def _get_openai() -> OpenAI:
     """Return an authenticated OpenAI client using env credentials."""
     return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-
-# ---------------------------------------------------------------------------
-# Client factory
-# ---------------------------------------------------------------------------
-
-def _get_supabase() -> Client:
-    """Return an authenticated Supabase client using env credentials."""
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
 
 
 # ---------------------------------------------------------------------------
