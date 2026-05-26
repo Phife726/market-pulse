@@ -1698,7 +1698,7 @@ def test_system_prompt_includes_both_segment_and_signal_rules():
     assert "High-performance compounds." in prompt
     assert "Supply Chain" in prompt
     assert "Resin pricing, force majeure." in prompt
-    assert "seven rules" in prompt
+    assert "eight rules" in prompt
 
 
 def test_config_has_commercial_segments_and_signal_types():
@@ -2780,3 +2780,26 @@ def test_delivery_suppression_idempotent_on_same_day_retry():
         f"Retry must be idempotent. First={first_breakdown} Second={second_breakdown}"
     assert first_samples == second_samples, \
         f"Retry must not duplicate samples. First={first_samples} Second={second_samples}"
+
+
+# ---------------------------------------------------------------------------
+# 7. English-output rule — prompt-contract tests
+# ---------------------------------------------------------------------------
+
+_ENGLISH_ANCHORS = ("business English", "regardless of the source article")
+
+
+def _assert_english_anchors_present(prompt_text: str) -> None:
+    for anchor in _ENGLISH_ANCHORS:
+        assert anchor in prompt_text, (
+            f"Expected English-output anchor {anchor!r} in prompt, but it was missing.\n"
+            f"Prompt:\n{prompt_text}"
+        )
+
+
+def test_ingestion_system_prompt_contains_english_rule():
+    """RULE 0 — OUTPUT LANGUAGE must be present in the assembled ingestion prompt."""
+    from ingestion_engine import _build_system_prompt, _load_mp_config
+
+    prompt = _build_system_prompt(_load_mp_config())
+    _assert_english_anchors_present(prompt)

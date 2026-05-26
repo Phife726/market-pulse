@@ -386,12 +386,27 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     return markdown
 
 
+# Cross-reference: an identical-body constant lives in delivery_engine.py.
+# Both prompts are gated in CI by tests that assert the same anchor substrings;
+# if you reword this, reword the delivery_engine.py copy in lockstep.
+_ENGLISH_OUTPUT_RULE = (
+    "All human-readable generated strings must be written in clear business English, "
+    "regardless of the source article's language. Translate non-English source "
+    "content into English. Preserve proper nouns — company names, product names, "
+    "brand names, source publications, locations, URLs, and quoted legal or product "
+    "identifiers — in their original form when translation would reduce precision. "
+    "Enum/taxonomy fields must use the configured English labels exactly."
+)
+
 _SYSTEM_PROMPT_BASE = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
 a global manufacturer of custom color masterbatch, functional additives, and engineered compounds
 serving automotive, healthcare, packaging, wire and cable, and industrial markets.
 
 Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-seven rules below before generating any output.
+eight rules below before generating any output.
+
+RULE 0 — OUTPUT LANGUAGE:
+{english_output_rule}
 
 RULE 1 — ENTITY DISAMBIGUATION:
 Before scoring, verify that the named entity in this article is the correct one.
@@ -474,7 +489,12 @@ def _build_system_prompt(config: dict) -> str:
     """Assemble the full system prompt, injecting commercial segment and signal type taxonomies."""
     rule4 = _build_commercial_segment_rule(config)
     rule5 = _build_signal_type_rule(config)
-    return _SYSTEM_PROMPT_BASE.replace("{rule4}", rule4).replace("{rule5}", rule5)
+    return (
+        _SYSTEM_PROMPT_BASE
+        .replace("{english_output_rule}", _ENGLISH_OUTPUT_RULE)
+        .replace("{rule4}", rule4)
+        .replace("{rule5}", rule5)
+    )
 
 _VALID_ACTIONS: frozenset[str] = frozenset({
     "No action", "Monitor", "Flag to procurement",
