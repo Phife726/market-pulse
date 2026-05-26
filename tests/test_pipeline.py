@@ -870,12 +870,9 @@ def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
          "entities_mentioned": ["BASF"], "source_url": "https://x/0",
          "commercial_segment": "Enterprise / Cross-Segment"},
     ]
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
     # Note: this legacy row has no americhem_impact_score, so the visibility filter
@@ -906,12 +903,9 @@ def test_generate_html_email_routes_two_plus_to_segment_watch(monkeypatch):
          "entities_mentioned": ["Techmer"]},
     ]
     mock_synth = _make_synthesis_mock({"Healthcare": "Synthesis paragraph here."})
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("delivery_engine._get_openai", return_value=mock_synth), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
     assert "COMMERCIAL SEGMENT WATCH" in html
@@ -931,12 +925,9 @@ def test_generate_html_email_single_low_relevance_hidden_in_production(monkeypat
              "headline": "Low relevance packaging signal",
              "americhem_impact": ".", "source_url": "https://x/p",
              "entities_mentioned": ["Acme"]}]
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
-    mock_supa.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
-
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
-         patch("delivery_engine._get_supabase", return_value=mock_supa), \
+         patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
     assert "Low relevance packaging signal" not in html
