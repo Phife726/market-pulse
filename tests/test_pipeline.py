@@ -20,9 +20,6 @@ from ingestion_engine import (
     synthesize_insight,
 )
 
-from delivery_engine import synthesize_thematic_paragraphs
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
