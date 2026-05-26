@@ -734,28 +734,20 @@ def generate_macro_summary(
     else:
         executive_summary = "Macro summary unavailable today."
 
-    try:
-        from datetime import date
-        supabase = _get_supabase()
-        supabase.table("daily_summaries").upsert(
-            {
-                "run_date": date.today().isoformat(),
-                "run_mode": _run_mode(),
-                "dominant_condition": cond,
-                "executive_bullets": bullets,
-                "executive_summary": executive_summary,
-                "macro_sentiment": cond,
-                "screened_count": screened_count,
-                "suppression_breakdown": suppression_breakdown or {},
-                "suppression_samples": suppression_samples or [],
-            },
-            on_conflict="run_date,run_mode",
-        ).execute()
-        logger.info("Macro summary upserted — condition: %s", cond)
-        return True
-    except Exception as exc:
-        logger.error("Failed to upsert macro summary to Supabase: %s", exc)
-        return False
+    from datetime import date
+    _repo().upsert_summary({
+        "run_date": date.today().isoformat(),
+        "run_mode": _run_mode(),
+        "dominant_condition": cond,
+        "executive_bullets": bullets,
+        "executive_summary": executive_summary,
+        "macro_sentiment": cond,
+        "screened_count": screened_count,
+        "suppression_breakdown": suppression_breakdown or {},
+        "suppression_samples": suppression_samples or [],
+    })
+    logger.info("Macro summary upserted — condition: %s", cond)
+    return True
 
 
 def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:

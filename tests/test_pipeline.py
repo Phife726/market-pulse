@@ -350,12 +350,10 @@ def test_generate_macro_summary_uses_gpt_5_4_nano():
     mock_completion.choices = [mock_choice]
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = mock_completion
-    mock_supabase = MagicMock()
-    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client), patch(
-        "ingestion_engine._get_supabase", return_value=mock_supabase
-    ):
+    with patch("ingestion_engine._get_openai", return_value=mock_client), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
         result = generate_macro_summary(
             [
                 {
@@ -1762,12 +1760,25 @@ def _make_articles(n: int) -> list[dict]:
     ]
 
 
-def _capture_upsert(mock_supabase) -> dict:
-    """Return the dict that was passed to .upsert()."""
-    return mock_supabase.table.return_value.upsert.call_args[0][0]
+def _capture_summary(fake_repo) -> dict:
+    """Return the most recent summary row stored in the fake repo."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo  # noqa: F401
+    from datetime import date
+    row = fake_repo.get_delivery_state(
+        run_date=date.today().isoformat(),
+        run_mode=_ingestion_run_mode(),
+    )
+    assert row is not None, "No summary row was upserted"
+    return row
+
+
+def _ingestion_run_mode() -> str:
+    from ingestion_engine import _run_mode
+    return _run_mode()
 
 
 def test_generate_macro_summary_writes_dominant_condition_when_valid():
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {
         "dominant_condition": "Competitive Pressure",
         "executive_bullets": [
@@ -1776,11 +1787,11 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
             {"label": "Commercial action",  "body": "Body C."},
         ],
     }
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         assert generate_macro_summary(_make_articles(5)) is True
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["dominant_condition"] == "Competitive Pressure"
     assert row["executive_bullets"] == payload["executive_bullets"]
     # Legacy fields still populated for backward compat:
@@ -1789,6 +1800,7 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
 
 
 def test_generate_macro_summary_coerces_invalid_dominant_condition():
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {
         "dominant_condition": "NonExistentCondition",
         "executive_bullets": [
@@ -1797,31 +1809,33 @@ def test_generate_macro_summary_coerces_invalid_dominant_condition():
             {"label": "Commercial action",  "body": "C."},
         ],
     }
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5))
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["dominant_condition"] == "Mixed / Watch"
 
 
 def test_generate_macro_summary_defaults_low_signal_when_few_articles():
     """When fewer than 3 articles are passed in and the LLM omits a valid condition,
     default to Low Signal."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {"executive_bullets": [
         {"label": "Market pressure",    "body": "Quiet day."},
         {"label": "Supply chain watch", "body": "Quiet day."},
         {"label": "Commercial action",  "body": "Anything."},
     ]}
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2))
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["dominant_condition"] == "Low Signal"
 
 
 def test_generate_macro_summary_low_signal_coerces_action_body():
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {
         "dominant_condition": "Low Signal",
         "executive_bullets": [
@@ -1830,11 +1844,11 @@ def test_generate_macro_summary_low_signal_coerces_action_body():
             {"label": "Commercial action",  "body": "Sales should call every customer."},
         ],
     }
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2))
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["executive_bullets"][2]["body"] == "No action required."
 
 
@@ -1854,12 +1868,13 @@ def test_generate_macro_summary_low_signal_coerces_action_body():
     "not a list",                                      # wrong type
 ])
 def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {"dominant_condition": "Mixed / Watch", "executive_bullets": bad_bullets}
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5))
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["executive_bullets"] is None
     # Legacy executive_summary still populated so delivery has a fallback:
     assert row["executive_summary"]
@@ -1871,11 +1886,12 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
 
 def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
     """generate_macro_summary must accept counts and samples and persist them."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
     counts = {"duplicate_url": 3, "llm_discard": 2}
     samples = [
         {"reason": "llm_discard", "url": "https://x.com/1", "title": "Bad article"},
     ]
-    mock_supa = MagicMock()
+    fake_repo = InMemoryIntelligenceRepo()
     payload = {
         "dominant_condition": "Mixed / Watch",
         "executive_bullets": [
@@ -1885,14 +1901,14 @@ def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
         ],
     }
     with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
-         patch("ingestion_engine._get_supabase", return_value=mock_supa):
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(
             _make_articles(5),
             screened_count=87,
             suppression_breakdown=counts,
             suppression_samples=samples,
         )
-    row = _capture_upsert(mock_supa)
+    row = _capture_summary(fake_repo)
     assert row["screened_count"] == 87
     assert row["suppression_breakdown"] == counts
     assert row["suppression_samples"] == samples
@@ -2826,12 +2842,11 @@ def test_macro_summary_system_prompt_contains_english_rule():
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = mock_completion
 
-    mock_supabase = MagicMock()
-    mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock()
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    fake_repo = InMemoryIntelligenceRepo()
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client), patch(
-        "ingestion_engine._get_supabase", return_value=mock_supabase
-    ):
+    with patch("ingestion_engine._get_openai", return_value=mock_client), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(
             [
                 {
@@ -2946,3 +2961,66 @@ def test_store_insight_raises_on_repo_write_failure(monkeypatch):
     monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
     with pytest.raises(RuntimeError, match="write blew up"):
         store_insight({"url_hash": "abc", "headline": "x"})
+
+
+def test_generate_macro_summary_routes_through_repo(monkeypatch):
+    """The summary upsert hits repo.upsert_summary, not Supabase directly."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    fake = InMemoryIntelligenceRepo()
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+
+    # Mock OpenAI to return a valid macro summary JSON.
+    mock_message = MagicMock()
+    mock_message.content = json.dumps({
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Some pressure body text."},
+            {"label": "Supply chain watch", "body": "Some supply watch text."},
+            {"label": "Commercial action", "body": "Some commercial text."},
+        ],
+    })
+    mock_choice = MagicMock(); mock_choice.message = mock_message
+    mock_completion = MagicMock(); mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        result = generate_macro_summary([
+            {"category": "competitors", "headline": "x",
+             "sentiment_score": 5, "americhem_impact": "y"}
+        ])
+
+    assert result is True
+    from datetime import date
+    stored = fake.get_delivery_state(run_date=date.today().isoformat(), run_mode="production")
+    assert stored is not None
+    assert stored["dominant_condition"] == "Mixed / Watch"
+
+
+def test_generate_macro_summary_propagates_repo_write_failure(monkeypatch):
+    """If repo.upsert_summary raises, the function raises."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+    failing = MagicMock()
+    failing.upsert_summary.side_effect = RuntimeError("DB down")
+    monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
+
+    mock_message = MagicMock()
+    mock_message.content = json.dumps({
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "x"},
+            {"label": "Supply chain watch", "body": "y"},
+            {"label": "Commercial action", "body": "z"},
+        ],
+    })
+    mock_choice = MagicMock(); mock_choice.message = mock_message
+    mock_completion = MagicMock(); mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    with patch("ingestion_engine._get_openai", return_value=mock_client):
+        with pytest.raises(RuntimeError, match="DB down"):
+            generate_macro_summary([
+                {"category": "competitors", "headline": "x",
+                 "sentiment_score": 5, "americhem_impact": "y"}
+            ])
