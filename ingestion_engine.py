@@ -604,21 +604,9 @@ def is_semantic_duplicate(candidate: str, seen_headlines: set[str]) -> tuple[boo
 
 
 def _hydrate_seen_headlines() -> set[str]:
-    try:
-        supabase = _get_supabase()
-        cutoff = (datetime.utcnow() - timedelta(hours=72)).isoformat()
-        result = (
-            supabase.table("daily_intelligence")
-            .select("headline")
-            .gte("created_at", cutoff)
-            .execute()
-        )
-        headlines = {str(row["headline"]) for row in result.data or []}
-        logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
-        return headlines
-    except Exception as exc:
-        logger.error("Failed to hydrate seen_headlines — semantic dedup disabled: %s", exc)
-        return set()
+    headlines = _repo().recent_headlines(hours=72)
+    logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
+    return headlines
 
 
 def store_insight(payload: dict) -> bool:

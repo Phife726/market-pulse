@@ -2916,3 +2916,13 @@ def test_url_already_processed_routes_through_repo(monkeypatch):
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
     assert url_already_processed("abc123") is True
     assert url_already_processed("never_seen") is False
+
+
+def test_hydrate_seen_headlines_routes_through_repo(monkeypatch):
+    """_hydrate_seen_headlines returns the fake's recent headlines."""
+    from ingestion_engine import _hydrate_seen_headlines
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_insight({"url_hash": "a", "headline": "Alpha"})
+    fake.upsert_insight({"url_hash": "b", "headline": "Beta"})
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+    assert _hydrate_seen_headlines() == {"Alpha", "Beta"}
