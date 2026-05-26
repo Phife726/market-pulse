@@ -102,16 +102,36 @@ class InMemoryIntelligenceRepo:
         self._summaries: dict[tuple[str, str], dict] = {}    # (run_date, run_mode) -> row
 
     def exists_by_hash(self, url_hash: str) -> bool:
-        raise NotImplementedError
+        return url_hash in self._articles
 
     def upsert_insight(self, payload: dict) -> None:
-        raise NotImplementedError
+        url_hash = payload.get("url_hash")
+        if not url_hash:
+            raise ValueError("payload missing url_hash")
+        row = dict(payload)
+        row.setdefault("created_at", self._now().isoformat())
+        self._articles[url_hash] = row
 
     def recent_headlines(self, hours: int) -> set[str]:
         raise NotImplementedError
 
     def fetch_recent(self, hours: int) -> list[dict]:
-        raise NotImplementedError
+        cutoff = self._now() - timedelta(hours=hours)
+        rows = []
+        for row in self._articles.values():
+            created = row.get("created_at")
+            if isinstance(created, str):
+                try:
+                    ts = datetime.fromisoformat(created)
+                except ValueError:
+                    continue
+            elif isinstance(created, datetime):
+                ts = created
+            else:
+                continue
+            if ts >= cutoff:
+                rows.append(dict(row))
+        return rows
 
     def upsert_summary(self, row: dict) -> None:
         raise NotImplementedError
