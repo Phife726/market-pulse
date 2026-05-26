@@ -529,32 +529,15 @@ def fetch_todays_intelligence() -> list[dict]:
 
 
 def fetch_macro_summary() -> dict | None:
-    try:
-        from datetime import date
-
-        min_run_date = (date.today() - timedelta(days=1)).isoformat()
-        supabase = _get_supabase()
-        result = (
-            supabase.table("daily_summaries")
-            .select(
-                "run_date, run_mode, executive_summary, macro_sentiment, "
-                "dominant_condition, executive_bullets, screened_count, "
-                "surfaced_count, suppression_breakdown, suppression_samples"
-            )
-            .eq("run_mode", _run_mode())
-            .gte("run_date", min_run_date)
-            .order("run_date", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if result.data:
-            return result.data[0]
-
+    from datetime import date
+    min_run_date = (date.today() - timedelta(days=1)).isoformat()
+    summary = _repo().fetch_latest_summary(
+        run_mode=_run_mode(),
+        min_date=min_run_date,
+    )
+    if summary is None:
         logger.warning("No macro summary found for run_date >= %s.", min_run_date)
-        return None
-    except Exception as exc:
-        logger.error("Failed to fetch macro summary: %s", exc)
-        return None
+    return summary
 
 
 def _update_delivery_summary_counts(

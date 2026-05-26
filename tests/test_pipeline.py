@@ -1921,47 +1921,48 @@ def test_fetch_macro_summary_filters_by_run_mode_production(monkeypatch):
     """Production delivery must fetch the production row even when a test row exists."""
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
 
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.select.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.eq.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.gte.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.order.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.limit.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.execute.return_value = MagicMock(
-        data=[{"run_date": "2026-05-21", "run_mode": "production",
-               "executive_summary": "Prod summary", "macro_sentiment": "Stable"}]
-    )
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "executive_summary": "Test summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        result = fetch_macro_summary()
-
-    # eq() must have been called with run_mode='production'.
-    eq_calls = mock_supa.table.return_value.eq.call_args_list
-    assert any(c.args == ("run_mode", "production") for c in eq_calls), \
-        f"Expected eq('run_mode', 'production') in {eq_calls}"
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["run_mode"] == "production"
     assert result["executive_summary"] == "Prod summary"
 
 
 def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
-    """Test delivery must fetch the test row."""
+    """Test delivery must fetch the test row, not the production row."""
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
     from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
 
-    mock_supa = MagicMock()
-    mock_supa.table.return_value.select.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.eq.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.gte.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.order.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.limit.return_value = mock_supa.table.return_value
-    mock_supa.table.return_value.execute.return_value = MagicMock(data=[])
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "executive_summary": "Test summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._get_supabase", return_value=mock_supa):
-        fetch_macro_summary()
-
-    eq_calls = mock_supa.table.return_value.eq.call_args_list
-    assert any(c.args == ("run_mode", "test") for c in eq_calls), \
-        f"Expected eq('run_mode', 'test') in {eq_calls}"
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["run_mode"] == "test"
+    assert result["executive_summary"] == "Test summary"
 
 
 def test_run_mode_helper(monkeypatch):
@@ -3065,3 +3066,29 @@ def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
 
     delivery_engine.fetch_todays_intelligence()
     fake.fetch_recent.assert_called_once_with(hours=72)
+
+
+def test_fetch_macro_summary_routes_through_repo(monkeypatch):
+    """fetch_macro_summary returns repo.fetch_latest_summary verbatim."""
+    from delivery_engine import fetch_macro_summary
+    fake = InMemoryIntelligenceRepo()
+    from datetime import date
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "today's summary", "macro_sentiment": "x",
+        "dominant_condition": "Mixed / Watch",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    got = fetch_macro_summary()
+    assert got is not None
+    assert got["executive_summary"] == "today's summary"
+
+
+def test_fetch_macro_summary_returns_none_when_missing(monkeypatch):
+    from delivery_engine import fetch_macro_summary
+    fake = InMemoryIntelligenceRepo()
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    assert fetch_macro_summary() is None
