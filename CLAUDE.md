@@ -45,7 +45,7 @@ The pipeline is two sequential scripts sharing a Supabase database, plus one pur
 2. Queries Serper.dev for recent article URLs; runs semantic deduplication (`rapidfuzz token_sort_ratio >= 88`) against headlines seen in the last 72 h before scraping
 3. Strips URL query parameters, computes SHA-256 hash → skips if already in DB
 4. Extracts article markdown via Firecrawl; falls back to a direct-HTTP scraper on HTTP 402 (quota exhaustion); skips if below `min_article_length`
-5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON including `headline`, `americhem_impact` (BLUF "so what"), `sentiment_score` (1–10, legacy directional), the relevance-upgrade fields `sentiment_tag` (Negative/Neutral/Positive), `americhem_impact_score` (1–10, **materiality** — independent of tone), `impact_rationale`, `strategic_segment` (one of the labels in `market_pulse_config.yaml`), and `recommended_action`. The model may return `{"americhem_impact": "DISCARD"}` to drop false-positive entity matches.
+5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON including `headline`, `americhem_impact` (BLUF "so what"), `sentiment_score` (1–10, legacy directional), the relevance-upgrade fields `sentiment_tag` (Negative/Neutral/Positive), `americhem_impact_score` (1–10, **materiality** — independent of tone), `impact_rationale`, `commercial_segment` and `signal_type` (validated against the labels in `market_pulse_config.yaml`), and `recommended_action`. The model may return `{"americhem_impact": "DISCARD"}` to drop false-positive entity matches.
 6. Upserts row into `daily_intelligence` table (unique constraint on `url_hash`)
 7. After all articles are stored, calls `generate_macro_summary()` — a second OpenAI call that writes `executive_summary` and `macro_sentiment` to the `daily_summaries` table (keyed on `run_date`)
 8. Enforces `MAX_DAILY_SCRAPES = 150` hard cap and `PIPELINE_DEADLINE_SECONDS = 600` wall-clock deadline (keeps runtime inside the GitHub Actions 15-min limit)
@@ -60,7 +60,7 @@ The pipeline is two sequential scripts sharing a Supabase database, plus one pur
 
 1. Runs `_apply_delivery_suppression()` — a deterministic seven-rule guardrail (product-listing URLs, job postings, generic market reports, unrelated-color results, exact and semantic headline duplicates, Enterprise / Cross-Segment low-impact). First match wins; counts and last-10 samples are recorded as the delivery-side suppression breakdown.
 2. Filters to rows where `_effective_impact() >= visible_impact_threshold` (default 6). `_effective_impact()` returns `americhem_impact_score` if present, else `sentiment_score`.
-3. Groups visible rows by `commercial_segment` (with `_LEGACY_STRATEGIC_SEGMENT_MAP` resolving pre-migration rows that only have `strategic_segment`).
+3. Groups visible rows by `commercial_segment`, defaulting missing values to Enterprise / Cross-Segment.
 4. Applies `max_visible_articles_per_segment` then `max_total_visible_articles`. Capped-out rows are dropped — there is no fallback section.
 5. For groups with 2+ articles, calls `synthesize_thematic_paragraphs()` for an LLM-generated synthesis paragraph above the cards.
 6. Writes `surfaced_count` and the merged ingestion+delivery `suppression_breakdown` back to today's `daily_summaries` row via `_update_delivery_summary_counts()` (idempotent on same-day retry).

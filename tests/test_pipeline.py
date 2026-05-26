@@ -871,7 +871,7 @@ def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
          "headline": "Legacy critical headline about plant fire",
          "americhem_impact": "Disruption.",
          "entities_mentioned": ["BASF"], "source_url": "https://x/0",
-         "strategic_segment": "Broader Americhem"},
+         "commercial_segment": "Enterprise / Cross-Segment"},
     ]
     mock_supa = MagicMock()
     mock_supa.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock()
@@ -1126,7 +1126,7 @@ def test_impact_score_defaults_on_bad_value(bad_value):
 def _make_new_article(
     url_hash: str,
     americhem_impact_score: int,
-    strategic_segment: str = "Raw Materials / Supply Chain",
+    commercial_segment: str = "Enterprise / Cross-Segment",
     sentiment_tag: str = "Neutral",
     headline: str = "Test Headline",
 ) -> dict:
@@ -1136,7 +1136,7 @@ def _make_new_article(
         "americhem_impact_score": americhem_impact_score,
         "sentiment_tag": sentiment_tag,
         "impact_rationale": "Direct feedstock cost effect.",
-        "strategic_segment": strategic_segment,
+        "commercial_segment": commercial_segment,
         "headline": headline,
         "americhem_impact": "Some impact.",
         "entities_mentioned": ["TestCorp"],
@@ -1160,14 +1160,14 @@ def test_generate_html_email_filters_below_impact_threshold(monkeypatch):
     assert "Low Impact Headline" not in html
 
 
-def test_generate_html_email_groups_by_strategic_segment(monkeypatch):
-    """Two new-style articles with the same strategic_segment are grouped under that label."""
+def test_generate_html_email_groups_by_commercial_segment(monkeypatch):
+    """Two new-style articles with the same commercial_segment are grouped under that label."""
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     # Use genuinely distinct headlines so delivery suppression doesn't flag them
     # as semantic duplicates (token_sort_ratio threshold is 88).
-    art_a = _make_new_article("a", 8, strategic_segment="Healthcare",
+    art_a = _make_new_article("a", 8, commercial_segment="Healthcare",
                               headline="Hospital network consolidation squeezes specialty polymer demand")
-    art_b = _make_new_article("b", 7, strategic_segment="Healthcare",
+    art_b = _make_new_article("b", 7, commercial_segment="Healthcare",
                               headline="FDA clears new medical-grade compound for implantable devices")
 
     mock_client = _make_synthesis_mock({"Healthcare": "Healthcare synthesis paragraph."})
@@ -1193,7 +1193,7 @@ def test_render_card_shows_impact_score_and_sentiment_tag():
         "americhem_impact_score": 8,
         "sentiment_tag": "Negative",
         "impact_rationale": "Direct feedstock cost increase.",
-        "strategic_segment": "Raw Materials / Supply Chain",
+        "commercial_segment": "Raw Materials / Supply Chain",
         "source_publication": "Chemical Week",
         "recommended_action": "Flag to procurement",
         "category": "markets",
@@ -1220,6 +1220,24 @@ def test_render_card_falls_back_to_sentiment_score_for_old_rows():
     assert "Impact:" not in html
 
 
+def test_render_card_segment_label_uses_commercial_segment():
+    """The card segment label must read from commercial_segment, not the legacy
+    strategic_segment field. A row carrying both must show commercial_segment."""
+    item = {
+        "headline": "Some Headline",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Impact.",
+        "americhem_impact_score": 7,
+        "sentiment_tag": "Neutral",
+        "commercial_segment": "Packaging",
+        "strategic_segment": "Healthcare",  # legacy ghost field — must be ignored
+        "category": "markets",
+    }
+    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    assert "PACKAGING" in html
+    assert "HEALTHCARE" not in html
+
+
 # ===========================================================================
 # Article cap enforcement
 # ===========================================================================
@@ -1239,7 +1257,7 @@ def test_generate_html_email_per_segment_cap(monkeypatch):
     articles = [
         _make_new_article(
             f"h{i}", americhem_impact_score=10 - i,
-            strategic_segment="Healthcare",
+            commercial_segment="Healthcare",
             headline=_hc_headlines[i],
         )
         for i in range(5)
@@ -1276,7 +1294,7 @@ def test_generate_html_email_total_articles_cap(monkeypatch):
     articles = [
         _make_new_article(
             f"s{si}_{ai}", americhem_impact_score=8,
-            strategic_segment=seg,
+            commercial_segment=seg,
             headline=f"Seg{si} Art{ai}",
         )
         for si, seg in enumerate(segments)
@@ -1304,7 +1322,7 @@ def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
     articles = [
         _make_new_article(
             f"h{i}", americhem_impact_score=10 - i,
-            strategic_segment="Healthcare",
+            commercial_segment="Healthcare",
             headline=f"HC Headline {i}",
         )
         for i in range(4)
@@ -1357,7 +1375,7 @@ def test_generate_html_email_shows_negative_high_impact(monkeypatch):
     neg_high = _make_new_article(
         "neg_high", americhem_impact_score=9,
         sentiment_tag="Negative",
-        strategic_segment="Raw Materials / Supply Chain",
+        commercial_segment="Raw Materials / Supply Chain",
         headline="Negative High Impact Supply Disruption",
     )
     with patch("delivery_engine._get_openai", return_value=MagicMock()), \
@@ -1387,35 +1405,35 @@ def test_config_int_coerces_string_to_int():
 # Task 8 — _commercial_segment_of and _signal_type_of helpers
 # ---------------------------------------------------------------------------
 
-def test_commercial_segment_of_prefers_new_field():
+def test_commercial_segment_of_returns_commercial_segment():
     from delivery_engine import _commercial_segment_of
-    row = {"commercial_segment": "Healthcare", "strategic_segment": "Industrial"}
-    assert _commercial_segment_of(row) == "Healthcare"
+    assert _commercial_segment_of({"commercial_segment": "Healthcare"}) == "Healthcare"
 
 
-def test_commercial_segment_of_falls_back_to_strategic_segment():
+def test_commercial_segment_of_strips_whitespace():
     from delivery_engine import _commercial_segment_of
-    cases = {
-        "Healthcare": "Healthcare",
-        "Fibers": "Fibers",
-        "Packaging": "Packaging",
-        "Industrial": "Industrial",
-        "Raw Materials / Supply Chain": "Enterprise / Cross-Segment",
-        "Regulatory / Sustainability": "Enterprise / Cross-Segment",
-        "Competitive / Customer Signal": "Enterprise / Cross-Segment",
-        "Broader Americhem": "Enterprise / Cross-Segment",
-    }
-    for legacy, expected in cases.items():
-        row = {"strategic_segment": legacy}
-        assert _commercial_segment_of(row) == expected, f"{legacy} -> {expected}"
+    assert _commercial_segment_of({"commercial_segment": " Packaging "}) == "Packaging"
 
 
-def test_commercial_segment_of_handles_null_strategic_segment():
+def test_commercial_segment_of_ignores_legacy_strategic_segment():
+    """The legacy strategic_segment fallback was removed — rows with only that
+    field must route to the default Enterprise / Cross-Segment bucket."""
+    from delivery_engine import _commercial_segment_of
+    assert _commercial_segment_of({"strategic_segment": "Healthcare"}) == "Enterprise / Cross-Segment"
+
+
+def test_commercial_segment_of_defaults_when_missing():
     from delivery_engine import _commercial_segment_of
     assert _commercial_segment_of({}) == "Enterprise / Cross-Segment"
-    assert _commercial_segment_of({"strategic_segment": None}) == "Enterprise / Cross-Segment"
-    assert _commercial_segment_of({"strategic_segment": ""}) == "Enterprise / Cross-Segment"
-    assert _commercial_segment_of({"strategic_segment": "UnknownValue"}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"commercial_segment": None}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"commercial_segment": ""}) == "Enterprise / Cross-Segment"
+
+
+def test_commercial_segment_of_defaults_for_whitespace_only():
+    """A whitespace-only commercial_segment must default to Enterprise / Cross-Segment,
+    not produce a blank segment bucket."""
+    from delivery_engine import _commercial_segment_of
+    assert _commercial_segment_of({"commercial_segment": "   "}) == "Enterprise / Cross-Segment"
 
 
 def test_signal_type_of_prefers_new_field():
@@ -2144,17 +2162,16 @@ def test_group_by_commercial_segment_keys_off_new_field():
     assert len(groups["Healthcare"]) == 2
 
 
-def test_group_by_commercial_segment_uses_legacy_fallback():
+def test_group_by_commercial_segment_defaults_when_field_missing():
     from delivery_engine import _group_by_commercial_segment
     rows = [
-        {"url_hash": "a", "strategic_segment": "Healthcare",
-         "americhem_impact_score": 8, "headline": "A"},
-        {"url_hash": "b", "strategic_segment": "Competitive / Customer Signal",
+        {"url_hash": "a", "americhem_impact_score": 8, "headline": "A"},
+        {"url_hash": "b", "commercial_segment": "Packaging",
          "americhem_impact_score": 7, "headline": "B"},
     ]
     groups = _group_by_commercial_segment(rows)
-    assert "Healthcare" in groups
     assert "Enterprise / Cross-Segment" in groups
+    assert "Packaging" in groups
 
 
 def test_render_segment_watch_section_displays_meta_strip_with_signal():
@@ -2191,7 +2208,7 @@ def test_render_segment_watch_section_omits_signal_for_legacy_row():
             "americhem_impact": "Effect.",
             "americhem_impact_score": 7,
             "sentiment_tag": "Neutral",
-            "strategic_segment": "Healthcare",
+            "commercial_segment": "Healthcare",
             # no signal_type
         }],
     }
@@ -2209,7 +2226,7 @@ def test_render_segment_watch_section_critical_badge_for_legacy_low_score():
             "source_url": "https://news.com/a",
             "americhem_impact": "Effect.",
             "sentiment_score": 2,
-            "strategic_segment": "Broader Americhem",
+            "commercial_segment": "Enterprise / Cross-Segment",
         }],
     }
     html = _render_segment_watch_section(groups, synthesis={})

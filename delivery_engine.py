@@ -71,25 +71,10 @@ def _effective_impact(row: dict) -> int:
     return int(row.get("sentiment_score") or 5)
 
 
-_LEGACY_STRATEGIC_SEGMENT_MAP: dict[str, str] = {
-    "Healthcare":                    "Healthcare",
-    "Fibers":                        "Fibers",
-    "Packaging":                     "Packaging",
-    "Industrial":                    "Industrial",
-    "Raw Materials / Supply Chain":  "Enterprise / Cross-Segment",
-    "Regulatory / Sustainability":   "Enterprise / Cross-Segment",
-    "Competitive / Customer Signal": "Enterprise / Cross-Segment",
-    "Broader Americhem":             "Enterprise / Cross-Segment",
-}
-
-
 def _commercial_segment_of(row: dict) -> str:
-    """Return commercial_segment if set; else map legacy strategic_segment; else default."""
+    """Return commercial_segment if set; else default."""
     seg = (row.get("commercial_segment") or "").strip()
-    if seg:
-        return seg
-    legacy = (row.get("strategic_segment") or "").strip()
-    return _LEGACY_STRATEGIC_SEGMENT_MAP.get(legacy, "Enterprise / Cross-Segment")
+    return seg or "Enterprise / Cross-Segment"
 
 
 def _signal_type_of(row: dict) -> str:
@@ -103,7 +88,7 @@ def _signal_type_of(row: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
-    """Bucket items by their resolved commercial segment (new field or legacy fallback)."""
+    """Bucket items by commercial_segment; rows without one default to Enterprise / Cross-Segment."""
     from collections import defaultdict
     buckets: dict[str, list[dict]] = defaultdict(list)
     for item in items:
@@ -648,7 +633,7 @@ def synthesize_thematic_paragraphs(
             impact_score = _effective_impact(art)
             tag = art.get("sentiment_tag") or ""
             entities = art.get("entities_mentioned") or []
-            entity = entities[0] if entities else (art.get("strategic_segment") or art.get("category") or "Unknown")
+            entity = entities[0] if entities else (art.get("commercial_segment") or art.get("category") or "Unknown")
             americhem_impact = art.get("americhem_impact", "")
             tag_suffix = f" | {tag}" if tag else ""
             lines.append(f"- [{entity} | impact:{impact_score}/10{tag_suffix}] {americhem_impact}")
@@ -797,8 +782,8 @@ def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
     source_publication  = item.get("source_publication", "")
     recommended_action  = item.get("recommended_action", "")
 
-    # Segment label: new field preferred, category fallback
-    segment_label = (item.get("strategic_segment") or item.get("category") or "").upper()
+    # Segment label: commercial_segment preferred, category fallback
+    segment_label = (item.get("commercial_segment") or item.get("category") or "").upper()
 
     # Score display: new fields preferred, old sentiment_score fallback
     impact_score_raw = item.get("americhem_impact_score")
