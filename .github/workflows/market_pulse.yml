@@ -2,7 +2,9 @@ name: Market Pulse Pipeline
 
 on:
   schedule:
-    - cron: '0 10 * * 1-5'
+    # Off-hour minute (10:17 UTC, not 10:00). GitHub Actions documents top-of-hour
+    # as a high-load window where scheduled events may be delayed or dropped entirely.
+    - cron: '17 10 * * 1-5'
   workflow_dispatch:
 
 env:
