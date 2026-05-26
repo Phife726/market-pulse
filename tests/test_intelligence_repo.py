@@ -122,3 +122,128 @@ def test_recent_headlines_honors_time_window():
 def test_recent_headlines_empty_when_no_rows():
     repo = InMemoryIntelligenceRepo()
     assert repo.recent_headlines(hours=72) == set()
+
+
+# ---------------------------------------------------------------------------
+# InMemoryIntelligenceRepo — summaries (daily_summaries)
+# ---------------------------------------------------------------------------
+
+def test_upsert_summary_compound_key():
+    """(run_date, run_mode) is the compound primary key. Same key overwrites;
+    different key creates a separate row."""
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({
+        "run_date": "2026-05-26",
+        "run_mode": "production",
+        "executive_summary": "First",
+    })
+    repo.upsert_summary({
+        "run_date": "2026-05-26",
+        "run_mode": "production",
+        "executive_summary": "Second",
+    })
+    repo.upsert_summary({
+        "run_date": "2026-05-26",
+        "run_mode": "test",
+        "executive_summary": "Test mode",
+    })
+    prod = repo.get_delivery_state(run_date="2026-05-26", run_mode="production")
+    test = repo.get_delivery_state(run_date="2026-05-26", run_mode="test")
+    assert prod["executive_summary"] == "Second"
+    assert test["executive_summary"] == "Test mode"
+
+
+def test_upsert_summary_round_trips_all_columns():
+    """Every column the engines write must round-trip unchanged."""
+    repo = InMemoryIntelligenceRepo()
+    row = {
+        "run_date": "2026-05-26",
+        "run_mode": "production",
+        "executive_summary": "summary text",
+        "macro_sentiment": "Mixed / Watch",
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "..."},
+            {"label": "Supply chain watch", "body": "..."},
+            {"label": "Commercial action", "body": "..."},
+        ],
+        "screened_count": 42,
+        "surfaced_count": 8,
+        "suppression_breakdown": {"duplicate_url": 3, "scrape_failed": 2},
+        "suppression_samples": [{"reason": "duplicate_url", "url": "x", "title": "y"}],
+    }
+    repo.upsert_summary(row)
+    got = repo.get_delivery_state(run_date="2026-05-26", run_mode="production")
+    for key, value in row.items():
+        assert got[key] == value, f"mismatch on {key}"
+
+
+def test_get_delivery_state_missing_returns_none():
+    repo = InMemoryIntelligenceRepo()
+    assert repo.get_delivery_state(run_date="2026-05-26", run_mode="production") is None
+
+
+def test_fetch_latest_summary_filters_by_min_date_and_run_mode():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({"run_date": "2026-05-24", "run_mode": "production",
+                         "executive_summary": "stale", "macro_sentiment": "x"})
+    repo.upsert_summary({"run_date": "2026-05-26", "run_mode": "production",
+                         "executive_summary": "fresh", "macro_sentiment": "x"})
+    repo.upsert_summary({"run_date": "2026-05-26", "run_mode": "test",
+                         "executive_summary": "test mode", "macro_sentiment": "x"})
+
+    got = repo.fetch_latest_summary(run_mode="production", min_date="2026-05-25")
+    assert got["executive_summary"] == "fresh"
+
+    got_old_cutoff = repo.fetch_latest_summary(run_mode="production", min_date="2026-05-20")
+    assert got_old_cutoff["executive_summary"] == "fresh"  # picks the latest, not the oldest
+
+    none = repo.fetch_latest_summary(run_mode="production", min_date="2026-05-27")
+    assert none is None
+
+
+def test_fetch_latest_summary_returns_none_when_empty():
+    repo = InMemoryIntelligenceRepo()
+    assert repo.fetch_latest_summary(run_mode="production", min_date="2026-05-26") is None
+
+
+def test_update_delivery_counts_partial_update():
+    """update_delivery_counts patches surfaced_count and the ledger fields
+    without disturbing the rest of the row."""
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({
+        "run_date": "2026-05-26", "run_mode": "production",
+        "executive_summary": "stays put", "macro_sentiment": "stays put",
+        "screened_count": 100,
+        "suppression_breakdown": {"old": 1},
+        "suppression_samples": [{"reason": "old", "url": "u", "title": "t"}],
+    })
+    repo.update_delivery_counts(
+        run_date="2026-05-26",
+        run_mode="production",
+        surfaced_count=7,
+        ledger_row={
+            "suppression_breakdown": {"new": 2},
+            "suppression_samples": [{"reason": "new", "url": "u2", "title": "t2"}],
+        },
+    )
+    got = repo.get_delivery_state(run_date="2026-05-26", run_mode="production")
+    assert got["executive_summary"] == "stays put"        # untouched
+    assert got["macro_sentiment"] == "stays put"          # untouched
+    assert got["screened_count"] == 100                   # untouched
+    assert got["surfaced_count"] == 7                     # patched
+    assert got["suppression_breakdown"] == {"new": 2}     # patched
+    assert got["suppression_samples"] == [{"reason": "new", "url": "u2", "title": "t2"}]
+
+
+def test_update_delivery_counts_silent_when_row_missing():
+    """Matches Supabase UPDATE-WHERE-no-match semantics: silent no-op."""
+    repo = InMemoryIntelligenceRepo()
+    # No row inserted yet.
+    repo.update_delivery_counts(
+        run_date="2026-05-26",
+        run_mode="production",
+        surfaced_count=7,
+        ledger_row={"suppression_breakdown": {}, "suppression_samples": []},
+    )
+    assert repo.get_delivery_state(run_date="2026-05-26", run_mode="production") is None

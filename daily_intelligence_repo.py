@@ -135,13 +135,25 @@ class InMemoryIntelligenceRepo:
         return rows
 
     def upsert_summary(self, row: dict) -> None:
-        raise NotImplementedError
+        run_date = row.get("run_date")
+        run_mode = row.get("run_mode", "production")
+        if not run_date:
+            raise ValueError("summary row missing run_date")
+        self._summaries[(run_date, run_mode)] = dict(row)
 
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]:
-        raise NotImplementedError
+        candidates = [
+            row for (rd, rm), row in self._summaries.items()
+            if rm == run_mode and rd >= min_date
+        ]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda r: r["run_date"], reverse=True)
+        return dict(candidates[0])
 
     def get_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]:
-        raise NotImplementedError
+        row = self._summaries.get((run_date, run_mode))
+        return dict(row) if row is not None else None
 
     def update_delivery_counts(
         self,
@@ -151,7 +163,14 @@ class InMemoryIntelligenceRepo:
         surfaced_count: int,
         ledger_row: dict,
     ) -> None:
-        raise NotImplementedError
+        key = (run_date, run_mode)
+        if key not in self._summaries:
+            # Matches Supabase: UPDATE on no matching row is a silent no-op.
+            return
+        existing = self._summaries[key]
+        existing["surfaced_count"] = surfaced_count
+        for k, v in ledger_row.items():
+            existing[k] = v
 
 
 # Module-level lazy singleton. Tests monkeypatch this function.
