@@ -113,7 +113,8 @@ class InMemoryIntelligenceRepo:
         self._articles[url_hash] = row
 
     def recent_headlines(self, hours: int) -> set[str]:
-        raise NotImplementedError
+        return {row.get("headline", "") for row in self.fetch_recent(hours)
+                if row.get("headline")}
 
     def fetch_recent(self, hours: int) -> list[dict]:
         cutoff = self._now() - timedelta(hours=hours)

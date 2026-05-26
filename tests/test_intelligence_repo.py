@@ -62,3 +62,63 @@ def test_upsert_insight_preserves_explicit_created_at():
     repo.upsert_insight({"url_hash": "abc123", "headline": "Test", "created_at": explicit})
     rows = repo.fetch_recent(hours=24 * 365)  # very wide window
     assert rows[0]["created_at"] == explicit
+
+
+def test_fetch_recent_filters_by_created_at():
+    """Rows older than `hours` must not be returned."""
+    fixed_now = datetime(2026, 5, 26, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
+
+    # 50 hours ago — outside a 24h window, inside a 72h window
+    repo.upsert_insight({
+        "url_hash": "old",
+        "headline": "Old article",
+        "created_at": (fixed_now - timedelta(hours=50)).isoformat(),
+    })
+    # 5 hours ago — inside both windows
+    repo.upsert_insight({
+        "url_hash": "fresh",
+        "headline": "Fresh article",
+        "created_at": (fixed_now - timedelta(hours=5)).isoformat(),
+    })
+
+    rows_24 = repo.fetch_recent(hours=24)
+    assert {r["url_hash"] for r in rows_24} == {"fresh"}
+
+    rows_72 = repo.fetch_recent(hours=72)
+    assert {r["url_hash"] for r in rows_72} == {"old", "fresh"}
+
+
+def test_fetch_recent_returns_independent_copies():
+    """Mutating a returned row must not affect repo state."""
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_insight({"url_hash": "abc", "headline": "Original"})
+    rows = repo.fetch_recent(hours=24)
+    rows[0]["headline"] = "Mutated"
+    again = repo.fetch_recent(hours=24)
+    assert again[0]["headline"] == "Original"
+
+
+def test_recent_headlines_returns_set_of_headlines():
+    fixed_now = datetime(2026, 5, 26, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
+    repo.upsert_insight({"url_hash": "a", "headline": "Alpha"})
+    repo.upsert_insight({"url_hash": "b", "headline": "Beta"})
+    assert repo.recent_headlines(hours=24) == {"Alpha", "Beta"}
+
+
+def test_recent_headlines_honors_time_window():
+    fixed_now = datetime(2026, 5, 26, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
+    repo.upsert_insight({
+        "url_hash": "old",
+        "headline": "Old",
+        "created_at": (fixed_now - timedelta(hours=100)).isoformat(),
+    })
+    repo.upsert_insight({"url_hash": "fresh", "headline": "Fresh"})
+    assert repo.recent_headlines(hours=24) == {"Fresh"}
+
+
+def test_recent_headlines_empty_when_no_rows():
+    repo = InMemoryIntelligenceRepo()
+    assert repo.recent_headlines(hours=72) == set()
