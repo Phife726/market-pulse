@@ -348,3 +348,117 @@ def test_supabase_fetch_recent_swallows_errors(supabase_repo):
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
     assert repo.fetch_recent(hours=24) == []
+
+
+def test_supabase_upsert_summary_uses_compound_on_conflict(supabase_repo):
+    repo, mock_client = supabase_repo
+    row = {
+        "run_date": "2026-05-26", "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "y",
+    }
+    repo.upsert_summary(row)
+    mock_client.table.assert_called_with("daily_summaries")
+    mock_client.table.return_value.upsert.assert_called_with(
+        row, on_conflict="run_date,run_mode",
+    )
+
+
+def test_supabase_upsert_summary_raises_on_error(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("write failed")
+    with pytest.raises(Exception, match="write failed"):
+        repo.upsert_summary({"run_date": "2026-05-26"})
+
+
+def test_supabase_fetch_latest_summary_filters_and_orders(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .gte.return_value
+        .order.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = [{"run_date": "2026-05-26", "executive_summary": "x"}]
+    got = repo.fetch_latest_summary(run_mode="production", min_date="2026-05-25")
+    assert got == {"run_date": "2026-05-26", "executive_summary": "x"}
+    mock_client.table.assert_called_with("daily_summaries")
+    mock_client.table.return_value.select.return_value.eq.assert_called_with(
+        "run_mode", "production",
+    )
+    mock_client.table.return_value.select.return_value.eq.return_value.gte.assert_called_with(
+        "run_date", "2026-05-25",
+    )
+
+
+def test_supabase_fetch_latest_summary_returns_none_when_empty(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .gte.return_value
+        .order.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = []
+    assert repo.fetch_latest_summary(run_mode="production", min_date="2026-05-25") is None
+
+
+def test_supabase_get_delivery_state_filters_by_compound_key(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .eq.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = [{"suppression_breakdown": {"x": 1}}]
+    got = repo.get_delivery_state(run_date="2026-05-26", run_mode="production")
+    assert got == {"suppression_breakdown": {"x": 1}}
+    mock_client.table.assert_called_with("daily_summaries")
+
+
+def test_supabase_get_delivery_state_returns_none_when_empty(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = (
+        mock_client.table.return_value
+        .select.return_value
+        .eq.return_value
+        .eq.return_value
+        .limit.return_value
+        .execute.return_value
+    )
+    chain.data = []
+    assert repo.get_delivery_state(run_date="2026-05-26", run_mode="production") is None
+
+
+def test_supabase_update_delivery_counts_targets_compound_key(supabase_repo):
+    repo, mock_client = supabase_repo
+    repo.update_delivery_counts(
+        run_date="2026-05-26",
+        run_mode="production",
+        surfaced_count=7,
+        ledger_row={"suppression_breakdown": {"a": 1}, "suppression_samples": []},
+    )
+    mock_client.table.assert_called_with("daily_summaries")
+    mock_client.table.return_value.update.assert_called_with({
+        "surfaced_count": 7,
+        "suppression_breakdown": {"a": 1},
+        "suppression_samples": [],
+    })
+
+
+def test_supabase_update_delivery_counts_raises_on_error(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("update failed")
+    with pytest.raises(Exception, match="update failed"):
+        repo.update_delivery_counts(
+            run_date="2026-05-26", run_mode="production",
+            surfaced_count=0, ledger_row={},
+        )

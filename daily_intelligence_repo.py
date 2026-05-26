@@ -107,13 +107,47 @@ class SupabaseIntelligenceRepo:
             return []
 
     def upsert_summary(self, row: dict) -> None:
-        raise NotImplementedError
+        self._supabase().table("daily_summaries").upsert(
+            row, on_conflict="run_date,run_mode"
+        ).execute()
 
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]:
-        raise NotImplementedError
+        try:
+            result = (
+                self._supabase().table("daily_summaries")
+                .select(
+                    "run_date, run_mode, executive_summary, macro_sentiment, "
+                    "dominant_condition, executive_bullets, screened_count, "
+                    "surfaced_count, suppression_breakdown, suppression_samples"
+                )
+                .eq("run_mode", run_mode)
+                .gte("run_date", min_date)
+                .order("run_date", desc=True)
+                .limit(1)
+                .execute()
+            )
+            if result.data:
+                return result.data[0]
+            return None
+        except Exception as exc:
+            logger.error("Supabase fetch_latest_summary failed: %s", exc)
+            return None
 
     def get_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]:
-        raise NotImplementedError
+        try:
+            result = (
+                self._supabase().table("daily_summaries")
+                .select("suppression_breakdown, suppression_samples")
+                .eq("run_date", run_date)
+                .eq("run_mode", run_mode)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            return rows[0] if rows else None
+        except Exception as exc:
+            logger.error("Supabase get_delivery_state failed: %s", exc)
+            return None
 
     def update_delivery_counts(
         self,
@@ -123,7 +157,14 @@ class SupabaseIntelligenceRepo:
         surfaced_count: int,
         ledger_row: dict,
     ) -> None:
-        raise NotImplementedError
+        payload = {"surfaced_count": surfaced_count, **ledger_row}
+        (
+            self._supabase().table("daily_summaries")
+            .update(payload)
+            .eq("run_date", run_date)
+            .eq("run_mode", run_mode)
+            .execute()
+        )
 
 
 class InMemoryIntelligenceRepo:
