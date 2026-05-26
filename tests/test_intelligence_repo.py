@@ -247,3 +247,104 @@ def test_update_delivery_counts_silent_when_row_missing():
         ledger_row={"suppression_breakdown": {}, "suppression_samples": []},
     )
     assert repo.get_delivery_state(run_date="2026-05-26", run_mode="production") is None
+
+
+# ---------------------------------------------------------------------------
+# SupabaseIntelligenceRepo — wiring tests
+#
+# We mock the supabase Client and assert each method touches the right
+# table + filters + on_conflict. These replace the six-deep MagicMock
+# chains scattered through test_pipeline.py.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def supabase_repo(monkeypatch):
+    """Yield a SupabaseIntelligenceRepo whose underlying client is a MagicMock."""
+    monkeypatch.setenv("SUPABASE_URL", "https://test.supabase.co")
+    monkeypatch.setenv("SUPABASE_KEY", "test_key")
+    repo = SupabaseIntelligenceRepo()
+    mock_client = MagicMock()
+    # Pre-populate the client so _supabase() returns the mock without create_client.
+    repo._client = mock_client
+    return repo, mock_client
+
+
+def test_supabase_exists_by_hash_queries_daily_intelligence(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"url_hash": "abc123"}
+    ]
+    assert repo.exists_by_hash("abc123") is True
+    mock_client.table.assert_called_with("daily_intelligence")
+    mock_client.table.return_value.select.assert_called_with("url_hash")
+    mock_client.table.return_value.select.return_value.eq.assert_called_with("url_hash", "abc123")
+
+
+def test_supabase_exists_by_hash_returns_false_when_empty(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    assert repo.exists_by_hash("absent") is False
+
+
+def test_supabase_exists_by_hash_swallows_errors(supabase_repo):
+    """Reads must NOT raise — they swallow and return the empty sentinel."""
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("network down")
+    assert repo.exists_by_hash("abc123") is False
+
+
+def test_supabase_upsert_insight_targets_daily_intelligence_with_on_conflict(supabase_repo):
+    repo, mock_client = supabase_repo
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"})
+    mock_client.table.assert_called_with("daily_intelligence")
+    mock_client.table.return_value.upsert.assert_called_with(
+        {"url_hash": "abc123", "headline": "Test"},
+        on_conflict="url_hash",
+    )
+
+
+def test_supabase_upsert_insight_raises_on_error(supabase_repo):
+    """Writes must raise — silent write failure is worse than crashing the cron."""
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("write conflict")
+    with pytest.raises(Exception, match="write conflict"):
+        repo.upsert_insight({"url_hash": "abc", "headline": "x"})
+
+
+def test_supabase_recent_headlines_filters_by_created_at(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.return_value.select.return_value.gte.return_value.execute.return_value.data = [
+        {"headline": "Alpha"}, {"headline": "Beta"},
+    ]
+    assert repo.recent_headlines(hours=72) == {"Alpha", "Beta"}
+    mock_client.table.assert_called_with("daily_intelligence")
+    mock_client.table.return_value.select.assert_called_with("headline")
+    # The .gte filter is "created_at" >= some-ISO-string; we don't pin the timestamp.
+    args, _ = mock_client.table.return_value.select.return_value.gte.call_args
+    assert args[0] == "created_at"
+
+
+def test_supabase_recent_headlines_swallows_errors(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("read failed")
+    assert repo.recent_headlines(hours=72) == set()
+
+
+def test_supabase_fetch_recent_orders_by_impact(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value.data = [
+        {"url_hash": "a", "headline": "x"},
+    ]
+    rows = repo.fetch_recent(hours=24)
+    assert rows == [{"url_hash": "a", "headline": "x"}]
+    mock_client.table.assert_called_with("daily_intelligence")
+    mock_client.table.return_value.select.assert_called_with("*")
+    mock_client.table.return_value.select.return_value.gte.return_value.order.assert_called_with(
+        "americhem_impact_score", desc=True,
+    )
+
+
+def test_supabase_fetch_recent_swallows_errors(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("read failed")
+    assert repo.fetch_recent(hours=24) == []

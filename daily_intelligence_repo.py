@@ -58,16 +58,53 @@ class SupabaseIntelligenceRepo:
         return self._client
 
     def exists_by_hash(self, url_hash: str) -> bool:
-        raise NotImplementedError
+        try:
+            result = (
+                self._supabase().table("daily_intelligence")
+                .select("url_hash")
+                .eq("url_hash", url_hash)
+                .limit(1)
+                .execute()
+            )
+            return len(result.data) > 0
+        except Exception as exc:
+            logger.error("Supabase exists_by_hash failed for %s: %s", url_hash, exc)
+            return False
 
     def upsert_insight(self, payload: dict) -> None:
-        raise NotImplementedError
+        self._supabase().table("daily_intelligence").upsert(
+            payload, on_conflict="url_hash"
+        ).execute()
 
     def recent_headlines(self, hours: int) -> set[str]:
-        raise NotImplementedError
+        try:
+            cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+            result = (
+                self._supabase().table("daily_intelligence")
+                .select("headline")
+                .gte("created_at", cutoff)
+                .execute()
+            )
+            return {str(row["headline"]) for row in (result.data or [])
+                    if row.get("headline")}
+        except Exception as exc:
+            logger.error("Supabase recent_headlines failed: %s", exc)
+            return set()
 
     def fetch_recent(self, hours: int) -> list[dict]:
-        raise NotImplementedError
+        try:
+            cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+            result = (
+                self._supabase().table("daily_intelligence")
+                .select("*")
+                .gte("created_at", cutoff)
+                .order("americhem_impact_score", desc=True)
+                .execute()
+            )
+            return list(result.data or [])
+        except Exception as exc:
+            logger.error("Supabase fetch_recent failed: %s", exc)
+            return []
 
     def upsert_summary(self, row: dict) -> None:
         raise NotImplementedError
