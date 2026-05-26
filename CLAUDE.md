@@ -35,7 +35,7 @@ Two GitHub Actions workflows exist:
 
 ## Architecture
 
-The pipeline is two sequential scripts sharing a Supabase database, plus one pure module that owns the suppression accounting:
+The pipeline is two sequential scripts sharing a Supabase database, plus two pure modules — one owning suppression accounting and one owning every database call:
 
 **`suppression_ledger.py`** — Pure in-process module owning the suppression reason taxonomy (4 ingestion-owned + 9 delivery-owned codes), `SAMPLES_CAP = 10`, and the same-day-retry merge semantics. Used by both engines; performs zero I/O.
 
