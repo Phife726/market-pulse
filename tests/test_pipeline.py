@@ -20,6 +20,8 @@ from ingestion_engine import (
     synthesize_insight,
 )
 
+from delivery_engine import synthesize_thematic_paragraphs
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -2843,6 +2845,33 @@ def test_macro_summary_system_prompt_contains_english_rule():
                 }
             ]
         )
+
+    _, kwargs = mock_client.chat.completions.create.call_args
+    system_message = kwargs["messages"][0]["content"]
+    _assert_english_anchors_present(system_message)
+
+
+def test_thematic_synthesis_system_prompt_contains_english_rule():
+    """The thematic-synthesis system prompt must include the English-output directive."""
+    mock_message = MagicMock()
+    mock_message.content = json.dumps({"Healthcare": "Stub paragraph."})
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_completion = MagicMock()
+    mock_completion.choices = [mock_choice]
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = mock_completion
+
+    stub_article = {
+        "headline": "Stub headline",
+        "sentiment_tag": "Neutral",
+        "americhem_impact": "Stub impact.",
+        "entities_mentioned": ["Stub Co."],
+        "americhem_impact_score": 7,
+    }
+
+    with patch("delivery_engine._get_openai", return_value=mock_client):
+        synthesize_thematic_paragraphs({"Healthcare": [stub_article, stub_article]})
 
     _, kwargs = mock_client.chat.completions.create.call_args
     system_message = kwargs["messages"][0]["content"]
