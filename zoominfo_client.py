@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 # Published ZoomInfo GTM Enrich News + OAuth token endpoints.
 _DEFAULT_NEWS_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/news/enrich"
 _DEFAULT_TOKEN_URL = "https://api.zoominfo.com/gtm/oauth/v1/token"
+# Verified against ZoomInfo GTM API docs 2026-06-14 (POST, "companies" plural).
+# Override-able so a doc correction never needs a code change.
+_DEFAULT_ENRICH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/companies/enrich"
+_DEFAULT_SEARCH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/companies/search"
 _REQUEST_TIMEOUT = 15  # seconds
 _TOKEN_SAFETY_MARGIN = 60  # seconds shaved off expires_in before re-auth
 
@@ -79,6 +83,21 @@ def _endpoint() -> str:
 
 def _token_url() -> str:
     return os.environ.get("ZOOMINFO_TOKEN_URL", "").strip() or _DEFAULT_TOKEN_URL
+
+
+def _enrich_endpoint() -> str:
+    return os.environ.get("ZOOMINFO_ENRICH_ENDPOINT", "").strip() or _DEFAULT_ENRICH_ENDPOINT
+
+
+def _search_endpoint() -> str:
+    return os.environ.get("ZOOMINFO_SEARCH_ENDPOINT", "").strip() or _DEFAULT_SEARCH_ENDPOINT
+
+
+# Candidate keys ZoomInfo may use for a company id / name in search + enrich bodies.
+_COMPANY_ID_KEYS = ("id", "companyId", "zoominfoCompanyId", "company_id")
+_COMPANY_NAME_KEYS = ("name", "companyName", "canonicalName")
+# Candidate keys the company list may live under in a search response envelope.
+_COMPANY_LIST_KEYS = ("data", "results", "result", "companies", "items")
 
 
 def _reset_token_cache() -> None:
@@ -170,6 +189,110 @@ def _resolve_access_token() -> Optional[str]:
         "skipping ZoomInfo news"
     )
     return None
+
+
+def _classify_http_error(exc: requests.exceptions.HTTPError, context: str) -> str:
+    """Map an HTTPError to the 'error' sentinel, logging per status. Returns
+    the literal "error" so callers can `return {"status": _classify...}`."""
+    status = getattr(exc.response, "status_code", None)
+    if status in (401, 403):
+        logger.error(
+            "ZoomInfo auth/scope error (%s) for %s — entitlement is per-endpoint; "
+            "this proves nothing about other endpoints", status, context,
+        )
+    elif status == 429:
+        logger.warning("ZoomInfo rate limited (429) for %s — skipping", context)
+    elif status is not None and 500 <= status < 600:
+        logger.warning("ZoomInfo server error (%s) for %s — skipping", status, context)
+    else:
+        logger.error("ZoomInfo HTTP error (%s) for %s", status, context)
+    return "error"
+
+
+def _company_search_body(*, domain, name, hq_country, hq_state) -> dict:
+    """Assemble a Company Search request body from whichever hints are given.
+
+    NOTE (verification obligation): the JSON:API `data` wrapper + POST method are
+    doc-verified, but the attribute names below (companyWebsite/companyName/
+    country/state) and the resource `type` are NOT yet confirmed against the
+    ZoomInfo API reference. Confirm and adjust before relying on live results.
+    """
+    criteria: dict = {}
+    if domain:
+        criteria["companyWebsite"] = domain
+    if name:
+        criteria["companyName"] = name
+    if hq_country:
+        criteria["country"] = hq_country
+    if hq_state:
+        criteria["state"] = hq_state
+    return {"data": {"type": "CompanySearch", "attributes": criteria}}
+
+
+def _extract_company_list(payload: object) -> list:
+    """Locate the list of company dicts inside a search response envelope."""
+    if isinstance(payload, list):
+        return [c for c in payload if isinstance(c, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key in _COMPANY_LIST_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [c for c in value if isinstance(c, dict)]
+    return []
+
+
+def _first_company_id(company: dict) -> Optional[int]:
+    """Return the first integer-coercible company id among known keys."""
+    attrs = company.get("attributes") if isinstance(company.get("attributes"), dict) else company
+    for source in (company, attrs):
+        for key in _COMPANY_ID_KEYS:
+            value = source.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.strip().isdigit():
+                return int(value.strip())
+    return None
+
+
+def resolve_company(*, domain=None, name=None, hq_country=None, hq_state=None) -> dict:
+    """Resolve a ZoomInfo company id from a single set of hints.
+
+    Returns {"status": "ok", "company_id": int} on a match, {"status": "empty"}
+    when the API returns no candidate, or {"status": "error"} on any auth/scope/
+    transport/malformed failure. Never raises.
+    """
+    token = _resolve_access_token()
+    if not token:
+        return {"status": "error"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = _company_search_body(
+        domain=domain, name=name, hq_country=hq_country, hq_state=hq_state
+    )
+    context = f"resolve(domain={domain!r}, name={name!r})"
+    try:
+        response = requests.post(
+            _search_endpoint(), json=body, headers=headers, timeout=_REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        return {"status": _classify_http_error(exc, context)}
+    except requests.exceptions.RequestException as exc:
+        logger.error("ZoomInfo search request failed for %s: %s", context, exc)
+        return {"status": "error"}
+    try:
+        data = response.json()
+    except ValueError as exc:
+        logger.error("ZoomInfo search non-JSON body for %s: %s", context, exc)
+        return {"status": "error"}
+    companies = _extract_company_list(data)
+    for company in companies:
+        company_id = _first_company_id(company)
+        if company_id is not None:
+            return {"status": "ok", "company_id": company_id}
+    return {"status": "empty"}
 
 
 def _first_str(item: dict, keys: tuple[str, ...]) -> str:
