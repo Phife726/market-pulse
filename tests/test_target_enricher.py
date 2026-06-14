@@ -120,3 +120,8 @@ def test_extract_firmographics_missing_keys_default_empty():
         "canonical_name": "", "hq_revenue_range": "", "employee_range": "",
         "primary_industry": "", "industries": [], "hq_country": "", "hq_state": "",
     }
+
+
+def test_extract_firmographics_bool_employee_count_not_coerced():
+    firmo = te.extract_firmographics({"employeeCount": True})
+    assert firmo["employee_range"] == ""

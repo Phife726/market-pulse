@@ -106,7 +106,9 @@ _COUNTRY_KEYS = ("country", "companyCountry", "hqCountry", "countryName")
 _STATE_KEYS = ("state", "companyState", "hqState", "stateName")
 
 
-def _first_value(item: dict, keys: tuple) -> str:
+# NOTE: intentionally does NOT reuse zoominfo_client._first_str — this module
+# must stay pure (no client / requests / OAuth import).
+def _first_value(item: dict, keys: tuple[str, ...]) -> str:
     """First non-empty string/number among keys, coerced to a stripped string.
 
     Booleans are explicitly skipped — they are instances of int in Python
@@ -123,7 +125,7 @@ def _first_value(item: dict, keys: tuple) -> str:
     return ""
 
 
-def _list_value(item: dict, keys: tuple) -> list[str]:
+def _list_value(item: dict, keys: tuple[str, ...]) -> list[str]:
     """First list/string among keys, normalised to a list of non-empty strings."""
     for key in keys:
         value = item.get(key)
