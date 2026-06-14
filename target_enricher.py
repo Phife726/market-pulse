@@ -189,7 +189,13 @@ def build_proposed_metadata(*, target_key: str, target_name: str,
     if (enrichment or {}).get("status") == "ok":
         firmo = extract_firmographics(enrichment.get("company", {}))
 
-    if company_id is None or not firmo:
+    # `missing` when we have no id, or enrichment yielded no USABLE firmographics.
+    # extract_firmographics always returns a fully-keyed dict (empty-string
+    # defaults), so we gate on canonical_name — the core identity field — not on
+    # dict truthiness. This prevents a precurated/domain match from being written
+    # `verified` with blank firmographics if a live Enrich returns status=ok but
+    # no fields (e.g. the outputFields list was not requested).
+    if company_id is None or not firmo.get("canonical_name"):
         status = "missing"
     elif match_basis in ("precurated", "domain"):
         status = "verified"

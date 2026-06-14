@@ -308,11 +308,17 @@ def enrich_company(company_id: int) -> dict:
     if not token:
         return {"status": "error"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    # NOTE (verification obligation): POST + path are doc-verified; the `type`,
-    # `companyId` attribute name, and whether an `outputFields` list must be sent
-    # to receive revenue/employee/industry/country/state are NOT yet confirmed.
-    # Confirm against the ZoomInfo API reference and add outputFields if required,
-    # else enrich may return only minimal fields.
+    # NOTE (verification obligation, REQUIRED before live use): POST + path are
+    # doc-verified, but ZoomInfo's Enrich Companies API selects returned fields
+    # via an `outputFields` list — without it a live, entitled call can return a
+    # company with NONE of the firmographics this utility populates (revenue,
+    # employees, industry, HQ). The exact `outputFields` token names and the
+    # `type`/`companyId` attribute names are part of the unverified request-body
+    # schema, so they are deliberately NOT guessed here. Confirm them against the
+    # ZoomInfo API reference / "Try It!" explorer and add `outputFields` before
+    # the relevance gate consumes the firmographics. Until then, target_enricher
+    # gates `verified` on a populated canonical_name, so a sparse Enrich response
+    # is recorded as `missing` rather than a misleading `verified`.
     body = {"data": {"type": "CompanyEnrich",
                      "attributes": {"companyId": company_id}}}
     context = f"enrich(company_id={company_id})"

@@ -198,6 +198,21 @@ def test_enrich_empty_with_id_is_missing():
     assert rec["zoominfo_company_id"] == 5
 
 
+def test_enrich_ok_but_blank_firmographics_is_missing_not_verified():
+    # Live risk: Enrich returns status=ok but no usable firmographics (e.g. the
+    # outputFields list was not requested). A precurated/domain match must NOT
+    # be written 'verified' with an empty canonical_name — that would be a
+    # misleading record. We have an id but no usable data -> missing.
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 357374413, "match_basis": "precurated"},
+        enrichment={"status": "ok", "company": {}},
+    )
+    assert rec["zoominfo_metadata_status"] == "missing"
+    assert rec["canonical_name"] == ""
+    assert rec["zoominfo_company_id"] == 357374413
+
+
 def test_error_preserves_prior_machine_block():
     prior = {
         "target_key": "Avient", "zoominfo_company_id": 357374413,
