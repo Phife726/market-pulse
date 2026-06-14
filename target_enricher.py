@@ -71,7 +71,7 @@ INDUSTRY_TERM_MAP = {
 }
 
 
-def build_industry_terms(primary_industry: str, industries: list) -> tuple[list[str], bool]:
+def build_industry_terms(primary_industry: str, industries: Optional[list[str]]) -> tuple[list[str], bool]:
     """Map ZoomInfo industries to curated relevance terms.
 
     Returns (terms, unmapped). `unmapped` is True only when there was at least

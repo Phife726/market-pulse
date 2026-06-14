@@ -78,3 +78,15 @@ def test_industry_terms_empty_input_not_flagged_unmapped():
     terms, unmapped = te.build_industry_terms("", [])
     assert terms == []
     assert unmapped is False
+
+
+def test_industry_terms_handles_none_industries():
+    terms, unmapped = te.build_industry_terms("Plastics & Rubber Manufacturing", None)
+    assert terms == ["plastics", "polymer", "resin"]
+    assert unmapped is False
+
+
+def test_industry_terms_primary_miss_but_list_hit_not_unmapped():
+    terms, unmapped = te.build_industry_terms("Underwater Basket Weaving", ["Chemicals Manufacturing"])
+    assert terms == ["chemicals", "specialty chemicals"]
+    assert unmapped is False
