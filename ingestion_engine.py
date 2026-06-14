@@ -392,6 +392,18 @@ def discover_serper_candidates(target: dict) -> list[dict]:
     return [_serper_candidate(url, title) for url, title in raw_results]
 
 
+def _zoominfo_target_eligible(target: dict) -> bool:
+    """True when ZoomInfo discovery should be attempted for this target:
+    the feature flag is on, a company id is mapped, and zoominfo_news is not
+    disabled. Concept-mode targets carry no company id, so they are ineligible.
+    """
+    return (
+        _zoominfo_news_enabled()
+        and bool(target.get("zoominfo_company_id"))
+        and bool(target.get("zoominfo_news", True))
+    )
+
+
 def discover_zoominfo_candidates(target: dict) -> list[dict]:
     """Discover ZoomInfo company-news candidates for an entity target.
 
@@ -400,13 +412,9 @@ def discover_zoominfo_candidates(target: dict) -> list[dict]:
     Concept-mode targets carry no zoominfo_company_id, so they short-circuit
     here and remain Serper-only.
     """
-    if not _zoominfo_news_enabled():
+    if not _zoominfo_target_eligible(target):
         return []
-    company_id = target.get("zoominfo_company_id")
-    if not company_id:
-        return []
-    if not target.get("zoominfo_news", True):
-        return []
+    company_id = target["zoominfo_company_id"]
 
     lookback_days = _env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT)
     per_company = _env_int("ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT)
@@ -934,6 +942,13 @@ def execute_pipeline() -> None:
         stats["urls_discovered"] += len(candidates)
         for candidate in candidates:
             _bump(candidate.get("provider", "unknown"), "discovered")
+
+        # Surface a yield line for every attempted provider, even at zero
+        # discovery, so the smoke clearly shows whether ZoomInfo ran. Serper is
+        # always attempted; ZoomInfo only when the target is eligible.
+        provider_yield.setdefault("serper", _new_provider_yield())
+        if _zoominfo_target_eligible(target):
+            provider_yield.setdefault("zoominfo", _new_provider_yield())
 
         for candidate in candidates:
             raw_url = candidate["url"]

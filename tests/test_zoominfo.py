@@ -894,6 +894,62 @@ def test_execute_pipeline_stores_candidate_with_metadata_when_enabled(monkeypatc
     assert payload["source_metadata"]["categories"] == ["FINANCIAL_RESULTS"]
 
 
+def _eligible_zoominfo_targets_yaml() -> str:
+    return textwrap.dedent(
+        """\
+        customers:
+          search_mode: entity
+          include_all: []
+          exclude_any: []
+          entities:
+            - name: Magna International
+              active: true
+              zoominfo_company_id: 12345678
+              zoominfo_news: true
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+
+
+def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, caplog):
+    """An eligible ZoomInfo target must produce a yield line even when it
+    discovers nothing — so the smoke clearly shows ZoomInfo ran."""
+    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
+    cfg = tmp_path / "targets.yaml"
+    cfg.write_text(_eligible_zoominfo_targets_yaml())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target: [])
+    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
+
+    with caplog.at_level("INFO"):
+        ingestion_engine.execute_pipeline()
+
+    assert (
+        "Provider yield — zoominfo discovered=0 scraped=0 stored=0 "
+        "discards=0 scrape_failed=0 duplicates=0" in caplog.text
+    )
+
+
+def test_no_zoominfo_yield_line_when_not_eligible(monkeypatch, tmp_path, caplog):
+    """When ZoomInfo is disabled, no zoominfo yield line should appear."""
+    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "false")
+    cfg = tmp_path / "targets.yaml"
+    cfg.write_text(_eligible_zoominfo_targets_yaml())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target: [])
+    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
+
+    with caplog.at_level("INFO"):
+        ingestion_engine.execute_pipeline()
+
+    assert "Provider yield — zoominfo" not in caplog.text
+
+
 def test_execute_pipeline_omits_metadata_when_disabled(monkeypatch, tmp_path):
     monkeypatch.delenv("STORE_DISCOVERY_METADATA", raising=False)
     captured: list[dict] = []
