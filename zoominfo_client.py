@@ -296,6 +296,49 @@ def resolve_company(*, domain=None, name=None, hq_country=None, hq_state=None) -
     return {"status": "empty"}
 
 
+def enrich_company(company_id: int) -> dict:
+    """Fetch firmographics for one ZoomInfo company id.
+
+    Returns {"status": "ok", "company": <raw dict>} on success, {"status":
+    "empty"} when no company is returned, or {"status": "error"} on any failure.
+    The raw company dict is handed back unmapped — field mapping is the pure
+    target_enricher module's job. Never raises.
+    """
+    token = _resolve_access_token()
+    if not token:
+        return {"status": "error"}
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # NOTE (verification obligation): POST + path are doc-verified; the `type`,
+    # `companyId` attribute name, and whether an `outputFields` list must be sent
+    # to receive revenue/employee/industry/country/state are NOT yet confirmed.
+    # Confirm against the ZoomInfo API reference and add outputFields if required,
+    # else enrich may return only minimal fields.
+    body = {"data": {"type": "CompanyEnrich",
+                     "attributes": {"companyId": company_id}}}
+    context = f"enrich(company_id={company_id})"
+    try:
+        response = requests.post(
+            _enrich_endpoint(), json=body, headers=headers, timeout=_REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        return {"status": _classify_http_error(exc, context)}
+    except requests.exceptions.RequestException as exc:
+        logger.error("ZoomInfo enrich request failed for %s: %s", context, exc)
+        return {"status": "error"}
+    try:
+        data = response.json()
+    except ValueError as exc:
+        logger.error("ZoomInfo enrich non-JSON body for %s: %s", context, exc)
+        return {"status": "error"}
+    companies = _extract_company_list(data)
+    if not companies:
+        return {"status": "empty"}
+    company = companies[0]
+    attrs = company.get("attributes")
+    return {"status": "ok", "company": attrs if isinstance(attrs, dict) else company}
+
+
 def _first_str(item: dict, keys: tuple[str, ...]) -> str:
     """Return the first non-empty string value among *keys*."""
     for key in keys:

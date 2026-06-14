@@ -69,3 +69,25 @@ def test_resolve_company_error_on_malformed_json():
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.resolve_company(name="Avient")
     assert result == {"status": "error"}
+
+
+def test_enrich_company_returns_raw_company_on_success():
+    payload = {"data": [{"attributes": {"name": "Avient Corporation",
+                                        "revenueRange": "$1B - $5B"}}]}
+    with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+        result = zoominfo_client.enrich_company(357374413)
+    assert result["status"] == "ok"
+    assert result["company"]["name"] == "Avient Corporation"
+    assert result["company"]["revenueRange"] == "$1B - $5B"
+
+
+def test_enrich_company_empty_when_no_company():
+    with patch("zoominfo_client.requests.post", return_value=_ok({"data": []})):
+        result = zoominfo_client.enrich_company(999)
+    assert result == {"status": "empty"}
+
+
+def test_enrich_company_error_on_403():
+    with patch("zoominfo_client.requests.post", return_value=_err(403)):
+        result = zoominfo_client.enrich_company(357374413)
+    assert result == {"status": "error"}
