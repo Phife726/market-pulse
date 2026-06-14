@@ -95,3 +95,55 @@ def build_industry_terms(primary_industry: str, industries: Optional[list[str]])
 
     unmapped = bool(sources) and not matched_any
     return terms, unmapped
+
+
+_CANONICAL_NAME_KEYS = ("name", "companyName", "canonicalName")
+_REVENUE_KEYS = ("revenueRange", "revenue", "annualRevenueRange", "revRange")
+_EMPLOYEE_KEYS = ("employeeRange", "employeeCount", "employeesRange", "numberOfEmployees")
+_PRIMARY_INDUSTRY_KEYS = ("primaryIndustry", "primaryIndustryName", "industry")
+_INDUSTRIES_KEYS = ("industries", "subIndustries", "industryList")
+_COUNTRY_KEYS = ("country", "companyCountry", "hqCountry", "countryName")
+_STATE_KEYS = ("state", "companyState", "hqState", "stateName")
+
+
+def _first_value(item: dict, keys: tuple) -> str:
+    """First non-empty string/number among keys, coerced to a stripped string.
+
+    Booleans are explicitly skipped — they are instances of int in Python
+    and must not be treated as numeric values here.
+    """
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)):
+            return str(value)
+    return ""
+
+
+def _list_value(item: dict, keys: tuple) -> list[str]:
+    """First list/string among keys, normalised to a list of non-empty strings."""
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+    return []
+
+
+def extract_firmographics(raw: dict) -> dict:
+    """Map a raw ZoomInfo company dict to our schema fields. Missing fields
+    default to "" (or [] for industries). Pure — defensive about key variants."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        "canonical_name": _first_value(raw, _CANONICAL_NAME_KEYS),
+        "hq_revenue_range": _first_value(raw, _REVENUE_KEYS),
+        "employee_range": _first_value(raw, _EMPLOYEE_KEYS),
+        "primary_industry": _first_value(raw, _PRIMARY_INDUSTRY_KEYS),
+        "industries": _list_value(raw, _INDUSTRIES_KEYS),
+        "hq_country": _first_value(raw, _COUNTRY_KEYS),
+        "hq_state": _first_value(raw, _STATE_KEYS),
+    }

@@ -90,3 +90,33 @@ def test_industry_terms_primary_miss_but_list_hit_not_unmapped():
     terms, unmapped = te.build_industry_terms("Underwater Basket Weaving", ["Chemicals Manufacturing"])
     assert terms == ["chemicals", "specialty chemicals"]
     assert unmapped is False
+
+
+def test_extract_firmographics_maps_known_keys():
+    raw = {
+        "name": "Avient Corporation",
+        "revenueRange": "$1B - $5B",
+        "employeeCount": 9000,
+        "primaryIndustry": "Plastics & Rubber Manufacturing",
+        "industries": ["Plastics & Rubber Manufacturing", "Chemicals Manufacturing"],
+        "country": "United States",
+        "state": "Ohio",
+    }
+    firmo = te.extract_firmographics(raw)
+    assert firmo == {
+        "canonical_name": "Avient Corporation",
+        "hq_revenue_range": "$1B - $5B",
+        "employee_range": "9000",
+        "primary_industry": "Plastics & Rubber Manufacturing",
+        "industries": ["Plastics & Rubber Manufacturing", "Chemicals Manufacturing"],
+        "hq_country": "United States",
+        "hq_state": "Ohio",
+    }
+
+
+def test_extract_firmographics_missing_keys_default_empty():
+    firmo = te.extract_firmographics({})
+    assert firmo == {
+        "canonical_name": "", "hq_revenue_range": "", "employee_range": "",
+        "primary_industry": "", "industries": [], "hq_country": "", "hq_state": "",
+    }
