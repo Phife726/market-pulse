@@ -125,3 +125,106 @@ def test_extract_firmographics_missing_keys_default_empty():
 def test_extract_firmographics_bool_employee_count_not_coerced():
     firmo = te.extract_firmographics({"employeeCount": True})
     assert firmo["employee_range"] == ""
+
+
+_ENRICH_OK = {"status": "ok", "company": {
+    "name": "Avient Corporation", "revenueRange": "$1B - $5B",
+    "employeeCount": 9000, "primaryIndustry": "Plastics & Rubber Manufacturing",
+    "industries": ["Plastics & Rubber Manufacturing"], "country": "United States",
+    "state": "Ohio",
+}}
+
+
+def test_precurated_id_plus_enrich_is_verified_high():
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient",
+        prior_record=None,
+        resolution={"company_id": 357374413, "match_basis": "precurated"},
+        enrichment=_ENRICH_OK,
+    )
+    assert rec["zoominfo_metadata_status"] == "verified"
+    assert rec["zoominfo_metadata_confidence"] == "high"
+    assert rec["zoominfo_company_id"] == 357374413
+    assert rec["canonical_name"] == "Avient Corporation"
+    assert rec["company_identity_terms"] == ["Avient Corporation", "Avient"]
+    assert rec["industry_relevance_terms"] == ["plastics", "polymer", "resin"]
+    assert rec["metadata_record_status"] == "active"
+    assert rec["target_key"] == "Avient"
+
+
+def test_domain_resolution_is_verified_high():
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 1, "match_basis": "domain"}, enrichment=_ENRICH_OK,
+    )
+    assert rec["zoominfo_metadata_status"] == "verified"
+    assert rec["zoominfo_metadata_confidence"] == "high"
+
+
+def test_name_hq_resolution_is_needs_review_medium():
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 1, "match_basis": "name_hq"}, enrichment=_ENRICH_OK,
+    )
+    assert rec["zoominfo_metadata_status"] == "needs_review"
+    assert rec["zoominfo_metadata_confidence"] == "medium"
+
+
+def test_name_only_resolution_is_needs_review_low():
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 1, "match_basis": "name"}, enrichment=_ENRICH_OK,
+    )
+    assert rec["zoominfo_metadata_status"] == "needs_review"
+    assert rec["zoominfo_metadata_confidence"] == "low"
+
+
+def test_no_id_found_is_missing():
+    rec = te.build_proposed_metadata(
+        target_key="Ghost Co", target_name="Ghost Co", prior_record=None,
+        resolution={"match_basis": None}, enrichment=None,
+    )
+    assert rec["zoominfo_metadata_status"] == "missing"
+    assert rec["zoominfo_company_id"] is None
+
+
+def test_enrich_empty_with_id_is_missing():
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 5, "match_basis": "precurated"},
+        enrichment={"status": "empty"},
+    )
+    assert rec["zoominfo_metadata_status"] == "missing"
+    assert rec["zoominfo_company_id"] == 5
+
+
+def test_error_preserves_prior_machine_block():
+    prior = {
+        "target_key": "Avient", "zoominfo_company_id": 357374413,
+        "canonical_name": "Avient Corporation", "hq_revenue_range": "$1B - $5B",
+        "zoominfo_metadata_status": "verified", "zoominfo_metadata_confidence": "high",
+        "manual_aliases": ["AVNT"], "exclude_terms": ["avient health"],
+    }
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=prior,
+        resolution={"error": True}, enrichment=None,
+    )
+    assert rec["zoominfo_metadata_status"] == "error"
+    # Prior good data survives untouched.
+    assert rec["canonical_name"] == "Avient Corporation"
+    assert rec["zoominfo_company_id"] == 357374413
+    assert rec["zoominfo_metadata_confidence"] == "high"
+    # Curated fields survive.
+    assert rec["manual_aliases"] == ["AVNT"]
+    assert rec["exclude_terms"] == ["avient health"]
+
+
+def test_curated_fields_preserved_on_success():
+    prior = {"manual_aliases": ["RTP"], "exclude_terms": ["return to player"]}
+    rec = te.build_proposed_metadata(
+        target_key="RTP Company", target_name="RTP Company", prior_record=prior,
+        resolution={"company_id": 46383930, "match_basis": "precurated"},
+        enrichment=_ENRICH_OK,
+    )
+    assert rec["manual_aliases"] == ["RTP"]
+    assert rec["exclude_terms"] == ["return to player"]

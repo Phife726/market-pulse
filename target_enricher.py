@@ -149,3 +149,74 @@ def extract_firmographics(raw: dict) -> dict:
         "hq_country": _first_value(raw, _COUNTRY_KEYS),
         "hq_state": _first_value(raw, _STATE_KEYS),
     }
+
+
+_CONFIDENCE_BY_BASIS = {
+    "precurated": "high", "domain": "high", "name_hq": "medium", "name": "low",
+}
+
+
+def build_proposed_metadata(*, target_key: str, target_name: str,
+                            prior_record: Optional[dict],
+                            resolution: dict, enrichment: Optional[dict]) -> dict:
+    """Build the proposed metadata record for one target.
+
+    `resolution` is the CLI-normalized dict ({"company_id","match_basis"} |
+    {"match_basis": None} | {"error": True}). `enrichment` is the enrich_company
+    result dict or None. The CLI stamps zoominfo_metadata_last_refreshed after.
+    """
+    prior = prior_record or {}
+    manual_aliases = list(prior.get("manual_aliases", []))
+    exclude_terms = list(prior.get("exclude_terms", []))
+
+    # ERROR: keep the prior machine block verbatim; only re-stamp status. A
+    # transient entitlement blip must never wipe verified data.
+    if resolution.get("error") or (enrichment or {}).get("status") == "error":
+        record = dict(prior)
+        record["target_key"] = target_key
+        record["metadata_record_status"] = "active"
+        record["zoominfo_metadata_status"] = "error"
+        record.setdefault("zoominfo_metadata_confidence", "low")
+        record["manual_aliases"] = manual_aliases
+        record["exclude_terms"] = exclude_terms
+        return record
+
+    company_id = resolution.get("company_id")
+    match_basis = resolution.get("match_basis")
+    confidence = _CONFIDENCE_BY_BASIS.get(match_basis, "low")
+
+    firmo: dict = {}
+    if (enrichment or {}).get("status") == "ok":
+        firmo = extract_firmographics(enrichment.get("company", {}))
+
+    if company_id is None or not firmo:
+        status = "missing"
+    elif match_basis in ("precurated", "domain"):
+        status = "verified"
+    else:
+        status = "needs_review"
+
+    identity_terms = build_identity_terms(firmo.get("canonical_name", ""), target_name)
+    industry_terms, unmapped = build_industry_terms(
+        firmo.get("primary_industry", ""), firmo.get("industries", [])
+    )
+
+    return {
+        "target_key": target_key,
+        "metadata_record_status": "active",
+        "zoominfo_company_id": company_id,
+        "canonical_name": firmo.get("canonical_name", ""),
+        "hq_revenue_range": firmo.get("hq_revenue_range", ""),
+        "employee_range": firmo.get("employee_range", ""),
+        "primary_industry": firmo.get("primary_industry", ""),
+        "industries": firmo.get("industries", []),
+        "hq_country": firmo.get("hq_country", ""),
+        "hq_state": firmo.get("hq_state", ""),
+        "company_identity_terms": identity_terms,
+        "industry_relevance_terms": industry_terms,
+        "industry_unmapped": unmapped,
+        "zoominfo_metadata_status": status,
+        "zoominfo_metadata_confidence": confidence,
+        "manual_aliases": manual_aliases,
+        "exclude_terms": exclude_terms,
+    }
