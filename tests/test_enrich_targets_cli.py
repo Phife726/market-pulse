@@ -1,5 +1,6 @@
 """Tests for scripts/enrich_targets.py. A fake client replaces ZoomInfo — no
 live calls. Exercises load, resolution cascade, dry-run diff, and --write."""
+import logging
 import textwrap
 
 import enrich_targets
@@ -222,6 +223,55 @@ def test_target_resolving_to_error_gets_error_status(tmp_path):
     doc = yaml.safe_load(out.read_text())
     assert doc["targets"]["Avient"]["zoominfo_metadata_status"] == "error"
     assert client.enrich_calls == []  # error short-circuits before enrich
+
+
+def test_sparse_enrich_logs_warning_and_records_missing(tmp_path, caplog):
+    # Enrich returns status=ok but no firmographics (the live outputFields risk):
+    # the record must become 'missing', and the CLI must warn that an ok Enrich
+    # yielded sparse data so an operator knows outputFields likely needs adding.
+    targets = _write_targets(tmp_path, """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 357374413
+        """)
+    out = tmp_path / "target_metadata.yaml"
+    client = _FakeClient()
+    client.enrich_result = {"status": "ok", "company": {}}  # ok but empty firmographics
+    with caplog.at_level(logging.WARNING, logger="enrich_targets"):
+        enrich_targets.run(targets_path=str(targets), out_path=str(out),
+                           only=None, write=True, today="2026-06-14", client=client)
+    import yaml
+    doc = yaml.safe_load(out.read_text())
+    rec = doc["targets"]["Avient"]
+    assert rec["zoominfo_metadata_status"] == "missing"  # behavior preserved
+    text = caplog.text.lower()
+    assert "avient" in text and "sparse" in text  # operator-facing pointer
+
+
+def test_error_enrich_does_not_emit_sparse_warning(tmp_path, caplog):
+    # An entitlement/auth error must stay 'error' (not 'missing') and must NOT be
+    # described as sparse firmographics — those are distinct failure modes.
+    targets = _write_targets(tmp_path, """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 357374413
+        """)
+    out = tmp_path / "target_metadata.yaml"
+    client = _FakeClient()
+    client.enrich_result = {"status": "error"}
+    with caplog.at_level(logging.WARNING, logger="enrich_targets"):
+        enrich_targets.run(targets_path=str(targets), out_path=str(out),
+                           only=None, write=True, today="2026-06-14", client=client)
+    import yaml
+    doc = yaml.safe_load(out.read_text())
+    assert doc["targets"]["Avient"]["zoominfo_metadata_status"] == "error"
+    assert "sparse" not in caplog.text.lower()
 
 
 def test_only_flag_processes_single_target(tmp_path):

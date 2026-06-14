@@ -1,6 +1,7 @@
 """Tests for the ZoomInfo company resolve/enrich functions used by the
 target-metadata enrichment utility. No live API calls — requests.post is
 always mocked."""
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,9 +18,10 @@ def _ok(json_payload: dict) -> MagicMock:
     return resp
 
 
-def _err(status: int) -> MagicMock:
+def _err(status: int, body: str = "") -> MagicMock:
     resp = MagicMock()
     resp.status_code = status
+    resp.text = body
     resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
     return resp
 
@@ -108,3 +110,74 @@ def test_enrich_company_error_on_malformed_json():
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.enrich_company(357374413)
     assert result == {"status": "error"}
+
+
+# ── Diagnostics: sanitized 400 snippet + keys-only structural logging ──────────
+# These prove the schema-confirmation machinery is safe (no secrets/values
+# leaked) and degrades to "error" — they do NOT assert any outputFields tokens,
+# which stay unverified until an entitled live run confirms them.
+
+def test_enrich_company_400_is_error_and_logs_sanitized_snippet(caplog):
+    body = '{"error":"Invalid field requested: outputFields is required"}'
+    with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+            result = zoominfo_client.enrich_company(357374413)
+    assert result == {"status": "error"}  # 400 degrades, never raises
+    text = caplog.text
+    assert "400" in text
+    assert "outputFields is required" in text  # response body pointer surfaced
+
+
+def test_resolve_company_400_is_error_and_logs_sanitized_snippet(caplog):
+    body = '{"error":"Invalid search criteria"}'
+    with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+            result = zoominfo_client.resolve_company(name="Avient")
+    assert result == {"status": "error"}
+    assert "400" in caplog.text
+    assert "Invalid search criteria" in caplog.text
+
+
+def test_enrich_company_400_snippet_capped_at_500_chars(caplog):
+    body = "x" * 5000
+    with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+            zoominfo_client.enrich_company(357374413)
+    # The raw 5000-char body must never appear in full; the snippet is capped.
+    assert ("x" * 5000) not in caplog.text
+    assert ("x" * 500) in caplog.text
+
+
+def test_enrich_company_structural_log_is_keys_only_no_values(caplog):
+    payload = {"data": [{"attributes": {"name": "SENTINEL_VALUE",
+                                        "revenueRange": "$1B - $5B"}}]}
+    with caplog.at_level(logging.INFO, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+            zoominfo_client.enrich_company(357374413)
+    text = caplog.text
+    # Field NAMES are surfaced so the next entitled run can confirm the schema...
+    assert "name" in text and "revenueRange" in text
+    # ...but no firmographic VALUES (or tokens/secrets) are ever logged.
+    assert "SENTINEL_VALUE" not in text
+    assert "$1B - $5B" not in text
+
+
+def test_resolve_company_structural_log_is_keys_only_no_values(caplog):
+    payload = {"data": [{"id": 357374413, "name": "SENTINEL_VALUE"}]}
+    with caplog.at_level(logging.INFO, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+            zoominfo_client.resolve_company(name="Avient")
+    assert "SENTINEL_VALUE" not in caplog.text
+
+
+def test_diagnostics_never_log_the_bearer_token(caplog):
+    # The autouse fixture sets ZOOMINFO_BEARER_TOKEN="test-bearer". No code path
+    # (200 structural log or 400 snippet) may ever surface it.
+    with caplog.at_level(logging.DEBUG, logger="zoominfo_client"):
+        with patch("zoominfo_client.requests.post",
+                   return_value=_err(400, '{"error":"bad"}')):
+            zoominfo_client.enrich_company(357374413)
+        with patch("zoominfo_client.requests.post",
+                   return_value=_ok({"data": [{"attributes": {"name": "X"}}]})):
+            zoominfo_client.enrich_company(357374413)
+    assert "test-bearer" not in caplog.text
