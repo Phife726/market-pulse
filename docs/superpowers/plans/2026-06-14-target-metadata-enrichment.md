@@ -45,6 +45,44 @@
 
 **CLI-normalized `enrichment`** = the dict returned by `enrich_company`, or `None` when no id was available to enrich.
 
+### Conventions (apply to every task)
+
+- **YAML:** use `yaml.safe_load` and `yaml.safe_dump` **only** — never `yaml.load`/`yaml.dump`. Dump with `sort_keys=False, allow_unicode=True, default_flow_style=False`.
+- **Logging:** `%s` placeholders, never f-strings in `logger.*()` calls; specific exceptions only (matches the repo's Python conventions).
+- **Type hints** on all new function signatures; `Optional[T]` for nullable returns.
+
+---
+
+## Endpoint verification (DONE — read before Task 1)
+
+The official ZoomInfo GTM API docs were checked on 2026-06-14:
+
+- **Company Enrich:** `POST https://api.zoominfo.com/gtm/data/v1/companies/enrich`
+  (note: **`companies`**, plural) — [docs](https://docs.zoominfo.com/reference/enrichinterface_enrichcompany)
+- **Company Search:** `POST https://api.zoominfo.com/gtm/data/v1/companies/search`
+  (plural) — [docs](https://docs.zoominfo.com/reference/searchinterface_searchcompany)
+
+**Verified:** method (POST) and full paths. The body is a required JSON:API `data`
+object (same family as the existing News Enrich call).
+
+**NOT verified from public docs:** the exact attribute field names under
+`data.attributes` (e.g. `companyId`, `companyName`, `companyWebsite`, `outputFields`)
+and the response field names. These live in the authenticated "Try It!" schema.
+
+**Implementer obligation (amendment #1 & #3):** the paths/method below are used as
+defaults *because they are verified*. Before finalizing the request **body builders**
+in Tasks 1–2, confirm the exact `data.attributes` field names (and whether
+`outputFields` must be sent to receive revenue/employee/industry/country/state)
+against the ZoomInfo API reference or "Try It!" explorer, and adjust the body
+builders accordingly. **Do not infer body shape from News Enrich alone.** The tests
+in these tasks deliberately assert only *wrapper behavior + response normalization*
+(not provider-specific field names), so they remain valid whatever the confirmed
+attribute names turn out to be. The defensive response-key lists
+(`_COMPANY_ID_KEYS`, the firmographics key tuples in Task 5) should be widened to
+include the confirmed names once known. Endpoint paths stay env-overridable
+(`ZOOMINFO_ENRICH_ENDPOINT` / `ZOOMINFO_SEARCH_ENDPOINT`) so a doc correction never
+needs a code change.
+
 ---
 
 ## Task 1: Client endpoint helpers + `resolve_company`
@@ -124,8 +162,10 @@ Expected: FAIL with `AttributeError: module 'zoominfo_client' has no attribute '
 In `zoominfo_client.py`, after line 39 (`_DEFAULT_TOKEN_URL = ...`):
 
 ```python
-_DEFAULT_ENRICH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/company/enrich"
-_DEFAULT_SEARCH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/company/search"
+# Verified against ZoomInfo GTM API docs 2026-06-14 (POST, "companies" plural).
+# Override-able so a doc correction never needs a code change.
+_DEFAULT_ENRICH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/companies/enrich"
+_DEFAULT_SEARCH_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/companies/search"
 ```
 
 And after the existing `_token_url()` (line 81):
@@ -170,7 +210,13 @@ def _classify_http_error(exc: requests.exceptions.HTTPError, context: str) -> st
 
 
 def _company_search_body(*, domain, name, hq_country, hq_state) -> dict:
-    """Assemble a Company Search request body from whichever hints are given."""
+    """Assemble a Company Search request body from whichever hints are given.
+
+    NOTE (verification obligation): the JSON:API `data` wrapper + POST method are
+    doc-verified, but the attribute names below (companyWebsite/companyName/
+    country/state) and the resource `type` are NOT yet confirmed against the
+    ZoomInfo API reference. Confirm and adjust before relying on live results.
+    """
     criteria: dict = {}
     if domain:
         criteria["companyWebsite"] = domain
@@ -318,6 +364,11 @@ def enrich_company(company_id: int) -> dict:
     if not token:
         return {"status": "error"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # NOTE (verification obligation): POST + path are doc-verified; the `type`,
+    # `companyId` attribute name, and whether an `outputFields` list must be sent
+    # to receive revenue/employee/industry/country/state are NOT yet confirmed.
+    # Confirm against the ZoomInfo API reference and add outputFields if required,
+    # else enrich may return only minimal fields.
     body = {"data": {"type": "CompanyEnrich",
                      "attributes": {"companyId": company_id}}}
     context = f"enrich(company_id={company_id})"
@@ -1114,7 +1165,9 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'enrich_targets'`
 
 - [ ] **Step 3: Make `scripts/` importable in tests**
 
-Create `tests/conftest.py` (if it does not already exist):
+First check whether the file exists: `ls tests/conftest.py`.
+
+- **If it does NOT exist**, create `tests/conftest.py` with exactly:
 
 ```python
 import os
@@ -1122,6 +1175,17 @@ import sys
 
 # Make scripts/ importable as top-level modules in tests (e.g. `enrich_targets`).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+```
+
+- **If it ALREADY exists**, do NOT overwrite it. Append only the path shim,
+  preserving every existing fixture and import. Add (merging the `import os` /
+  `import sys` lines if they are already present, rather than duplicating them):
+
+```python
+# Make scripts/ importable as top-level modules in tests (e.g. `enrich_targets`).
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", "scripts"))
 ```
 
 - [ ] **Step 4: Implement the CLI core (load + resolve cascade + render + dry-run)**
@@ -1572,12 +1636,16 @@ git commit -m "docs(enrichment): document enrich_targets usage and entitlement c
 Run: `pytest tests/ -v`
 Expected: all green, no regressions.
 
-- [ ] **Smoke the CLI dry-run against the real targets.yaml (no creds needed)**
+- [ ] **Smoke the CLI dry-run against the real targets.yaml (no creds required)**
 
 Run: `python scripts/enrich_targets.py --today 2026-06-14`
-Expected: with no ZoomInfo creds set, every target degrades to `error`/`missing`
-(logged, not crashed) and a diff/proposed `target_metadata.yaml` prints to stdout.
-The command exits 0 and writes nothing.
+Expected: with no ZoomInfo creds set, `_resolve_access_token()` returns None, so
+both `resolve_company` and `enrich_company` return `{"status": "error"}`. Therefore
+**every target degrades to `zoominfo_metadata_status: error`** (logged, not crashed),
+and any prior good metadata is preserved. `missing` must **not** appear from absent
+credentials — it is reserved for a *successful* lookup/enrich that returned no match
+(HTTP 200, empty). The command exits 0, writes nothing, and prints the proposed diff
+to stdout.
 
 ---
 
