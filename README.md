@@ -12,7 +12,7 @@ Market-Pulse is an automated, high-leverage market intelligence pipeline enginee
 
 The pipeline is fully serverless, executing autonomously via GitHub Actions.
 
-1. **Discovery:** Queries the open web (via Serper.dev) for recent news matching Americhem's target entities.
+1. **Discovery:** Queries the open web (via Serper.dev) for recent news matching Americhem's target entities. Active entity-mode targets with a mapped ZoomInfo company id are additionally enriched via the **ZoomInfo News Enrichment** API (supplemental, never a replacement for Serper; gated behind `ZOOMINFO_NEWS_ENABLED`).
 2. **Extraction:** Bypasses paywalls and extracts clean article markdown (via Firecrawl).
 3. **Normalization & Deduplication:** Strips URL tracking parameters and computes a SHA-256 hash to guarantee zero duplicate entries in the database.
 4. **Synthesis:** Passes the raw text to OpenAI (`gpt-5.4-nano`) to extract strict JSON: the Americhem impact, a sentiment score (1-10), and the exact source URL.
@@ -33,6 +33,17 @@ Two YAML files control the pipeline; no Python changes are required to retune ei
   3. Ensure `active: true` is set.
   4. Commit the change. The pipeline picks it up on the next scheduled run.
 
+  **Optional ZoomInfo enrichment (entity-mode only).** An entity may carry a ZoomInfo company id to add company-news enrichment alongside Serper:
+
+  ```yaml
+  - name: Magna International
+    active: true
+    zoominfo_company_id: 12345678
+    zoominfo_news: true
+  ```
+
+  `zoominfo_company_id` is optional. `zoominfo_news` is optional and defaults to `true` when an id is present — set it to `false` to keep an entity Serper-only. Entities without an id, and all concept-mode groups, remain Serper-only. ZoomInfo discovery is additionally gated globally by the `ZOOMINFO_NEWS_ENABLED` variable.
+
 - **`market_pulse_config.yaml`** — how to report. Controls report tuning (`visible_impact_threshold`, per-segment cap, total-article cap) and the strategic-segment taxonomy that the LLM uses to classify articles. Raise `visible_impact_threshold` if the report feels noisy; lower it if too sparse.
 
 ---
@@ -52,6 +63,20 @@ To execute this pipeline, the following secrets must be injected into the enviro
 | `SENDER_EMAIL` | Verified sending address (e.g., `alerts@ami-pulse.com`) |
 | `RECIPIENT_EMAILS` | Comma-separated list of production inboxes |
 | `TEST_RECIPIENT_EMAILS` | Comma-separated QA inboxes; used only by the test workflow |
+| `ZOOMINFO_BEARER_TOKEN` | ZoomInfo static bearer token for company news enrichment |
+
+### Repository Variables (Operational Controls)
+
+These are GitHub **repository variables** (Settings → Secrets and variables → Actions → Variables), not secrets — they tune ZoomInfo discovery without code changes.
+
+| Variable | Purpose |
+| :--- | :--- |
+| `ZOOMINFO_NEWS_ENABLED` | Enables ZoomInfo company-news discovery when `true` (default off). Accepts `true`/`1`/`yes`/`on`. |
+| `ZOOMINFO_NEWS_LOOKBACK_DAYS` | Lookback window (days) for ZoomInfo news enrichment (default `2`). |
+| `ZOOMINFO_NEWS_PER_COMPANY` | Max ZoomInfo news records requested per mapped company (default `5`). |
+| `STORE_DISCOVERY_METADATA` | When `true`, persists discovery-provenance columns (`discovery_source`, `external_company_id`, `published_at`, `source_metadata`). Keep off until `migrations/003_add_discovery_metadata.sql` is applied. |
+
+> **Rollout order for ZoomInfo:** merge the code (all flags off → production unaffected) → apply `migrations/003_add_discovery_metadata.sql` in Supabase → set `STORE_DISCOVERY_METADATA=true` → set `ZOOMINFO_NEWS_ENABLED=true`.
 
 ---
 

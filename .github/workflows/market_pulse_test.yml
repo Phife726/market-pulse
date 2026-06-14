@@ -88,6 +88,11 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
+          ZOOMINFO_BEARER_TOKEN: ${{ secrets.ZOOMINFO_BEARER_TOKEN }}
+          ZOOMINFO_NEWS_ENABLED: ${{ vars.ZOOMINFO_NEWS_ENABLED }}
+          ZOOMINFO_NEWS_LOOKBACK_DAYS: ${{ vars.ZOOMINFO_NEWS_LOOKBACK_DAYS }}
+          ZOOMINFO_NEWS_PER_COMPANY: ${{ vars.ZOOMINFO_NEWS_PER_COMPANY }}
+          STORE_DISCOVERY_METADATA: ${{ vars.STORE_DISCOVERY_METADATA }}
           MARKET_PULSE_RUN_MODE: test
         run: python ingestion_engine.py
 
