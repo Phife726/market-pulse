@@ -77,3 +77,18 @@ jobs:
           ZOOMINFO_ENRICH_ENDPOINT: ${{ vars.ZOOMINFO_ENRICH_ENDPOINT }}
           ZOOMINFO_SEARCH_ENDPOINT: ${{ vars.ZOOMINFO_SEARCH_ENDPOINT }}
         run: python scripts/enrich_targets.py --only "$TARGET"
+
+      - name: Probe Company Enrich request schema (read-only)
+        # Sends an explicit set of doc-plausible request bodies and logs each
+        # one's sanitized status + error pointer (or keys-only shape for a 200),
+        # so the live API confirms the accepted input field + whether
+        # outputFields is required. Writes nothing. TARGET passed via env and
+        # referenced as "$TARGET" to avoid script injection.
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          ZOOMINFO_CLIENT_ID: ${{ secrets.ZOOMINFO_CLIENT_ID }}
+          ZOOMINFO_CLIENT_SECRET: ${{ secrets.ZOOMINFO_CLIENT_SECRET }}
+          ZOOMINFO_BEARER_TOKEN: ${{ secrets.ZOOMINFO_BEARER_TOKEN }}
+          ZOOMINFO_TOKEN_URL: ${{ vars.ZOOMINFO_TOKEN_URL }}
+          ZOOMINFO_ENRICH_ENDPOINT: ${{ vars.ZOOMINFO_ENRICH_ENDPOINT }}
+        run: python scripts/probe_company_enrich.py --target "$TARGET"
