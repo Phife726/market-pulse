@@ -103,3 +103,45 @@ The pipeline is orchestrated by `.github/workflows/market_pulse.yml`.
 To manually trigger a run, navigate to the **Actions** tab in GitHub, select the workflow, and click **Run workflow**.
 
 A second workflow — `.github/workflows/market_pulse_test.yml` — runs the pipeline in **test mode**: it sets `MARKET_PULSE_RUN_MODE=test`, routes mail to `TEST_RECIPIENT_EMAILS` instead of the production list, and marks both the subject (`[TEST]`) and HTML body (amber "TEST RUN" banner). Inputs let you skip ingestion or skip the email send, so you can re-render the existing day's rows without re-billing the APIs.
+
+---
+
+## Target metadata enrichment (`scripts/enrich_targets.py`)
+
+A standalone, reviewable utility that populates `target_metadata.yaml` — a
+machine-managed companion file holding ZoomInfo company-identity metadata
+(canonical name, HQ revenue/employee ranges, industries, HQ country/state) plus
+conservative helper terms for a future relevance gate.
+
+**Daily ingestion never runs this.** Ingestion consumes the checked-in, reviewed
+`target_metadata.yaml` only; enrichment is an offline, human-in-the-loop step.
+
+```bash
+# Dry-run (default): prints a unified diff, writes nothing
+python scripts/enrich_targets.py
+
+# Apply the proposed changes
+python scripts/enrich_targets.py --write
+
+# One target only
+python scripts/enrich_targets.py --only "Avient"
+```
+
+**Per-endpoint entitlement caveat.** A working OAuth token + News Enrich access
+(proved by the ingestion pipeline) does NOT imply access to the Company Enrich
+or Company Search endpoints this utility uses — ZoomInfo scopes are granted
+per-endpoint. When an endpoint returns 401/403/invalid-scope, the affected target
+degrades to `zoominfo_metadata_status: error` (prior good data is preserved) and
+the run continues; it never crashes.
+
+**Reviewing output.** Records carry `zoominfo_metadata_status`
+(`verified|needs_review|missing|error`) and `zoominfo_metadata_confidence`
+(`high|medium|low`). Anything not `verified` warrants a human look before trust.
+Edit only the human-curated fields — `manual_aliases` (e.g. risky short acronyms
+like `RTP` that the utility deliberately will not auto-generate) and
+`exclude_terms`; the enricher preserves them on re-runs. Extend
+`INDUSTRY_TERM_MAP` in `target_enricher.py` when an `industry_unmapped: true`
+record appears.
+
+Removed targets are kept and flagged `metadata_record_status: orphaned`, never
+auto-deleted.

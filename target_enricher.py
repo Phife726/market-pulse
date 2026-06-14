@@ -1,0 +1,247 @@
+"""Pure transform module for the target-metadata enrichment utility.
+
+Takes raw ZoomInfo responses plus prior metadata and returns proposed metadata
+records (status, confidence, conservative helper terms). Performs ZERO network
+and ZERO file I/O — every function is a deterministic transform, fully unit
+-testable without mocks. The clock lives in the CLI: callers stamp
+``zoominfo_metadata_last_refreshed`` after calling this module.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+# Legal-entity suffixes stripped to derive a de-suffixed identity term.
+LEGAL_SUFFIXES = [
+    "Incorporated", "Inc.", "Inc", "Corporation", "Corp.", "Corp",
+    "LLC", "L.L.C.", "Ltd.", "Ltd", "Limited", "GmbH", "S.E.", "SE",
+    "AG", "Co.", "Co", "Company", "Group", "Holdings", "PLC", "plc",
+]
+_SUFFIX_SET = {s.strip(".,").lower() for s in LEGAL_SUFFIXES}
+
+
+def de_suffix(name: str) -> Optional[str]:
+    """Strip a single trailing legal suffix, with a guardrail.
+
+    Returns the de-suffixed form ONLY if it retains >=2 word tokens OR >=6
+    characters — otherwise None. This prevents reducing a name to a short,
+    overloaded acronym (e.g. "RTP Company" -> "RTP" is suppressed).
+    """
+    tokens = (name or "").split()
+    if len(tokens) < 2:
+        return None
+    if tokens[-1].strip(".,").lower() not in _SUFFIX_SET:
+        return None
+    candidate = " ".join(tokens[:-1]).strip()
+    if len(candidate.split()) >= 2 or len(candidate) >= 6:
+        return candidate
+    return None
+
+
+def build_identity_terms(canonical_name: str, target_name: str) -> list[str]:
+    """Conservative identity terms: canonical name, target name, and de-suffixed
+    forms of each. Case-insensitive dedup, canonical-first order. No acronyms."""
+    terms: list[str] = []
+    seen: set[str] = set()
+
+    def _add(term: Optional[str]) -> None:
+        term = (term or "").strip()
+        if term and term.lower() not in seen:
+            seen.add(term.lower())
+            terms.append(term)
+
+    _add(canonical_name)
+    _add(target_name)
+    _add(de_suffix(canonical_name or ""))
+    _add(de_suffix(target_name or ""))
+    return terms
+
+
+# Small, checked-in map from ZoomInfo industry labels to curated relevance
+# terms. Only mapped industries emit terms; unmapped ones emit nothing and set
+# industry_unmapped=True so a human can extend this map. Add entries at the end.
+INDUSTRY_TERM_MAP = {
+    "Plastics & Rubber Manufacturing":          ["plastics", "polymer", "resin"],
+    "Chemicals Manufacturing":                  ["chemicals", "specialty chemicals"],
+    "Plastics Material & Resin Manufacturing":  ["resin", "thermoplastics", "compounding"],
+    "Packaging & Containers":                   ["packaging"],
+    "Automotive":                               ["automotive", "mobility"],
+    "Building Materials":                       ["building materials", "construction"],
+    "Paints, Coatings & Adhesives":             ["coatings", "pigments", "masterbatch"],
+    "Textiles & Apparel":                       ["fibers", "textiles"],
+}
+
+
+def build_industry_terms(primary_industry: str, industries: Optional[list[str]]) -> tuple[list[str], bool]:
+    """Map ZoomInfo industries to curated relevance terms.
+
+    Returns (terms, unmapped). `unmapped` is True only when there was at least
+    one non-empty industry input and NONE of them matched the map.
+    """
+    sources: list[str] = []
+    for value in [primary_industry, *(industries or [])]:
+        value = (value or "").strip()
+        if value and value not in sources:
+            sources.append(value)
+
+    terms: list[str] = []
+    matched_any = False
+    for source in sources:
+        mapped = INDUSTRY_TERM_MAP.get(source)
+        if mapped:
+            matched_any = True
+            for term in mapped:
+                if term not in terms:
+                    terms.append(term)
+
+    unmapped = bool(sources) and not matched_any
+    return terms, unmapped
+
+
+_CANONICAL_NAME_KEYS = ("name", "companyName", "canonicalName")
+_REVENUE_KEYS = ("revenueRange", "revenue", "annualRevenueRange", "revRange")
+_EMPLOYEE_KEYS = ("employeeRange", "employeeCount", "employeesRange", "numberOfEmployees")
+_PRIMARY_INDUSTRY_KEYS = ("primaryIndustry", "primaryIndustryName", "industry")
+_INDUSTRIES_KEYS = ("industries", "subIndustries", "industryList")
+_COUNTRY_KEYS = ("country", "companyCountry", "hqCountry", "countryName")
+_STATE_KEYS = ("state", "companyState", "hqState", "stateName")
+
+
+# NOTE: intentionally does NOT reuse zoominfo_client._first_str — this module
+# must stay pure (no client / requests / OAuth import).
+def _first_value(item: dict, keys: tuple[str, ...]) -> str:
+    """First non-empty string/number among keys, coerced to a stripped string.
+
+    Booleans are explicitly skipped — they are instances of int in Python
+    and must not be treated as numeric values here.
+    """
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)):
+            return str(value)
+    return ""
+
+
+def _list_value(item: dict, keys: tuple[str, ...]) -> list[str]:
+    """First list/string among keys, normalised to a list of non-empty strings."""
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+    return []
+
+
+def extract_firmographics(raw: dict) -> dict:
+    """Map a raw ZoomInfo company dict to our schema fields. Missing fields
+    default to "" (or [] for industries). Pure — defensive about key variants."""
+    raw = raw if isinstance(raw, dict) else {}
+    return {
+        "canonical_name": _first_value(raw, _CANONICAL_NAME_KEYS),
+        "hq_revenue_range": _first_value(raw, _REVENUE_KEYS),
+        "employee_range": _first_value(raw, _EMPLOYEE_KEYS),
+        "primary_industry": _first_value(raw, _PRIMARY_INDUSTRY_KEYS),
+        "industries": _list_value(raw, _INDUSTRIES_KEYS),
+        "hq_country": _first_value(raw, _COUNTRY_KEYS),
+        "hq_state": _first_value(raw, _STATE_KEYS),
+    }
+
+
+_CONFIDENCE_BY_BASIS = {
+    "precurated": "high", "domain": "high", "name_hq": "medium", "name": "low",
+}
+
+
+def build_proposed_metadata(*, target_key: str, target_name: str,
+                            prior_record: Optional[dict],
+                            resolution: dict, enrichment: Optional[dict]) -> dict:
+    """Build the proposed metadata record for one target.
+
+    `resolution` is the CLI-normalized dict ({"company_id","match_basis"} |
+    {"match_basis": None} | {"error": True}). `enrichment` is the enrich_company
+    result dict or None. The CLI stamps zoominfo_metadata_last_refreshed after.
+    """
+    prior = prior_record or {}
+    manual_aliases = list(prior.get("manual_aliases", []))
+    exclude_terms = list(prior.get("exclude_terms", []))
+
+    # ERROR: keep the prior machine block verbatim; only re-stamp status. A
+    # transient entitlement blip must never wipe verified data.
+    if resolution.get("error") or (enrichment or {}).get("status") == "error":
+        record = dict(prior)
+        record["target_key"] = target_key
+        record["metadata_record_status"] = "active"
+        record["zoominfo_metadata_status"] = "error"
+        record.setdefault("zoominfo_metadata_confidence", "low")
+        record["manual_aliases"] = manual_aliases
+        record["exclude_terms"] = exclude_terms
+        return record
+
+    company_id = resolution.get("company_id")
+    match_basis = resolution.get("match_basis")
+    confidence = _CONFIDENCE_BY_BASIS.get(match_basis, "low")
+
+    firmo: dict = {}
+    if (enrichment or {}).get("status") == "ok":
+        firmo = extract_firmographics(enrichment.get("company", {}))
+
+    # `missing` when we have no id, or enrichment yielded no USABLE firmographics.
+    # extract_firmographics always returns a fully-keyed dict (empty-string
+    # defaults), so we gate on canonical_name — the core identity field — not on
+    # dict truthiness. This prevents a precurated/domain match from being written
+    # `verified` with blank firmographics if a live Enrich returns status=ok but
+    # no fields (e.g. the outputFields list was not requested).
+    if company_id is None or not firmo.get("canonical_name"):
+        status = "missing"
+    elif match_basis in ("precurated", "domain"):
+        status = "verified"
+    else:
+        status = "needs_review"
+
+    identity_terms = build_identity_terms(firmo.get("canonical_name", ""), target_name)
+    industry_terms, unmapped = build_industry_terms(
+        firmo.get("primary_industry", ""), firmo.get("industries", [])
+    )
+
+    return {
+        "target_key": target_key,
+        "metadata_record_status": "active",
+        "zoominfo_company_id": company_id,
+        "canonical_name": firmo.get("canonical_name", ""),
+        "hq_revenue_range": firmo.get("hq_revenue_range", ""),
+        "employee_range": firmo.get("employee_range", ""),
+        "primary_industry": firmo.get("primary_industry", ""),
+        "industries": firmo.get("industries", []),
+        "hq_country": firmo.get("hq_country", ""),
+        "hq_state": firmo.get("hq_state", ""),
+        "company_identity_terms": identity_terms,
+        "industry_relevance_terms": industry_terms,
+        "industry_unmapped": unmapped,
+        "zoominfo_metadata_status": status,
+        "zoominfo_metadata_confidence": confidence,
+        "manual_aliases": manual_aliases,
+        "exclude_terms": exclude_terms,
+    }
+
+
+def merge_targets(prior_targets: dict, proposed_targets: dict,
+                  active_keys: set[str]) -> dict:
+    """Merge freshly-built records over prior ones.
+
+    - Freshly processed targets (in `proposed_targets`) win outright.
+    - Prior records NOT reprocessed: kept. Marked `orphaned` if their key is no
+      longer an active target, else left `active`. Records are never deleted.
+    """
+    merged = dict(proposed_targets)
+    for key, record in (prior_targets or {}).items():
+        if key in proposed_targets:
+            continue
+        record = dict(record)
+        record.setdefault("target_key", key)
+        record["metadata_record_status"] = "active" if key in active_keys else "orphaned"
+        merged[key] = record
+    return merged
