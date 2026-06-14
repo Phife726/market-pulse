@@ -54,3 +54,44 @@ def build_identity_terms(canonical_name: str, target_name: str) -> list[str]:
     _add(de_suffix(canonical_name or ""))
     _add(de_suffix(target_name or ""))
     return terms
+
+
+# Small, checked-in map from ZoomInfo industry labels to curated relevance
+# terms. Only mapped industries emit terms; unmapped ones emit nothing and set
+# industry_unmapped=True so a human can extend this map. Add entries at the end.
+INDUSTRY_TERM_MAP = {
+    "Plastics & Rubber Manufacturing":          ["plastics", "polymer", "resin"],
+    "Chemicals Manufacturing":                  ["chemicals", "specialty chemicals"],
+    "Plastics Material & Resin Manufacturing":  ["resin", "thermoplastics", "compounding"],
+    "Packaging & Containers":                   ["packaging"],
+    "Automotive":                               ["automotive", "mobility"],
+    "Building Materials":                       ["building materials", "construction"],
+    "Paints, Coatings & Adhesives":             ["coatings", "pigments", "masterbatch"],
+    "Textiles & Apparel":                       ["fibers", "textiles"],
+}
+
+
+def build_industry_terms(primary_industry: str, industries: list) -> tuple[list[str], bool]:
+    """Map ZoomInfo industries to curated relevance terms.
+
+    Returns (terms, unmapped). `unmapped` is True only when there was at least
+    one non-empty industry input and NONE of them matched the map.
+    """
+    sources: list[str] = []
+    for value in [primary_industry, *(industries or [])]:
+        value = (value or "").strip()
+        if value and value not in sources:
+            sources.append(value)
+
+    terms: list[str] = []
+    matched_any = False
+    for source in sources:
+        mapped = INDUSTRY_TERM_MAP.get(source)
+        if mapped:
+            matched_any = True
+            for term in mapped:
+                if term not in terms:
+                    terms.append(term)
+
+    unmapped = bool(sources) and not matched_any
+    return terms, unmapped

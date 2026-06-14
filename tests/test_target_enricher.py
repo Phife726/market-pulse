@@ -51,3 +51,30 @@ def test_de_suffix_multiword_remainder_kept_via_token_count():
 
 def test_de_suffix_empty_string_returns_none():
     assert te.de_suffix("") is None
+
+
+def test_industry_terms_mapped_primary():
+    terms, unmapped = te.build_industry_terms("Plastics & Rubber Manufacturing", [])
+    assert terms == ["plastics", "polymer", "resin"]
+    assert unmapped is False
+
+
+def test_industry_terms_merges_primary_and_industries_without_dups():
+    terms, unmapped = te.build_industry_terms(
+        "Plastics & Rubber Manufacturing",
+        ["Chemicals Manufacturing", "Plastics & Rubber Manufacturing"],
+    )
+    assert terms == ["plastics", "polymer", "resin", "chemicals", "specialty chemicals"]
+    assert unmapped is False
+
+
+def test_industry_terms_unmapped_emits_nothing_and_flags():
+    terms, unmapped = te.build_industry_terms("Underwater Basket Weaving", [])
+    assert terms == []
+    assert unmapped is True
+
+
+def test_industry_terms_empty_input_not_flagged_unmapped():
+    terms, unmapped = te.build_industry_terms("", [])
+    assert terms == []
+    assert unmapped is False
