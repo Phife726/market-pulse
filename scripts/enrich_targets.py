@@ -165,6 +165,17 @@ def run(*, targets_path: str, out_path: str, only: Optional[str],
             resolution=resolution, enrichment=enrichment,
         )
         record["zoominfo_metadata_last_refreshed"] = today
+        # Operator pointer: Enrich succeeded but returned no usable firmographics,
+        # so the record degrades to `missing`. This is the live `outputFields`
+        # risk — the Company Enrich body likely needs an outputFields list. (An
+        # auth/entitlement failure is a distinct `error`, not reported here.)
+        if (enrichment or {}).get("status") == "ok" and \
+                record.get("zoominfo_metadata_status") == "missing":
+            logger.warning(
+                "ZoomInfo Enrich returned ok but SPARSE firmographics for %r "
+                "(company_id=%s) — recording 'missing'. Confirm outputFields on "
+                "an entitled live run.", key, resolution.get("company_id"),
+            )
         proposed[key] = record
 
     merged = te.merge_targets(prior_targets, proposed, active_keys)

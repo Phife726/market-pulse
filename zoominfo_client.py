@@ -200,6 +200,15 @@ def _classify_http_error(exc: requests.exceptions.HTTPError, context: str) -> st
             "ZoomInfo auth/scope error (%s) for %s — entitlement is per-endpoint; "
             "this proves nothing about other endpoints", status, context,
         )
+    elif status == 400:
+        # Sanitized request-schema diagnostic: surface ZoomInfo's own error
+        # pointer (e.g. "Invalid field requested") so the next entitled live run
+        # can confirm the Company Search/Enrich body schema. Reads only the
+        # response body, capped — never the request body, headers, or token.
+        logger.error(
+            "ZoomInfo bad request (400) for %s — response: %s",
+            context, _response_snippet(exc.response),
+        )
     elif status == 429:
         logger.warning("ZoomInfo rate limited (429) for %s — skipping", context)
     elif status is not None and 500 <= status < 600:
@@ -288,7 +297,18 @@ def resolve_company(*, domain=None, name=None, hq_country=None, hq_state=None) -
     except ValueError as exc:
         logger.error("ZoomInfo search non-JSON body for %s: %s", context, exc)
         return {"status": "error"}
+    # Keys-only structural diagnostics (no values) so the next entitled live run
+    # can confirm where the company id/firmographics live in the response.
+    logger.info(
+        "ZoomInfo search raw response summary for %s: %s",
+        context, _summarize_response_shape(data),
+    )
     companies = _extract_company_list(data)
+    if companies:
+        logger.info(
+            "ZoomInfo search first company shape for %s: %s",
+            context, _summarize_first_item_shape(companies),
+        )
     for company in companies:
         company_id = _first_company_id(company)
         if company_id is not None:
@@ -309,16 +329,19 @@ def enrich_company(company_id: int) -> dict:
         return {"status": "error"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     # NOTE (verification obligation, REQUIRED before live use): POST + path are
-    # doc-verified, but ZoomInfo's Enrich Companies API selects returned fields
-    # via an `outputFields` list — without it a live, entitled call can return a
-    # company with NONE of the firmographics this utility populates (revenue,
-    # employees, industry, HQ). The exact `outputFields` token names and the
-    # `type`/`companyId` attribute names are part of the unverified request-body
-    # schema, so they are deliberately NOT guessed here. Confirm them against the
-    # ZoomInfo API reference / "Try It!" explorer and add `outputFields` before
-    # the relevance gate consumes the firmographics. Until then, target_enricher
-    # gates `verified` on a populated canonical_name, so a sparse Enrich response
-    # is recorded as `missing` rather than a misleading `verified`.
+    # doc-verified, and ZoomInfo's docs confirm the Enrich Companies API selects
+    # returned fields via a REQUIRED `outputFields` list — without it a live,
+    # entitled call can return a company with NONE of the firmographics this
+    # utility populates (revenue, employees, industry, HQ). The exact
+    # `outputFields` token spellings are account-specific and only enumerable via
+    # the authenticated Lookup Enrich endpoint (filter[entity]=company &
+    # filter[fieldType]=output) / "Try It!" explorer, so they are deliberately
+    # NOT guessed here. This PR adds the keys-only structural log + sanitized 400
+    # diagnostic below so an entitled live smoke can capture the exact tokens;
+    # the follow-up PR adds `outputFields` with the verified spellings. Until
+    # then, target_enricher gates `verified` on a populated canonical_name, so a
+    # sparse Enrich response is recorded as `missing`, never a misleading
+    # `verified`.
     body = {"data": {"type": "CompanyEnrich",
                      "attributes": {"companyId": company_id}}}
     context = f"enrich(company_id={company_id})"
@@ -337,9 +360,20 @@ def enrich_company(company_id: int) -> dict:
     except ValueError as exc:
         logger.error("ZoomInfo enrich non-JSON body for %s: %s", context, exc)
         return {"status": "error"}
+    # Keys-only structural diagnostics (no values) so the next entitled live run
+    # can confirm which firmographic field tokens come back (and whether an
+    # `outputFields` request body is needed to populate them at all).
+    logger.info(
+        "ZoomInfo enrich raw response summary for %s: %s",
+        context, _summarize_response_shape(data),
+    )
     companies = _extract_company_list(data)
     if not companies:
         return {"status": "empty"}
+    logger.info(
+        "ZoomInfo enrich first company shape for %s: %s",
+        context, _summarize_first_item_shape(companies),
+    )
     company = companies[0]
     attrs = company.get("attributes")
     return {"status": "ok", "company": attrs if isinstance(attrs, dict) else company}
