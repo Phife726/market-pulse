@@ -223,7 +223,7 @@ def build_proposed_metadata(*, target_key: str, target_name: str,
 
 
 def merge_targets(prior_targets: dict, proposed_targets: dict,
-                  active_keys: set) -> dict:
+                  active_keys: set[str]) -> dict:
     """Merge freshly-built records over prior ones.
 
     - Freshly processed targets (in `proposed_targets`) win outright.

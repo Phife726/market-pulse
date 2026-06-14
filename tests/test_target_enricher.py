@@ -293,3 +293,21 @@ def test_merge_reappearing_target_flips_back_to_active():
     proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
     merged = te.merge_targets(prior, proposed, active_keys={"Avient"})
     assert merged["Avient"]["metadata_record_status"] == "active"
+
+
+def test_merge_sets_target_key_when_prior_record_lacks_it():
+    # Prior record missing target_key -> setdefault writes it from the map key.
+    prior = {"Old Co": {"zoominfo_company_id": 7}}
+    proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
+    merged = te.merge_targets(prior, proposed, active_keys={"Avient"})
+    assert merged["Old Co"]["target_key"] == "Old Co"
+    assert merged["Old Co"]["metadata_record_status"] == "orphaned"
+
+
+def test_merge_already_orphaned_stays_orphaned():
+    prior = {"Gone Co": {"target_key": "Gone Co", "zoominfo_company_id": 9,
+                         "metadata_record_status": "orphaned"}}
+    proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
+    merged = te.merge_targets(prior, proposed, active_keys={"Avient"})
+    assert merged["Gone Co"]["metadata_record_status"] == "orphaned"
+    assert merged["Gone Co"]["zoominfo_company_id"] == 9
