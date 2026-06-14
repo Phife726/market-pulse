@@ -300,6 +300,36 @@ def _filter_by_published_date(candidates: list[dict], cutoff: Optional[date]) ->
     return kept
 
 
+def _summarize_response_shape(data: object) -> str:
+    """Return a structural summary of a parsed ZoomInfo 200 response.
+
+    Surfaces only shapes, types, counts, and top-level key *names* — never
+    values, article bodies, URLs, tokens, headers, or the request body. Lets
+    the smoke distinguish 'ZoomInfo returned empty data' from 'the parser is
+    not looking in the right response path'.
+    """
+    if isinstance(data, list):
+        return (
+            f"status=200 top_level_keys=[] data_type=list "
+            f"data_count={len(data)} included_count=n/a"
+        )
+    if not isinstance(data, dict):
+        return (
+            f"status=200 top_level_keys=[] data_type={type(data).__name__} "
+            f"data_count=n/a included_count=n/a"
+        )
+    top_level_keys = sorted(data.keys())
+    payload_data = data.get("data")
+    data_count = len(payload_data) if isinstance(payload_data, list) else "n/a"
+    included = data.get("included")
+    included_count = len(included) if isinstance(included, list) else "n/a"
+    return (
+        f"status=200 top_level_keys={top_level_keys} "
+        f"data_type={type(payload_data).__name__} "
+        f"data_count={data_count} included_count={included_count}"
+    )
+
+
 def _response_snippet(response: object, limit: int = 500) -> str:
     """Return a single-line, length-capped snippet of a response body for
     diagnostics. Reads only the response body — never request headers/body —
@@ -378,6 +408,13 @@ def discover_company_news(
             "ZoomInfo returned non-JSON body for company %s: %s", zoominfo_company_id, exc
         )
         return []
+
+    # Diagnostic: structural summary only (no values) so the smoke can tell an
+    # empty result from a parser-path mismatch.
+    logger.info(
+        "ZoomInfo raw response summary for company %s: %s",
+        zoominfo_company_id, _summarize_response_shape(data),
+    )
 
     candidates: list[dict] = []
     for item in _extract_news_items(data):

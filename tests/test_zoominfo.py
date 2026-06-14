@@ -310,6 +310,57 @@ def test_discover_company_news_does_not_log_token(monkeypatch, caplog):
 
 
 # ---------------------------------------------------------------------------
+# Response-shape diagnostics (200 path)
+# ---------------------------------------------------------------------------
+
+def test_summarize_response_shape_jsonapi_with_included():
+    data = {"data": [{"id": "1"}, {"id": "2"}], "included": [{"x": 1}], "meta": {}}
+    s = zoominfo_client._summarize_response_shape(data)
+    assert "status=200" in s
+    assert "data_type=list" in s
+    assert "data_count=2" in s
+    assert "included_count=1" in s
+    # Top-level KEY NAMES are safe to surface (they are JSON:API members).
+    assert "data" in s and "included" in s and "meta" in s
+
+
+def test_summarize_response_shape_no_included():
+    s = zoominfo_client._summarize_response_shape({"data": []})
+    assert "data_count=0" in s
+    assert "included_count=n/a" in s
+
+
+def test_summarize_response_shape_top_level_list():
+    s = zoominfo_client._summarize_response_shape([{"a": 1}, {"b": 2}, {"c": 3}])
+    assert "top_level_keys=[]" in s
+    assert "data_type=list" in s
+    assert "data_count=3" in s
+
+
+def test_summarize_response_shape_omits_values():
+    """Never surface article URLs, titles, or other values — only shapes."""
+    data = {"data": [{"url": "https://secret.example.com/article", "title": "Secret Headline"}]}
+    s = zoominfo_client._summarize_response_shape(data)
+    assert "secret.example.com" not in s
+    assert "Secret Headline" not in s
+
+
+def test_200_logs_response_shape_summary(monkeypatch, caplog):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    payload = {"data": [{"title": "t", "url": "https://n/x", "publishedDate": "2026-06-13"}]}
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)), \
+         caplog.at_level("INFO"):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=5670215, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert "ZoomInfo raw response summary for company 5670215" in caplog.text
+    assert "status=200" in caplog.text
+    assert "top_level_keys=" in caplog.text
+    # The diagnostic must not leak article values.
+    assert "https://n/x" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # Published endpoint + request shape (Codex P2 finding)
 # ---------------------------------------------------------------------------
 
