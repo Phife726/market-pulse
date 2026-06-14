@@ -38,6 +38,8 @@ competitors:
       active: true
     - name: Avient
       active: true
+      zoominfo_company_id: 357374413
+      zoominfo_news: true
     - name: Standridge Color
       active: true
     - name: Ampacet
@@ -52,6 +54,8 @@ competitors:
       active: true
     - name: RTP Company
       active: true
+      zoominfo_company_id: 46383930
+      zoominfo_news: true
     - name: Penn Color
       active: true
     - name: Techmer PM
@@ -100,6 +104,8 @@ customers:
       active: true
     - name: Plastipak
       active: true
+      zoominfo_company_id: 95404609
+      zoominfo_news: true
     - name: Polymer Process Development
       active: true
     - name: TruNorth Composites
@@ -138,6 +144,8 @@ customers:
       active: true
     - name: SABIC
       active: true
+      zoominfo_company_id: 98664698
+      zoominfo_news: true
     - name: Farathane
       active: true
     - name: 3M
@@ -184,6 +192,8 @@ suppliers:
       active: true
     - name: BASF
       active: true
+      zoominfo_company_id: 5670215
+      zoominfo_news: true
     - name: Cal-Chem
       active: true
     - name: Channel Prime Alliance

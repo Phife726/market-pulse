@@ -55,6 +55,14 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
+          ZOOMINFO_CLIENT_ID: ${{ secrets.ZOOMINFO_CLIENT_ID }}
+          ZOOMINFO_CLIENT_SECRET: ${{ secrets.ZOOMINFO_CLIENT_SECRET }}
+          ZOOMINFO_TOKEN_URL: ${{ vars.ZOOMINFO_TOKEN_URL }}
+          ZOOMINFO_BEARER_TOKEN: ${{ secrets.ZOOMINFO_BEARER_TOKEN }}
+          ZOOMINFO_NEWS_ENABLED: ${{ vars.ZOOMINFO_NEWS_ENABLED }}
+          ZOOMINFO_NEWS_LOOKBACK_DAYS: ${{ vars.ZOOMINFO_NEWS_LOOKBACK_DAYS }}
+          ZOOMINFO_NEWS_PER_COMPANY: ${{ vars.ZOOMINFO_NEWS_PER_COMPANY }}
+          STORE_DISCOVERY_METADATA: ${{ vars.STORE_DISCOVERY_METADATA }}
         run: python ingestion_engine.py
 
       - name: Run delivery_engine.py

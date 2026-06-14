@@ -11,6 +11,7 @@ from typing import Optional
 
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
+import zoominfo_client
 
 import requests
 import yaml
@@ -232,6 +233,9 @@ def load_targets(config_path: str) -> list[dict]:
             for entity in group_cfg.get("entities", []):
                 if not entity.get("active", False):
                     continue
+                # Optional ZoomInfo enrichment: news defaults on when an id is
+                # mapped, off when no id exists. Concept groups never get these.
+                zoominfo_company_id = entity.get("zoominfo_company_id")
                 targets.append({
                     "name": entity["name"],
                     "category": group_name,
@@ -244,6 +248,8 @@ def load_targets(config_path: str) -> list[dict]:
                     "results_per_entity": results_per_entity,
                     "lookback_hours": lookback_hours,
                     "min_article_length": min_article_length,
+                    "zoominfo_company_id": zoominfo_company_id,
+                    "zoominfo_news": entity.get("zoominfo_news", True),
                 })
 
         elif mode == "concept":
@@ -292,6 +298,150 @@ def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> l
     ]
     logger.info("Discovered %d URL(s) for query '%s'", len(results), query[:80])
     return results
+
+
+_TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "on"})
+
+ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT = 2
+ZOOMINFO_NEWS_PER_COMPANY_DEFAULT = 5
+
+
+def _zoominfo_news_enabled() -> bool:
+    """True when ZOOMINFO_NEWS_ENABLED is a recognised truthy value."""
+    return os.environ.get("ZOOMINFO_NEWS_ENABLED", "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer env var, falling back to *default* (with a warning) on
+    missing or non-integer values."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r — using default %d", name, raw, default)
+        return default
+
+
+def _store_discovery_metadata() -> bool:
+    """True when discovery-metadata columns should be written to Supabase.
+
+    Default OFF so production upserts keep working until migration 003 (the
+    discovery_source / external_company_id / published_at / source_metadata
+    columns) has been applied. Flip STORE_DISCOVERY_METADATA on only after the
+    migration is live."""
+    return os.environ.get("STORE_DISCOVERY_METADATA", "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _discovery_metadata(candidate: dict) -> dict:
+    """Build the optional discovery-provenance fields for a stored row."""
+    provider = candidate.get("provider", "unknown")
+    return {
+        "discovery_source": provider,
+        "external_company_id": str(candidate.get("zoominfo_company_id") or ""),
+        "published_at": candidate.get("published_at") or None,
+        "source_metadata": {
+            "provider": provider,
+            "source_publication": candidate.get("source_publication", ""),
+            "description": candidate.get("description", ""),
+            "categories": candidate.get("categories", []),
+        },
+    }
+
+
+def _new_provider_yield() -> dict:
+    return {
+        "discovered": 0, "scraped": 0, "stored": 0,
+        "discards": 0, "scrape_failed": 0, "duplicates": 0,
+    }
+
+
+def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
+    """Emit one yield line per discovery provider seen this run."""
+    for provider in sorted(provider_yield):
+        y = provider_yield[provider]
+        logger.info(
+            "Provider yield — %s discovered=%d scraped=%d stored=%d "
+            "discards=%d scrape_failed=%d duplicates=%d",
+            provider, y["discovered"], y["scraped"], y["stored"],
+            y["discards"], y["scrape_failed"], y["duplicates"],
+        )
+
+
+def _serper_candidate(raw_url: str, title: str) -> dict:
+    """Wrap a Serper (url, title) pair in the provider-neutral candidate shape."""
+    return {
+        "url": raw_url,
+        "title": title,
+        "provider": "serper",
+        "source_publication": "",
+        "published_at": "",
+        "description": "",
+        "categories": [],
+        "zoominfo_company_id": None,
+        "raw": {},
+    }
+
+
+def discover_serper_candidates(target: dict) -> list[dict]:
+    """Discover Serper news URLs for a target as provider-neutral candidates."""
+    raw_results = discover_urls(
+        target["query"], target["lookback_hours"], target["results_per_entity"]
+    )
+    return [_serper_candidate(url, title) for url, title in raw_results]
+
+
+def _zoominfo_target_eligible(target: dict) -> bool:
+    """True when ZoomInfo discovery should be attempted for this target:
+    the feature flag is on, a company id is mapped, and zoominfo_news is not
+    disabled. Concept-mode targets carry no company id, so they are ineligible.
+    """
+    return (
+        _zoominfo_news_enabled()
+        and bool(target.get("zoominfo_company_id"))
+        and bool(target.get("zoominfo_news", True))
+    )
+
+
+def discover_zoominfo_candidates(target: dict) -> list[dict]:
+    """Discover ZoomInfo company-news candidates for an entity target.
+
+    Returns [] (without touching ZoomInfo) when the feature flag is off, the
+    target has no mapped company id, or zoominfo_news is disabled for it.
+    Concept-mode targets carry no zoominfo_company_id, so they short-circuit
+    here and remain Serper-only.
+    """
+    if not _zoominfo_target_eligible(target):
+        return []
+    company_id = target["zoominfo_company_id"]
+
+    lookback_days = _env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT)
+    per_company = _env_int("ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT)
+    start_date = (datetime.utcnow() - timedelta(days=lookback_days)).date().isoformat()
+
+    return zoominfo_client.discover_company_news(
+        zoominfo_company_id=company_id,
+        publishing_date_start=start_date,
+        page_size=per_company,
+    )
+
+
+def discover_candidates(target: dict) -> list[dict]:
+    """Merge Serper and ZoomInfo discovery for a target.
+
+    Each provider is isolated: a failure in one never suppresses the other.
+    """
+    candidates: list[dict] = []
+    try:
+        candidates.extend(discover_serper_candidates(target))
+    except Exception as exc:
+        logger.error("Serper discovery failed for target '%s': %s", target.get("name"), exc)
+    try:
+        candidates.extend(discover_zoominfo_candidates(target))
+    except Exception as exc:
+        logger.error("ZoomInfo discovery failed for target '%s': %s", target.get("name"), exc)
+    return candidates
 
 
 def normalize_url(url: str) -> str:
@@ -771,6 +921,10 @@ def execute_pipeline() -> None:
     }
     stored_articles_buffer: list[dict] = []
     suppression_ledger = SuppressionLedger.for_ingestion()
+    provider_yield: dict[str, dict] = {}
+
+    def _bump(provider: str, key: str) -> None:
+        provider_yield.setdefault(provider, _new_provider_yield())[key] += 1
 
     for target in targets:
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
@@ -782,20 +936,32 @@ def execute_pipeline() -> None:
 
         entity_name = target["name"]
         category = target["category"]
-        lookback_hours = target["lookback_hours"]
-        results_per_entity = target["results_per_entity"]
         min_article_length = target["min_article_length"]
 
-        raw_results = discover_urls(target["query"], lookback_hours, results_per_entity)
-        stats["urls_discovered"] += len(raw_results)
+        candidates = discover_candidates(target)
+        stats["urls_discovered"] += len(candidates)
+        for candidate in candidates:
+            _bump(candidate.get("provider", "unknown"), "discovered")
 
-        for raw_url, serper_title in raw_results:
+        # Surface a yield line for every attempted provider, even at zero
+        # discovery, so the smoke clearly shows whether ZoomInfo ran. Serper is
+        # always attempted; ZoomInfo only when the target is eligible.
+        provider_yield.setdefault("serper", _new_provider_yield())
+        if _zoominfo_target_eligible(target):
+            provider_yield.setdefault("zoominfo", _new_provider_yield())
+
+        for candidate in candidates:
+            raw_url = candidate["url"]
+            candidate_title = candidate.get("title", "")
+            provider = candidate.get("provider", "unknown")
+
             if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
                 logger.warning(
                     "Pipeline deadline (%ds) reached mid-batch — stopping early.",
                     PIPELINE_DEADLINE_SECONDS,
                 )
                 _log_stats(stats, suppression_ledger.breakdown)
+                _log_provider_yield(provider_yield)
                 generate_macro_summary(
                     stored_articles_buffer,
                     screened_count=stats["urls_discovered"],
@@ -806,6 +972,7 @@ def execute_pipeline() -> None:
             if scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
                 _log_stats(stats, suppression_ledger.breakdown)
+                _log_provider_yield(provider_yield)
                 generate_macro_summary(
                     stored_articles_buffer,
                     screened_count=stats["urls_discovered"],
@@ -817,30 +984,34 @@ def execute_pipeline() -> None:
             url_hash = compute_url_hash(normalized)
 
             if url_already_processed(url_hash):
-                logger.info("Duplicate — skipping: %s", normalized)
+                logger.info("Duplicate — skipping (%s): %s", provider, normalized)
+                _bump(provider, "duplicates")
                 suppression_ledger = suppression_ledger.record(
-                    "duplicate_url", url=raw_url, title=serper_title,
+                    "duplicate_url", url=raw_url, title=candidate_title,
                 )
                 continue
 
-            is_dup, matched, score = is_semantic_duplicate(serper_title, seen_headlines)
+            is_dup, matched, score = is_semantic_duplicate(candidate_title, seen_headlines)
             if is_dup:
                 logger.warning(
-                    "SEMANTIC_DUPLICATE — skipped: '%s' ~ '%s' | score: %d",
-                    serper_title, matched, score,
+                    "SEMANTIC_DUPLICATE — skipped (%s): '%s' ~ '%s' | score: %d",
+                    provider, candidate_title, matched, score,
                 )
+                _bump(provider, "duplicates")
                 suppression_ledger = suppression_ledger.record(
-                    "semantic_duplicate", url=raw_url, title=serper_title,
+                    "semantic_duplicate", url=raw_url, title=candidate_title,
                 )
                 continue
 
             scrapes_attempted += 1
             stats["scrapes_attempted"] += 1
+            _bump(provider, "scraped")
 
             article_text = scrape_article(raw_url, min_article_length)
             if article_text is None:
+                _bump(provider, "scrape_failed")
                 suppression_ledger = suppression_ledger.record(
-                    "scrape_failed", url=raw_url, title=serper_title,
+                    "scrape_failed", url=raw_url, title=candidate_title,
                 )
                 time.sleep(1.5)
                 continue
@@ -852,9 +1023,10 @@ def execute_pipeline() -> None:
                 continue
 
             if insight.get("americhem_impact") == "DISCARD":
-                logger.info("DISCARD — false positive: %s", normalized)
+                logger.info("DISCARD — false positive (%s): %s", provider, normalized)
+                _bump(provider, "discards")
                 suppression_ledger = suppression_ledger.record(
-                    "llm_discard", url=raw_url, title=serper_title,
+                    "llm_discard", url=raw_url, title=candidate_title,
                 )
                 time.sleep(1.5)
                 continue
@@ -878,6 +1050,10 @@ def execute_pipeline() -> None:
                 "commercial_segment": insight.get("commercial_segment", "Enterprise / Cross-Segment"),
                 "signal_type": insight.get("signal_type", "Other"),
             }
+            # Discovery provenance is gated behind STORE_DISCOVERY_METADATA so
+            # production upserts keep working until migration 003 is applied.
+            if _store_discovery_metadata():
+                payload.update(_discovery_metadata(candidate))
 
             try:
                 store_insight(payload)
@@ -886,18 +1062,21 @@ def execute_pipeline() -> None:
                 stats["errors"] += 1
             else:
                 logger.info(
-                    "Stored [impact=%d, sentiment=%s] %s",
+                    "Stored [provider=%s, impact=%d, sentiment=%s] %s",
+                    provider,
                     insight.get("americhem_impact_score", 5),
                     insight.get("sentiment_tag", "Neutral"),
                     insight["headline"],
                 )
                 stats["insights_stored"] += 1
+                _bump(provider, "stored")
                 stored_articles_buffer.append(payload)
                 seen_headlines.add(insight["headline"])
 
             time.sleep(1.5)
 
     _log_stats(stats, suppression_ledger.breakdown)
+    _log_provider_yield(provider_yield)
     generate_macro_summary(
         stored_articles_buffer,
         screened_count=stats["urls_discovered"],
