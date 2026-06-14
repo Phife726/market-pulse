@@ -228,3 +228,41 @@ def test_curated_fields_preserved_on_success():
     )
     assert rec["manual_aliases"] == ["RTP"]
     assert rec["exclude_terms"] == ["return to player"]
+
+
+def test_error_path_sets_record_status_active():
+    # Error path must keep metadata_record_status="active" so the row isn't
+    # orphaned, while marking the ZoomInfo fetch as failed.
+    prior = {"target_key": "Avient", "zoominfo_company_id": 357374413,
+             "canonical_name": "Avient Corporation",
+             "zoominfo_metadata_status": "verified", "zoominfo_metadata_confidence": "high"}
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=prior,
+        resolution={"error": True}, enrichment=None,
+    )
+    assert rec["metadata_record_status"] == "active"
+    assert rec["zoominfo_metadata_status"] == "error"
+
+
+def test_name_hq_with_empty_enrichment_is_missing_but_medium():
+    # company_id present but firmo empty → "missing"; match_basis drives
+    # confidence independently, so name_hq still yields "medium".
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 1, "match_basis": "name_hq"},
+        enrichment={"status": "empty"},
+    )
+    assert rec["zoominfo_metadata_status"] == "missing"
+    assert rec["zoominfo_metadata_confidence"] == "medium"
+
+
+def test_precurated_with_none_enrichment_is_missing_but_high():
+    # None enrichment leaves firmo empty → "missing", but precurated match_basis
+    # still sets confidence to "high" regardless of enrichment outcome.
+    rec = te.build_proposed_metadata(
+        target_key="Avient", target_name="Avient", prior_record=None,
+        resolution={"company_id": 5, "match_basis": "precurated"},
+        enrichment=None,
+    )
+    assert rec["zoominfo_metadata_status"] == "missing"
+    assert rec["zoominfo_metadata_confidence"] == "high"
