@@ -4,30 +4,44 @@ Supplemental article-discovery provider for the market-pulse ingestion
 pipeline. Company/news enrichment ONLY — this module never calls any
 ZoomInfo Contact API and never returns contact data.
 
-Auth is a static bearer token read from ``ZOOMINFO_BEARER_TOKEN``. The token
-is never logged. Every failure mode (missing token, auth error, rate limit,
-server error, transport error, malformed body) is swallowed: the function
-logs and returns ``[]`` so a ZoomInfo outage degrades discovery instead of
-crashing the cron.
+Auth (in priority order):
+  1. OAuth Client Credentials (preferred): ``ZOOMINFO_CLIENT_ID`` +
+     ``ZOOMINFO_CLIENT_SECRET`` exchange for a short-lived access token at
+     ``ZOOMINFO_TOKEN_URL`` (HTTP Basic auth, ``grant_type=client_credentials``).
+     The access token is cached in-process until shortly before it expires.
+  2. Static bearer token (local/dev fallback): ``ZOOMINFO_BEARER_TOKEN``.
+  3. None configured -> warn and return ``[]``.
 
-The News Enrichment endpoint URL defaults to ZoomInfo's published path but
-can be overridden with ``ZOOMINFO_NEWS_ENDPOINT`` so operators can correct it
-without a code change.
+Neither the client secret nor any access/bearer token is ever logged. Every
+failure mode (missing creds, auth error, rate limit, server error, transport
+error, malformed body) is swallowed: the call logs and returns ``[]`` so a
+ZoomInfo outage degrades discovery instead of crashing the cron.
+
+The News Enrichment and OAuth token endpoint URLs default to ZoomInfo's
+published paths but can be overridden with ``ZOOMINFO_NEWS_ENDPOINT`` and
+``ZOOMINFO_TOKEN_URL`` so operators can correct them without a code change.
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Optional
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-# Override-able so the endpoint can be corrected without a code change.
-# Published ZoomInfo GTM Enrich News endpoint.
+# Override-able so the endpoints can be corrected without a code change.
+# Published ZoomInfo GTM Enrich News + OAuth token endpoints.
 _DEFAULT_NEWS_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/news/enrich"
+_DEFAULT_TOKEN_URL = "https://api.zoominfo.com/gtm/oauth/v1/token"
 _REQUEST_TIMEOUT = 15  # seconds
+_TOKEN_SAFETY_MARGIN = 60  # seconds shaved off expires_in before re-auth
+
+# In-process OAuth access-token cache: {"access_token": str, "expires_at": float}
+# expires_at is a time.monotonic() deadline. Reset via _reset_token_cache().
+_TOKEN_CACHE: dict = {}
 
 # News categories/scopes requested from ZoomInfo.
 NEWS_SCOPES: list[str] = [
@@ -60,6 +74,101 @@ _NEWS_LIST_KEYS = ("news", "results", "result", "data", "articles", "items")
 
 def _endpoint() -> str:
     return os.environ.get("ZOOMINFO_NEWS_ENDPOINT", "").strip() or _DEFAULT_NEWS_ENDPOINT
+
+
+def _token_url() -> str:
+    return os.environ.get("ZOOMINFO_TOKEN_URL", "").strip() or _DEFAULT_TOKEN_URL
+
+
+def _reset_token_cache() -> None:
+    """Drop the cached OAuth access token. Test-only/dev helper."""
+    _TOKEN_CACHE.clear()
+
+
+def _request_oauth_token(client_id: str, client_secret: str) -> Optional[str]:
+    """Exchange client credentials for an access token, caching it in-process.
+
+    Returns the access token, or None on any failure (logged). Neither the
+    client secret nor the access token is ever logged.
+    """
+    now = time.monotonic()
+    cached = _TOKEN_CACHE.get("access_token")
+    if cached and now < _TOKEN_CACHE.get("expires_at", 0.0):
+        return cached
+
+    try:
+        response = requests.post(
+            _token_url(),
+            auth=(client_id, client_secret),
+            data={"grant_type": "client_credentials"},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            timeout=_REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(exc.response, "status_code", None)
+        if status in (401, 403):
+            logger.error(
+                "ZoomInfo OAuth auth error (%s) — check ZOOMINFO_CLIENT_ID/"
+                "ZOOMINFO_CLIENT_SECRET and scopes (api:data:company, api:data:news)",
+                status,
+            )
+        elif status == 429:
+            logger.warning("ZoomInfo OAuth rate limited (429) — skipping")
+        elif status is not None and 500 <= status < 600:
+            logger.warning("ZoomInfo OAuth server error (%s) — skipping", status)
+        else:
+            logger.error("ZoomInfo OAuth HTTP error (%s)", status)
+        return None
+    except requests.exceptions.RequestException as exc:
+        logger.error("ZoomInfo OAuth token request failed: %s", exc)
+        return None
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        logger.error("ZoomInfo OAuth returned a non-JSON token response: %s", exc)
+        return None
+
+    token = data.get("access_token")
+    if not isinstance(token, str) or not token:
+        logger.error("ZoomInfo OAuth token response missing access_token")
+        return None
+
+    expires_in = data.get("expires_in")
+    if isinstance(expires_in, (int, float)) and expires_in > 0:
+        _TOKEN_CACHE["access_token"] = token
+        _TOKEN_CACHE["expires_at"] = now + max(0.0, float(expires_in) - _TOKEN_SAFETY_MARGIN)
+    else:
+        # No usable expiry — don't cache; re-auth on the next call.
+        _TOKEN_CACHE.clear()
+    return token
+
+
+def _resolve_access_token() -> Optional[str]:
+    """Resolve a bearer value for the news request.
+
+    Prefers OAuth client credentials; falls back to a static bearer token for
+    local/dev. Returns None (with a warning) when nothing is configured.
+    """
+    client_id = os.environ.get("ZOOMINFO_CLIENT_ID")
+    client_secret = os.environ.get("ZOOMINFO_CLIENT_SECRET")
+    if client_id and client_secret:
+        return _request_oauth_token(client_id, client_secret)
+
+    bearer = os.environ.get("ZOOMINFO_BEARER_TOKEN")
+    if bearer:
+        return bearer
+
+    logger.warning(
+        "No ZoomInfo credentials configured — set ZOOMINFO_CLIENT_ID/"
+        "ZOOMINFO_CLIENT_SECRET (preferred) or ZOOMINFO_BEARER_TOKEN; "
+        "skipping ZoomInfo news"
+    )
+    return None
 
 
 def _first_str(item: dict, keys: tuple[str, ...]) -> str:
@@ -166,12 +275,8 @@ def discover_company_news(
     Returns a list of normalised candidate dicts (possibly empty). Never
     raises: every failure is logged and yields ``[]``.
     """
-    token = os.environ.get("ZOOMINFO_BEARER_TOKEN")
+    token = _resolve_access_token()
     if not token:
-        logger.warning(
-            "ZOOMINFO_BEARER_TOKEN not set — skipping ZoomInfo news for company %s",
-            zoominfo_company_id,
-        )
         return []
 
     headers = {
@@ -194,7 +299,7 @@ def discover_company_news(
         status = getattr(exc.response, "status_code", None)
         if status in (401, 403):
             logger.error(
-                "ZoomInfo auth error (%s) for company %s — check ZOOMINFO_BEARER_TOKEN",
+                "ZoomInfo auth error (%s) for company %s — check ZoomInfo credentials and scopes",
                 status, zoominfo_company_id,
             )
         elif status == 429:

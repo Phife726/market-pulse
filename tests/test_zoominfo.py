@@ -68,6 +68,56 @@ def _post_mock(json_payload: dict, status_code: int = 200) -> MagicMock:
     return resp
 
 
+@pytest.fixture(autouse=True)
+def _reset_zoominfo_token_cache():
+    """Keep the in-process OAuth token cache from leaking across tests."""
+    zoominfo_client._reset_token_cache()
+    yield
+    zoominfo_client._reset_token_cache()
+
+
+def _token_resp(access_token: str = "oauth-access-token", expires_in=3600) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {
+        "access_token": access_token,
+        "expires_in": expires_in,
+        "token_type": "Bearer",
+        "scope": "api:data:company api:data:news",
+    }
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+def _error_resp(status: int) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status
+    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+    return resp
+
+
+def _routed_post(token_resp: MagicMock, news_resp: MagicMock):
+    """Build a requests.post side_effect that routes token vs news calls and
+    records how each was invoked."""
+    record = {"token_calls": 0, "news_calls": 0, "token_kwargs": None, "news_kwargs": None}
+
+    def _post(url, *args, **kwargs):
+        if "oauth" in url or url.rstrip("/").endswith("token"):
+            record["token_calls"] += 1
+            record["token_kwargs"] = kwargs
+            return token_resp
+        record["news_calls"] += 1
+        record["news_kwargs"] = kwargs
+        return news_resp
+
+    return _post, record
+
+
+def _set_client_creds(monkeypatch, client_id="cid-123", secret="secret-xyz") -> None:
+    monkeypatch.setenv("ZOOMINFO_CLIENT_ID", client_id)
+    monkeypatch.setenv("ZOOMINFO_CLIENT_SECRET", secret)
+
+
 # ===========================================================================
 # load_targets() — ZoomInfo field extension
 # ===========================================================================
@@ -176,7 +226,9 @@ def test_env_int_invalid_falls_back_to_default(monkeypatch, caplog):
 # ===========================================================================
 
 def test_discover_company_news_missing_token_returns_empty(monkeypatch):
-    """No bearer token -> log warning, return [], never raise."""
+    """No credentials at all -> log warning, return [], never raise."""
+    monkeypatch.delenv("ZOOMINFO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ZOOMINFO_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("ZOOMINFO_BEARER_TOKEN", raising=False)
     with patch("zoominfo_client.requests.post") as mock_post:
         result = zoominfo_client.discover_company_news(
@@ -362,6 +414,158 @@ def test_discover_company_news_request_exception_returns_empty(monkeypatch):
             page_size=5,
         )
     assert result == []
+
+
+# ===========================================================================
+# OAuth Client Credentials auth (preferred path)
+# ===========================================================================
+
+def test_token_url_default_and_override(monkeypatch):
+    monkeypatch.delenv("ZOOMINFO_TOKEN_URL", raising=False)
+    assert zoominfo_client._token_url() == "https://api.zoominfo.com/gtm/oauth/v1/token"
+    monkeypatch.setenv("ZOOMINFO_TOKEN_URL", "https://example.test/oauth/token")
+    assert zoominfo_client._token_url() == "https://example.test/oauth/token"
+
+
+def test_client_credentials_preferred_over_bearer(monkeypatch):
+    """When both are configured, OAuth wins and the bearer token is ignored."""
+    _set_client_creds(monkeypatch)
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "static-bearer")
+    post, rec = _routed_post(_token_resp(access_token="oauth-token"), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert rec["token_calls"] == 1
+    assert rec["news_kwargs"]["headers"]["Authorization"] == "Bearer oauth-token"
+
+
+def test_token_request_uses_http_basic_and_form_grant(monkeypatch):
+    _set_client_creds(monkeypatch, "cid-123", "secret-xyz")
+    post, rec = _routed_post(_token_resp(), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    tk = rec["token_kwargs"]
+    assert tk["auth"] == ("cid-123", "secret-xyz")
+    assert tk["data"] == {"grant_type": "client_credentials"}
+    assert tk["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+    assert tk["headers"]["Accept"] == "application/json"
+
+
+def test_access_token_used_for_news_request(monkeypatch):
+    _set_client_creds(monkeypatch)
+    payload = {"data": {"news": [{"title": "t", "url": "https://news.example.com/x"}]}}
+    post, rec = _routed_post(_token_resp(access_token="abc123"), _post_mock(payload))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert rec["news_kwargs"]["headers"]["Authorization"] == "Bearer abc123"
+    assert len(result) == 1
+
+
+def test_token_cached_across_calls(monkeypatch):
+    """One token call should cover multiple company lookups in a process."""
+    _set_client_creds(monkeypatch)
+    post, rec = _routed_post(_token_resp(expires_in=3600), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=2, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert rec["token_calls"] == 1
+    assert rec["news_calls"] == 2
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_token_auth_failure_degrades(monkeypatch, status):
+    _set_client_creds(monkeypatch)
+    post, rec = _routed_post(_error_resp(status), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+    assert rec["news_calls"] == 0  # never reached the news endpoint
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_token_retryable_failure_degrades(monkeypatch, status):
+    _set_client_creds(monkeypatch)
+    post, rec = _routed_post(_error_resp(status), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+    assert rec["news_calls"] == 0
+
+
+def test_token_transport_error_degrades(monkeypatch):
+    _set_client_creds(monkeypatch)
+    with patch("zoominfo_client.requests.post",
+               side_effect=requests.exceptions.Timeout("slow")):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+
+
+def test_malformed_token_response_degrades(monkeypatch):
+    _set_client_creds(monkeypatch)
+    bad = MagicMock()
+    bad.status_code = 200
+    bad.raise_for_status = MagicMock()
+    bad.json.return_value = {"no_access_token": "here"}
+    post, rec = _routed_post(bad, _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+    assert rec["news_calls"] == 0
+
+
+def test_client_secret_and_access_token_not_logged(monkeypatch, caplog):
+    _set_client_creds(monkeypatch, "cid-123", "super-secret-value")
+    post, _ = _routed_post(_token_resp(access_token="tok-do-not-log"), _post_mock({"data": {"news": []}}))
+    with patch("zoominfo_client.requests.post", side_effect=post), caplog.at_level("DEBUG"):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert "super-secret-value" not in caplog.text
+    assert "tok-do-not-log" not in caplog.text
+
+
+def test_bearer_fallback_when_no_client_creds(monkeypatch):
+    monkeypatch.delenv("ZOOMINFO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ZOOMINFO_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "static-bearer")
+    payload = {"data": {"news": [{"title": "t", "url": "https://news.example.com/x"}]}}
+    post, rec = _routed_post(_token_resp(), _post_mock(payload))
+    with patch("zoominfo_client.requests.post", side_effect=post):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert rec["token_calls"] == 0  # no OAuth round-trip
+    assert rec["news_kwargs"]["headers"]["Authorization"] == "Bearer static-bearer"
+    assert len(result) == 1
+
+
+def test_no_credentials_at_all_returns_empty(monkeypatch):
+    monkeypatch.delenv("ZOOMINFO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ZOOMINFO_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("ZOOMINFO_BEARER_TOKEN", raising=False)
+    with patch("zoominfo_client.requests.post") as post:
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+    post.assert_not_called()
 
 
 # ===========================================================================

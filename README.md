@@ -63,7 +63,19 @@ To execute this pipeline, the following secrets must be injected into the enviro
 | `SENDER_EMAIL` | Verified sending address (e.g., `alerts@ami-pulse.com`) |
 | `RECIPIENT_EMAILS` | Comma-separated list of production inboxes |
 | `TEST_RECIPIENT_EMAILS` | Comma-separated QA inboxes; used only by the test workflow |
-| `ZOOMINFO_BEARER_TOKEN` | ZoomInfo static bearer token for company news enrichment |
+| `ZOOMINFO_CLIENT_ID` | ZoomInfo OAuth client id (**preferred** auth — Client Credentials) |
+| `ZOOMINFO_CLIENT_SECRET` | ZoomInfo OAuth client secret (**preferred** auth — Client Credentials) |
+| `ZOOMINFO_BEARER_TOKEN` | ZoomInfo static bearer token — **fallback** for local/dev when no OAuth client is configured |
+
+### ZoomInfo authentication
+
+The client authenticates in priority order:
+
+1. **OAuth Client Credentials (preferred).** When `ZOOMINFO_CLIENT_ID` and `ZOOMINFO_CLIENT_SECRET` are set, the client exchanges them for a short-lived access token at `ZOOMINFO_TOKEN_URL` (HTTP Basic auth, `grant_type=client_credentials`, `Content-Type: application/x-www-form-urlencoded`). The token is cached in-process until shortly before it expires, so a single run reuses one token across all mapped companies. Required ZoomInfo scopes: `api:data:company` and `api:data:news`.
+2. **Static bearer token (fallback).** When no OAuth client is configured, `ZOOMINFO_BEARER_TOKEN` is used directly — convenient for local/dev testing.
+3. **None configured** → the client logs a warning and returns no ZoomInfo candidates (Serper is unaffected).
+
+The client secret and all access/bearer tokens are never logged. Any auth/transport failure degrades to zero ZoomInfo candidates rather than failing the run.
 
 ### Repository Variables (Operational Controls)
 
@@ -71,6 +83,7 @@ These are GitHub **repository variables** (Settings → Secrets and variables �
 
 | Variable | Purpose |
 | :--- | :--- |
+| `ZOOMINFO_TOKEN_URL` | OAuth token endpoint (default `https://api.zoominfo.com/gtm/oauth/v1/token`). Override only if ZoomInfo changes the path. |
 | `ZOOMINFO_NEWS_ENABLED` | Enables ZoomInfo company-news discovery when `true` (default off). Accepts `true`/`1`/`yes`/`on`. |
 | `ZOOMINFO_NEWS_LOOKBACK_DAYS` | Lookback window (days) for ZoomInfo news enrichment (default `2`). |
 | `ZOOMINFO_NEWS_PER_COMPANY` | Max ZoomInfo news records requested per mapped company (default `5`). |
