@@ -186,3 +186,32 @@ def run(*, targets_path: str, out_path: str, only: Optional[str],
         # the proposed content unmistakable for a first run.
         sys.stdout.write(new_text)
     return 0
+
+
+def main(argv: Optional[list] = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Enrich target metadata from ZoomInfo (dry-run by default).")
+    parser.add_argument("--targets", default="targets.yaml",
+                        help="Path to targets.yaml (default: targets.yaml)")
+    parser.add_argument("--out", default="target_metadata.yaml",
+                        help="Path to the companion file (default: target_metadata.yaml)")
+    parser.add_argument("--only", default=None,
+                        help="Restrict to a single target by name")
+    parser.add_argument("--write", action="store_true",
+                        help="Apply changes (default: dry-run prints a diff)")
+    parser.add_argument("--today", default=None,
+                        help="Override the YYYY-MM-DD refresh stamp (testing)")
+    args = parser.parse_args(argv)
+
+    today = args.today
+    if today is None:
+        from datetime import date
+        today = date.today().isoformat()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    return run(targets_path=args.targets, out_path=args.out, only=args.only,
+               write=args.write, today=today, client=_DefaultClient())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
