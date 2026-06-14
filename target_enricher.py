@@ -220,3 +220,22 @@ def build_proposed_metadata(*, target_key: str, target_name: str,
         "manual_aliases": manual_aliases,
         "exclude_terms": exclude_terms,
     }
+
+
+def merge_targets(prior_targets: dict, proposed_targets: dict,
+                  active_keys: set) -> dict:
+    """Merge freshly-built records over prior ones.
+
+    - Freshly processed targets (in `proposed_targets`) win outright.
+    - Prior records NOT reprocessed: kept. Marked `orphaned` if their key is no
+      longer an active target, else left `active`. Records are never deleted.
+    """
+    merged = dict(proposed_targets)
+    for key, record in (prior_targets or {}).items():
+        if key in proposed_targets:
+            continue
+        record = dict(record)
+        record.setdefault("target_key", key)
+        record["metadata_record_status"] = "active" if key in active_keys else "orphaned"
+        merged[key] = record
+    return merged

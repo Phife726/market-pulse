@@ -266,3 +266,30 @@ def test_precurated_with_none_enrichment_is_missing_but_high():
     )
     assert rec["zoominfo_metadata_status"] == "missing"
     assert rec["zoominfo_metadata_confidence"] == "high"
+
+
+def test_merge_marks_removed_record_orphaned():
+    prior = {"Old Co": {"target_key": "Old Co", "zoominfo_company_id": 7,
+                        "metadata_record_status": "active"}}
+    proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
+    merged = te.merge_targets(prior, proposed, active_keys={"Avient"})
+    assert merged["Avient"]["metadata_record_status"] == "active"
+    assert merged["Old Co"]["metadata_record_status"] == "orphaned"
+    assert merged["Old Co"]["zoominfo_company_id"] == 7  # kept, not deleted
+
+
+def test_merge_keeps_unprocessed_active_record_active():
+    # In active_keys but not re-processed (e.g. --only) -> stays active, untouched.
+    prior = {"SABIC": {"target_key": "SABIC", "metadata_record_status": "active",
+                       "zoominfo_company_id": 98664698}}
+    proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
+    merged = te.merge_targets(prior, proposed, active_keys={"Avient", "SABIC"})
+    assert merged["SABIC"]["metadata_record_status"] == "active"
+    assert merged["SABIC"]["zoominfo_company_id"] == 98664698
+
+
+def test_merge_reappearing_target_flips_back_to_active():
+    prior = {"Avient": {"target_key": "Avient", "metadata_record_status": "orphaned"}}
+    proposed = {"Avient": {"target_key": "Avient", "metadata_record_status": "active"}}
+    merged = te.merge_targets(prior, proposed, active_keys={"Avient"})
+    assert merged["Avient"]["metadata_record_status"] == "active"
