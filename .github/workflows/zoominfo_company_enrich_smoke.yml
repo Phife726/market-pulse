@@ -55,8 +55,13 @@ jobs:
           echo "ZOOMINFO_CLIENT_SECRET set? $([[ -n "$ZOOMINFO_CLIENT_SECRET" ]] && echo yes || echo no)"
           echo "ZOOMINFO_BEARER_TOKEN set?  $([[ -n "$ZOOMINFO_BEARER_TOKEN" ]] && echo yes || echo no)"
           echo "ZOOMINFO_TOKEN_URL set?     $([[ -n "$ZOOMINFO_TOKEN_URL" ]] && echo yes || echo no)"
-          if [[ -z "$ZOOMINFO_CLIENT_ID$ZOOMINFO_CLIENT_SECRET$ZOOMINFO_BEARER_TOKEN" ]]; then
-            echo "::error::No ZoomInfo credentials configured. Set ZOOMINFO_CLIENT_ID/ZOOMINFO_CLIENT_SECRET (or ZOOMINFO_BEARER_TOKEN) under Settings -> Secrets and variables -> Actions."
+          # Require a COMPLETE auth path, mirroring zoominfo_client._resolve_access_token:
+          # OAuth needs BOTH client id + secret; otherwise a bearer token. A partial
+          # OAuth pair (e.g. id without secret) cannot authenticate — and because the
+          # script degrades endpoint failures and exits 0, the smoke would look green
+          # while producing only error diagnostics. Fail fast instead.
+          if [[ -z "$ZOOMINFO_BEARER_TOKEN" ]] && { [[ -z "$ZOOMINFO_CLIENT_ID" ]] || [[ -z "$ZOOMINFO_CLIENT_SECRET" ]]; }; then
+            echo "::error::Incomplete ZoomInfo credentials. Provide ZOOMINFO_BEARER_TOKEN, or BOTH ZOOMINFO_CLIENT_ID and ZOOMINFO_CLIENT_SECRET (OAuth requires both). Set them under Settings -> Secrets and variables -> Actions."
             exit 1
           fi
 
