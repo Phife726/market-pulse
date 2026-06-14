@@ -361,6 +361,130 @@ def test_200_logs_response_shape_summary(monkeypatch, caplog):
 
 
 # ---------------------------------------------------------------------------
+# JSON:API top-level data[] record parsing (live response shape)
+# ---------------------------------------------------------------------------
+
+def _jsonapi_payload(items: list) -> dict:
+    return {"data": items, "links": {}, "meta": {"total": len(items)}}
+
+
+def test_jsonapi_data_attributes_extracted(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    payload = _jsonapi_payload([
+        {"id": "1", "type": "NewsEnrich", "attributes": {
+            "headline": "BASF expands compounding plant",
+            "articleUrl": "https://news.example.com/basf",
+            "source": "Reuters",
+            "publishedDate": "2026-06-13",
+            "summary": "BASF announced an expansion.",
+            "categories": ["PRODUCT"],
+        }},
+    ])
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=5670215, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert len(result) == 1
+    c = result[0]
+    assert c["url"] == "https://news.example.com/basf"
+    assert c["title"] == "BASF expands compounding plant"
+    assert c["provider"] == "zoominfo"
+    assert c["source_publication"] == "Reuters"
+    assert c["published_at"] == "2026-06-13"
+    assert c["description"] == "BASF announced an expansion."
+    assert c["categories"] == ["PRODUCT"]
+    assert c["zoominfo_company_id"] == 5670215
+
+
+def test_jsonapi_item_without_attributes_falls_back(monkeypatch):
+    """An item with no attributes object is extracted directly."""
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    payload = _jsonapi_payload([
+        {"title": "Flat headline", "url": "https://news.example.com/flat",
+         "publishedDate": "2026-06-13"},
+    ])
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert len(result) == 1
+    assert result[0]["url"] == "https://news.example.com/flat"
+    assert result[0]["title"] == "Flat headline"
+
+
+def test_jsonapi_data_count_positive_yields_candidates(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    items = [
+        {"id": str(i), "type": "NewsEnrich", "attributes": {
+            "headline": f"Headline {i}",
+            "articleUrl": f"https://news.example.com/{i}",
+            "publishedDate": "2026-06-13",
+        }}
+        for i in range(20)
+    ]
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert len(result) == 20
+
+
+def test_jsonapi_item_missing_url_or_title_skipped(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    items = [
+        {"attributes": {"headline": "has title no url"}},
+        {"attributes": {"articleUrl": "https://news.example.com/no-title"}},
+        {"attributes": {"headline": "good", "articleUrl": "https://news.example.com/good"}},
+    ]
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert {c["url"] for c in result} == {"https://news.example.com/good"}
+
+
+def test_jsonapi_malformed_item_does_not_break_response(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    items = [
+        "not-a-dict",
+        {"attributes": "also-not-a-dict"},
+        {"attributes": {"headline": "good", "articleUrl": "https://news.example.com/good"}},
+    ]
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert len(result) == 1
+    assert result[0]["url"] == "https://news.example.com/good"
+
+
+def test_first_data_item_shape_logs_keys_only(monkeypatch, caplog):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "do-not-log-bearer")
+    items = [{"id": "1", "type": "NewsEnrich", "attributes": {
+        "articleUrl": "https://secret.example.com/x",
+        "categories": ["PRODUCT"],
+        "headline": "Secret Title Value",
+        "publishedDate": "2026-06-13",
+        "source": "ReutersValue",
+    }}]
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))), \
+         caplog.at_level("INFO"):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=5670215, publishing_date_start="2026-06-01", page_size=25
+        )
+    assert "ZoomInfo first data item shape for company 5670215" in caplog.text
+    assert "item_keys=" in caplog.text
+    assert "attribute_keys=" in caplog.text
+    # Key names are surfaced...
+    assert "articleUrl" in caplog.text and "headline" in caplog.text
+    # ...but values, the URL, the title, the source value, and the token are not.
+    assert "https://secret.example.com/x" not in caplog.text
+    assert "Secret Title Value" not in caplog.text
+    assert "ReutersValue" not in caplog.text
+    assert "do-not-log-bearer" not in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # Published endpoint + request shape (Codex P2 finding)
 # ---------------------------------------------------------------------------
 

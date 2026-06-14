@@ -56,18 +56,18 @@ NEWS_SCOPES: list[str] = [
 ]
 
 # Candidate keys ZoomInfo may use for each logical field. First non-empty wins.
-_URL_KEYS = ("url", "newsUrl", "link", "articleUrl", "sourceUrl", "newsLink")
+_URL_KEYS = ("url", "articleUrl", "link", "webUrl", "newsUrl", "sourceUrl", "newsLink")
 _TITLE_KEYS = ("title", "headline", "newsTitle", "name")
 _PUBLISHER_KEYS = (
-    "source", "publisher", "sourcePublication", "publicationName",
-    "sourceName", "publication",
+    "source", "sourceName", "publisher", "publication",
+    "sourcePublication", "publicationName",
 )
 _PUBLISHED_AT_KEYS = (
-    "publishedDate", "publicationDate", "publishedAt", "date",
-    "newsDate", "publishDate",
+    "publishedDate", "publishingDate", "publicationDate", "publishedAt",
+    "date", "newsDate", "publishDate",
 )
-_DESCRIPTION_KEYS = ("description", "summary", "snippet", "content", "abstract")
-_CATEGORY_KEYS = ("categories", "newsTypes", "types", "tags", "topics", "scopes")
+_DESCRIPTION_KEYS = ("description", "summary", "snippet", "body", "content", "abstract")
+_CATEGORY_KEYS = ("categories", "category", "newsTypes", "types", "tags", "topics", "scopes")
 
 # Candidate keys the article list may live under in the response envelope.
 _NEWS_LIST_KEYS = ("news", "results", "result", "data", "articles", "items")
@@ -236,6 +236,40 @@ def _extract_news_items(payload: object) -> list[dict]:
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
     return []
+
+
+def _article_payload(item: dict) -> dict:
+    """Return the field bag for one news record.
+
+    Live Enrich News records are JSON:API resource objects whose fields live
+    under ``attributes``; older/flat shapes carry fields on the item itself.
+    Falls back to ``{}`` for anything non-dict so a malformed item is skipped,
+    not fatal.
+    """
+    if not isinstance(item, dict):
+        return {}
+    attrs = item.get("attributes")
+    if isinstance(attrs, dict):
+        return attrs
+    return item
+
+
+def _summarize_first_item_shape(items: list) -> Optional[str]:
+    """Return a keys-only shape summary of the first data record (no values).
+
+    Surfaces ``item_keys`` and ``attribute_keys`` so the smoke can confirm
+    where the article fields live. Never emits titles, URLs, article bodies,
+    sources, tokens, headers, or the request body.
+    """
+    if not items:
+        return None
+    first = items[0]
+    if not isinstance(first, dict):
+        return "item_keys=[] attribute_keys=[]"
+    item_keys = sorted(first.keys())
+    attrs = first.get("attributes")
+    attribute_keys = sorted(attrs.keys()) if isinstance(attrs, dict) else []
+    return f"item_keys={item_keys} attribute_keys={attribute_keys}"
 
 
 def _build_request(*, zoominfo_company_id: int, page_size: int) -> tuple[dict, dict]:
@@ -416,19 +450,28 @@ def discover_company_news(
         zoominfo_company_id, _summarize_response_shape(data),
     )
 
+    items = _extract_news_items(data)
+    if items:
+        logger.info(
+            "ZoomInfo first data item shape for company %s: %s",
+            zoominfo_company_id, _summarize_first_item_shape(items),
+        )
+
     candidates: list[dict] = []
-    for item in _extract_news_items(data):
-        url = _extract_url(item)
-        if not url:
+    for item in items:
+        payload = _article_payload(item)
+        url = _extract_url(payload)
+        title = _extract_title(payload)
+        if not url or not title:
             continue
         candidates.append({
             "url": url,
-            "title": _extract_title(item),
+            "title": title,
             "provider": "zoominfo",
-            "source_publication": _extract_publisher(item),
-            "published_at": _extract_published_at(item),
-            "description": _extract_description(item),
-            "categories": _extract_categories(item),
+            "source_publication": _extract_publisher(payload),
+            "published_at": _extract_published_at(payload),
+            "description": _extract_description(payload),
+            "categories": _extract_categories(payload),
             "zoominfo_company_id": zoominfo_company_id,
             "raw": item,
         })
