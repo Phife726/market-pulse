@@ -16,6 +16,7 @@ import difflib
 import logging
 import os
 import sys
+from datetime import date
 from typing import Optional
 
 import yaml
@@ -188,7 +189,7 @@ def run(*, targets_path: str, out_path: str, only: Optional[str],
     return 0
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="Enrich target metadata from ZoomInfo (dry-run by default).")
     parser.add_argument("--targets", default="targets.yaml",
@@ -205,7 +206,6 @@ def main(argv: Optional[list] = None) -> int:
 
     today = args.today
     if today is None:
-        from datetime import date
         today = date.today().isoformat()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

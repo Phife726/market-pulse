@@ -183,6 +183,28 @@ def test_main_parses_args_and_defaults_to_dry_run(tmp_path, monkeypatch, capsys)
     assert "Avient" in capsys.readouterr().out
 
 
+def test_main_write_flag_creates_file(tmp_path, monkeypatch):
+    targets = _write_targets(tmp_path, """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 357374413
+        """)
+    out = tmp_path / "target_metadata.yaml"
+    monkeypatch.setattr(enrich_targets, "_DefaultClient", _FakeClient)
+    rc = enrich_targets.main([
+        "--targets", str(targets), "--out", str(out),
+        "--today", "2026-06-14", "--write",
+    ])
+    assert rc == 0
+    assert out.exists()
+    import yaml
+    doc = yaml.safe_load(out.read_text())
+    assert doc["targets"]["Avient"]["zoominfo_metadata_status"] == "verified"
+
+
 def test_target_resolving_to_error_gets_error_status(tmp_path):
     targets = _write_targets(tmp_path, """\
         competitors:
