@@ -56,28 +56,47 @@ def _wrap(attributes: dict) -> dict:
     return {"data": {"type": "CompanyEnrich", "attributes": attributes}}
 
 
-def build_candidates(company_id: int) -> list[tuple[str, dict]]:
-    """Explicit, ordered list of (label, request-body) candidates to probe.
+def _input_variants(company_id: int) -> list[tuple[str, str, dict]]:
+    """Ordered input-only attribute shapes (no outputFields), baseline-first.
 
-    Hand-written rather than generated so the matrix stays small and reviewable.
-    Ordered baseline-first so the logs reproduce the known 400 pointer before the
-    array-shaped inputs the docs imply.
+    Each entry is (label, top_level_key, attributes). Hand-written rather than
+    generated so the matrix stays small and reviewable. The top_level_key lets
+    the credit-aware walk tell "this input field is invalid" (pointer names the
+    key) from "input accepted, something else needed" (pointer names another).
     """
     return [
-        # Baseline — the known-bad singular field; confirms the probe reproduces
-        # the live pointer `/data/attributes/companyId`.
-        ("companyId (baseline, known-bad)", _wrap({"companyId": company_id})),
+        # Baseline — the known-bad singular field; reproduces the live pointer
+        # `/data/attributes/companyId` for free (a 400 returns no record).
+        ("companyId (baseline, known-bad)", "companyId", {"companyId": company_id}),
         # Array-shaped inputs ("use the Company IDs", "Multiple Inputs").
-        ("companyIds[]", _wrap({"companyIds": [company_id]})),
-        ("matchCompanyInput[]", _wrap({"matchCompanyInput": [{"companyId": company_id}]})),
-        # Same array inputs, now also requesting outputFields, to learn whether
-        # outputFields is required and whether the candidate tokens are valid.
-        ("companyIds[] + outputFields",
-         _wrap({"companyIds": [company_id], "outputFields": _OUTPUT_FIELD_CANDIDATES})),
-        ("matchCompanyInput[] + outputFields",
-         _wrap({"matchCompanyInput": [{"companyId": company_id}],
-                "outputFields": _OUTPUT_FIELD_CANDIDATES})),
+        ("companyIds[]", "companyIds", {"companyIds": [company_id]}),
+        ("matchCompanyInput[]", "matchCompanyInput",
+         {"matchCompanyInput": [{"companyId": company_id}]}),
     ]
+
+
+def _with_output_fields(attrs: dict) -> dict:
+    """Copy of *attrs* with the candidate outputFields list added."""
+    out = dict(attrs)
+    out["outputFields"] = _OUTPUT_FIELD_CANDIDATES
+    return out
+
+
+def build_candidates(company_id: int) -> list[tuple[str, dict]]:
+    """Full probe matrix (every input shape, then each non-baseline input also
+    with outputFields). Used only by the explicit `--all` opt-in; the default
+    walk in run_probe stops early to conserve ZoomInfo enrich credits."""
+    full = [(label, _wrap(attrs)) for label, _key, attrs in _input_variants(company_id)]
+    for label, _key, attrs in _input_variants(company_id):
+        if label.startswith("companyId "):  # don't add outputFields to the known-bad baseline
+            continue
+        full.append((f"{label} + outputFields", _wrap(_with_output_fields(attrs))))
+    return full
+
+
+def _pointer_mentions(result: dict, token: str) -> bool:
+    """True if any captured 400 pointer references *token* (e.g. an input key)."""
+    return any(token in p for p in result.get("pointers", []))
 
 
 def _extract_pointers(payload: object) -> tuple[list[str], list[str]]:
@@ -146,19 +165,64 @@ def _probe_one(label: str, body: dict, headers: dict, endpoint: str) -> dict:
     return {"label": label, "status": 200, "shape": shape, "populated": populated}
 
 
-def run_probe(company_id: int) -> list[dict]:
-    """Resolve a token and probe every candidate body. Returns sanitized results
-    (possibly empty if no token). Never raises."""
+def run_probe(company_id: int, probe_all: bool = False) -> list[dict]:
+    """Resolve a token and probe Company Enrich bodies. Returns sanitized results
+    (possibly empty if no token). Never raises.
+
+    Default is a CREDIT-AWARE walk: each Enrich 200 that returns a record charges
+    a ZoomInfo credit for a non-managed company, so we stop as soon as the schema
+    question is answered. 400s are free (no record), so the known-bad baseline and
+    rejected inputs cost nothing. At most two credit-charging calls occur (one
+    accepted input, plus one outputFields probe if the accepted input came back
+    sparse or the API said outputFields is required). Pass probe_all=True to send
+    the entire matrix regardless (explicit opt-in; may spend several credits)."""
     token = zoominfo_client._resolve_access_token()
     if not token:
         logger.error("No ZoomInfo token resolved — cannot probe Company Enrich.")
         return []
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     endpoint = zoominfo_client._enrich_endpoint()
-    logger.info("Probing Company Enrich for company_id=%s (%d candidates)",
-                company_id, len(build_candidates(company_id)))
-    return [_probe_one(label, body, headers, endpoint)
-            for label, body in build_candidates(company_id)]
+
+    if probe_all:
+        logger.info("Probing Company Enrich for company_id=%s (--all: full matrix)",
+                    company_id)
+        return [_probe_one(label, body, headers, endpoint)
+                for label, body in build_candidates(company_id)]
+
+    logger.info("Probing Company Enrich for company_id=%s (credit-aware walk)",
+                company_id)
+    results: list[dict] = []
+    accepted: Optional[dict] = None   # the accepted input attributes
+    needs_output = False
+    for label, key, attrs in _input_variants(company_id):
+        r = _probe_one(label, _wrap(attrs), headers, endpoint)
+        results.append(r)
+        if r["status"] == 200:
+            accepted = attrs
+            if any(r.get("populated", {}).values()):
+                logger.info("Accepted input %r returned populated firmographics — "
+                            "outputFields not required. Stopping.", label)
+                return results
+            logger.info("Accepted input %r but firmographics sparse — will probe "
+                        "outputFields once.", label)
+            needs_output = True
+            break
+        # 400 that names another field (not this input key) => input accepted but
+        # something else (e.g. outputFields) is required. A 400 charges no credit.
+        if r["status"] not in (None, 200) and not _pointer_mentions(r, key):
+            accepted = attrs
+            needs_output = True
+            logger.info("Input %r appears accepted (400 does not name %r) — will "
+                        "probe outputFields once.", label, key)
+            break
+        # else: input rejected (pointer names this key) — try the next shape, free.
+
+    if accepted is not None and needs_output:
+        results.append(_probe_one("accepted input + outputFields",
+                                  _wrap(_with_output_fields(accepted)), headers, endpoint))
+    elif accepted is None:
+        logger.info("No candidate input shape was accepted — see the pointers above.")
+    return results
 
 
 def _resolve_company_id(target: Optional[str], company_id: Optional[int],
@@ -181,6 +245,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--company-id", type=int, default=None,
                         help="Explicit ZoomInfo company id (overrides --target lookup)")
     parser.add_argument("--targets", default="targets.yaml", help="Path to targets.yaml")
+    parser.add_argument("--all", action="store_true",
+                        help="Send the full candidate matrix instead of the default "
+                             "credit-aware early-stop walk (may spend several credits)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -189,7 +256,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         logger.error("No company id for target %r (set --company-id or add "
                      "zoominfo_company_id in targets.yaml).", args.target)
         return 1
-    results = run_probe(company_id)
+    results = run_probe(company_id, probe_all=args.all)
     accepted = [r for r in results if r.get("status") == 200]
     logger.info("Probe complete: %d/%d candidate(s) returned 200.",
                 len(accepted), len(results))

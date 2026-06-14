@@ -44,6 +44,21 @@ _AVIENT_400 = {
 }
 
 
+def _400(pointer: str, code: str = "PFAPI0005") -> MagicMock:
+    """A 400 whose error names a specific JSON:API pointer."""
+    return _resp(400, {"errors": [{"code": code, "source": {"pointer": pointer}}]})
+
+
+def _200_populated() -> MagicMock:
+    return _resp(200, {"data": [{"attributes": {
+        "name": "Avient Corporation", "primaryIndustry": "Plastics",
+        "industries": ["Plastics"]}}]})
+
+
+def _200_sparse() -> MagicMock:
+    return _resp(200, {"data": [{"attributes": {}}]})
+
+
 def test_build_candidates_covers_doc_plausible_input_shapes():
     cands = probe.build_candidates(357374413)
     labels = [label for label, _ in cands]
@@ -117,18 +132,63 @@ def test_run_probe_returns_empty_without_token(monkeypatch):
     assert probe.run_probe(357374413) == []
 
 
-def test_run_probe_iterates_all_candidates(caplog):
-    with caplog.at_level(logging.INFO, logger="probe_company_enrich"):
-        with patch("probe_company_enrich.requests.post",
-                   return_value=_resp(400, _AVIENT_400)):
-            results = probe.run_probe(357374413)
-    assert len(results) == len(probe.build_candidates(357374413))
+def test_run_probe_stops_after_first_populated_200(caplog):
+    # baseline 400 (rejected) -> companyIds[] 200 populated -> STOP. No 3rd call,
+    # so only one credit-charging request is sent.
+    posts = [_400("/data/attributes/companyId"), _200_populated()]
+    with patch("probe_company_enrich.requests.post", side_effect=posts) as m:
+        results = probe.run_probe(357374413)
+    assert m.call_count == 2
+    assert len(results) == 2
+    assert results[-1]["status"] == 200
+    assert any(results[-1]["populated"].values())
+
+
+def test_run_probe_sparse_200_triggers_exactly_one_outputfields_probe():
+    # baseline 400 -> companyIds[] 200 sparse -> ONE outputFields probe (200).
+    posts = [_400("/data/attributes/companyId"), _200_sparse(), _200_populated()]
+    with patch("probe_company_enrich.requests.post", side_effect=posts) as m:
+        results = probe.run_probe(357374413)
+    assert m.call_count == 3
+    assert results[-1]["label"] == "accepted input + outputFields"
+    assert results[-1]["status"] == 200
+
+
+def test_run_probe_400_outputfields_required_triggers_outputfields_probe():
+    # baseline 400 names companyId (rejected); companyIds[] 400 names outputFields
+    # (input accepted, outputFields required) -> ONE outputFields probe.
+    posts = [_400("/data/attributes/companyId"),
+             _400("/data/attributes/outputFields"), _200_populated()]
+    with patch("probe_company_enrich.requests.post", side_effect=posts) as m:
+        results = probe.run_probe(357374413)
+    assert m.call_count == 3
+    assert results[-1]["label"] == "accepted input + outputFields"
+
+
+def test_run_probe_all_inputs_rejected_sends_no_outputfields_probe():
+    # Every input shape 400s naming its own key -> no input accepted, no credit
+    # spent (all 400), and no outputFields probe.
+    posts = [_400("/data/attributes/companyId"),
+             _400("/data/attributes/companyIds"),
+             _400("/data/attributes/matchCompanyInput")]
+    with patch("probe_company_enrich.requests.post", side_effect=posts) as m:
+        results = probe.run_probe(357374413)
+    assert m.call_count == 3
     assert all(r["status"] == 400 for r in results)
+    assert not any(r.get("status") == 200 for r in results)
+
+
+def test_run_probe_all_flag_sends_full_matrix():
+    with patch("probe_company_enrich.requests.post",
+               return_value=_400("/data/attributes/companyId")) as m:
+        results = probe.run_probe(357374413, probe_all=True)
+    assert m.call_count == len(probe.build_candidates(357374413))
+    assert len(results) == len(probe.build_candidates(357374413))
 
 
 def test_probe_never_logs_bearer_token(caplog):
     with caplog.at_level(logging.DEBUG, logger="probe_company_enrich"):
         with patch("probe_company_enrich.requests.post",
-                   return_value=_resp(400, _AVIENT_400)):
+                   side_effect=[_400("/data/attributes/companyId"), _200_populated()]):
             probe.run_probe(357374413)
     assert "test-bearer" not in caplog.text
