@@ -1,0 +1,74 @@
+name: ZoomInfo Company Enrich Smoke
+
+run-name: >-
+  ZoomInfo Enrich Smoke - target=${{ github.event.inputs.target }} - ${{ github.actor }}
+
+# Manual-only diagnostic. Runs the OFFLINE target-metadata enrichment script
+# (scripts/enrich_targets.py) inside Actions — the one place the ZoomInfo secrets
+# already live — to confirm the live Company Search/Enrich request-body schema.
+# Dry-run only (no --write): writes nothing, sends no email, touches no Supabase
+# row. Does NOT run ingestion or delivery. Remove this workflow once the
+# follow-up patch wires the verified `outputFields` tokens.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Target name from targets.yaml (entity-mode, e.g. Avient)"
+        required: true
+        default: "Avient"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zoominfo-company-enrich-smoke
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Confirm ZoomInfo credential presence (no values printed)
+        env:
+          ZOOMINFO_CLIENT_ID: ${{ secrets.ZOOMINFO_CLIENT_ID }}
+          ZOOMINFO_CLIENT_SECRET: ${{ secrets.ZOOMINFO_CLIENT_SECRET }}
+          ZOOMINFO_BEARER_TOKEN: ${{ secrets.ZOOMINFO_BEARER_TOKEN }}
+          ZOOMINFO_TOKEN_URL: ${{ vars.ZOOMINFO_TOKEN_URL }}
+        run: |
+          echo "ZOOMINFO_CLIENT_ID set?     $([[ -n "$ZOOMINFO_CLIENT_ID" ]] && echo yes || echo no)"
+          echo "ZOOMINFO_CLIENT_SECRET set? $([[ -n "$ZOOMINFO_CLIENT_SECRET" ]] && echo yes || echo no)"
+          echo "ZOOMINFO_BEARER_TOKEN set?  $([[ -n "$ZOOMINFO_BEARER_TOKEN" ]] && echo yes || echo no)"
+          echo "ZOOMINFO_TOKEN_URL set?     $([[ -n "$ZOOMINFO_TOKEN_URL" ]] && echo yes || echo no)"
+          if [[ -z "$ZOOMINFO_CLIENT_ID$ZOOMINFO_CLIENT_SECRET$ZOOMINFO_BEARER_TOKEN" ]]; then
+            echo "::error::No ZoomInfo credentials configured. Set ZOOMINFO_CLIENT_ID/ZOOMINFO_CLIENT_SECRET (or ZOOMINFO_BEARER_TOKEN) under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      - name: Run target metadata enrich dry-run
+        # The target input is passed via env (TARGET) and referenced as "$TARGET"
+        # — never interpolated directly into the shell — to avoid script injection.
+        env:
+          TARGET: ${{ github.event.inputs.target }}
+          ZOOMINFO_CLIENT_ID: ${{ secrets.ZOOMINFO_CLIENT_ID }}
+          ZOOMINFO_CLIENT_SECRET: ${{ secrets.ZOOMINFO_CLIENT_SECRET }}
+          ZOOMINFO_BEARER_TOKEN: ${{ secrets.ZOOMINFO_BEARER_TOKEN }}
+          ZOOMINFO_TOKEN_URL: ${{ vars.ZOOMINFO_TOKEN_URL }}
+          ZOOMINFO_ENRICH_ENDPOINT: ${{ vars.ZOOMINFO_ENRICH_ENDPOINT }}
+          ZOOMINFO_SEARCH_ENDPOINT: ${{ vars.ZOOMINFO_SEARCH_ENDPOINT }}
+        run: python scripts/enrich_targets.py --only "$TARGET"
