@@ -95,7 +95,7 @@ def _search_endpoint() -> str:
 
 # Candidate keys ZoomInfo may use for a company id / name in search + enrich bodies.
 _COMPANY_ID_KEYS = ("id", "companyId", "zoominfoCompanyId", "company_id")
-_COMPANY_NAME_KEYS = ("name", "companyName", "canonicalName")
+_COMPANY_NAME_KEYS = ("name", "companyName", "canonicalName")  # reserved for enrich_company body builder / firmographics extraction
 # Candidate keys the company list may live under in a search response envelope.
 _COMPANY_LIST_KEYS = ("data", "results", "result", "companies", "items")
 
@@ -244,8 +244,9 @@ def _extract_company_list(payload: object) -> list:
 
 def _first_company_id(company: dict) -> Optional[int]:
     """Return the first integer-coercible company id among known keys."""
-    attrs = company.get("attributes") if isinstance(company.get("attributes"), dict) else company
-    for source in (company, attrs):
+    attrs = company.get("attributes")
+    sources = (company, attrs) if isinstance(attrs, dict) else (company,)
+    for source in sources:
         for key in _COMPANY_ID_KEYS:
             value = source.get(key)
             if isinstance(value, bool):
