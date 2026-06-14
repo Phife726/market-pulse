@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import date, datetime
 from typing import Optional
 
 import requests
@@ -237,15 +238,13 @@ def _extract_news_items(payload: object) -> list[dict]:
     return []
 
 
-def _build_request(
-    *, zoominfo_company_id: int, publishing_date_start: str, page_size: int
-) -> tuple[dict, dict]:
+def _build_request(*, zoominfo_company_id: int, page_size: int) -> tuple[dict, dict]:
     """Assemble the News Enrichment request for a single company.
 
     Returns ``(params, body)``. Pagination travels as JSON:API query params;
-    the enrichment criteria live under ``data.attributes`` using ZoomInfo
-    Enrich News field semantics (zoominfoCompanyId / categories /
-    publishingDateStart).
+    the enrichment criteria live under ``data.attributes``. No date attribute
+    is sent — the live API rejects ``publishingDateStart`` ("Invalid field
+    requested"), so recency is enforced best-effort client-side after parsing.
     """
     params = {
         "page[number]": 1,
@@ -259,11 +258,45 @@ def _build_request(
                 # companyWebsite). The undocumented zoominfoCompanyId returns 400.
                 "companyId": zoominfo_company_id,
                 "categories": NEWS_SCOPES,
-                "publishingDateStart": publishing_date_start,
             },
         },
     }
     return params, body
+
+
+def _parse_date(value: object) -> Optional[date]:
+    """Best-effort parse of a date or ISO datetime string into a date.
+
+    Returns None for empty/unparseable values so callers can treat 'no usable
+    date' as 'do not filter'."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    for candidate in (raw, raw.replace("Z", "+00:00")):
+        try:
+            return datetime.fromisoformat(candidate).date()
+        except ValueError:
+            pass
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _filter_by_published_date(candidates: list[dict], cutoff: Optional[date]) -> list[dict]:
+    """Best-effort recency filter applied client-side.
+
+    Drops candidates whose published_at parses to a date strictly before
+    *cutoff*. Candidates with a missing or unparseable date are always kept —
+    the filter must never discard records just because they lack a date."""
+    if cutoff is None:
+        return candidates
+    kept: list[dict] = []
+    for candidate in candidates:
+        published = _parse_date(candidate.get("published_at"))
+        if published is None or published >= cutoff:
+            kept.append(candidate)
+    return kept
 
 
 def _response_snippet(response: object, limit: int = 500) -> str:
@@ -298,7 +331,6 @@ def discover_company_news(
     }
     params, body = _build_request(
         zoominfo_company_id=zoominfo_company_id,
-        publishing_date_start=publishing_date_start,
         page_size=page_size,
     )
 
@@ -362,6 +394,18 @@ def discover_company_news(
             "zoominfo_company_id": zoominfo_company_id,
             "raw": item,
         })
+
+    parsed_count = len(candidates)
+    # Best-effort recency filter: the API no longer takes a date param, so apply
+    # the lookback cutoff client-side. Undated/unparseable records are kept.
+    candidates = _filter_by_published_date(candidates, _parse_date(publishing_date_start))
+    dropped = parsed_count - len(candidates)
+    if dropped:
+        logger.info(
+            "ZoomInfo client-side date filter dropped %d of %d item(s) "
+            "older than %s for company %s",
+            dropped, parsed_count, publishing_date_start, zoominfo_company_id,
+        )
 
     logger.info(
         "ZoomInfo discovered %d news item(s) for company %s",

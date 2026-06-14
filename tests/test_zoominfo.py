@@ -349,13 +349,16 @@ def test_request_uses_published_shape(monkeypatch):
     attrs = body["data"]["attributes"]
     assert attrs["companyId"] == 12345678
     assert attrs["categories"] == zoominfo_client.NEWS_SCOPES
-    assert attrs["publishingDateStart"] == "2026-06-12"
 
-    # Legacy / flat / undocumented field names must be gone everywhere.
-    for legacy in ("zoominfoCompanyId", "rpp", "page", "pageSize", "publishedStartDate", "newsTypes"):
-        assert legacy not in attrs
-        assert legacy not in body
-        assert legacy not in kwargs["json"]["data"]
+    # Legacy / flat / undocumented / unsupported field names must be gone.
+    # publishingDateStart is rejected by the live API ("Invalid field requested").
+    for bad in (
+        "zoominfoCompanyId", "rpp", "page", "pageSize",
+        "publishedStartDate", "publishingDateStart", "publishingDateEnd", "newsTypes",
+    ):
+        assert bad not in attrs
+        assert bad not in body
+        assert bad not in kwargs["json"]["data"]
 
 
 def test_request_passes_page_size_through(monkeypatch):
@@ -384,6 +387,55 @@ def test_request_body_uses_documented_company_id(monkeypatch):
     attrs = post.call_args.kwargs["json"]["data"]["attributes"]
     assert attrs["companyId"] == 357374413
     assert "zoominfoCompanyId" not in attrs
+
+
+def test_request_body_omits_publishing_date_start(monkeypatch):
+    """The live API rejects publishingDateStart — it must not be sent."""
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    mock = _post_mock({"data": {"news": []}})
+    with patch("zoominfo_client.requests.post", return_value=mock) as post:
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    kwargs = post.call_args.kwargs
+    attrs = kwargs["json"]["data"]["attributes"]
+    assert "publishingDateStart" not in attrs
+    assert "publishedStartDate" not in attrs
+    assert attrs["companyId"] == 1
+    assert attrs["categories"] == zoominfo_client.NEWS_SCOPES
+    # Pagination still travels as query params.
+    assert kwargs["params"] == {"page[number]": 1, "page[size]": 5}
+
+
+def test_client_side_date_filter_drops_old_keeps_undated(monkeypatch):
+    """Best-effort client-side filter: drop parseable dates before the cutoff,
+    but never drop records that have no parseable published date."""
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    payload = {"data": {"news": [
+        {"title": "recent", "url": "https://n/recent", "publishedDate": "2026-06-13"},
+        {"title": "old", "url": "https://n/old", "publishedDate": "2026-05-01"},
+        {"title": "undated", "url": "https://n/undated"},
+    ]}}
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    urls = {c["url"] for c in result}
+    assert "https://n/recent" in urls
+    assert "https://n/undated" in urls   # undated kept (best-effort)
+    assert "https://n/old" not in urls    # parseable + before cutoff -> dropped
+
+
+def test_client_side_date_filter_keeps_all_when_cutoff_unparseable(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    payload = {"data": {"news": [
+        {"title": "old", "url": "https://n/old", "publishedDate": "2020-01-01"},
+    ]}}
+    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="not-a-date", page_size=5
+        )
+    assert len(result) == 1  # no usable cutoff -> keep everything
 
 
 def _bad_request_resp(text: str) -> MagicMock:
