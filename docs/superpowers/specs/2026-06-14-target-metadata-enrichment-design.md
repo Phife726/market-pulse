@@ -43,6 +43,11 @@ One new script, one new companion-file format, one new pure module, one new test
 and a README section. **No changes to the ingestion or delivery hot paths.** The only
 edit to existing runtime code is two additive functions in `zoominfo_client.py`.
 
+**PR strategy — standalone prerequisite PR, one milestone only.** This is not bundled with
+the ZoomInfo relevance gate. The implementation plan retires exactly one milestone: *create
+a safe, reviewable metadata enrichment utility and companion metadata file for future
+relevance filtering.*
+
 ## Architecture (Approach A: thin online layer + pure transform core)
 
 Mirrors the repo's existing "pure module + I/O seam" pattern
@@ -155,7 +160,8 @@ reviewable rather than clever.
 
 ## `target_metadata.yaml` schema
 
-Keyed by **entity name** (stable, human-readable join to `targets.yaml`).
+Keyed by **entity name** for readability, with an explicit `target_key` field inside each
+record as the stable join/migration path if the human-readable key ever changes.
 
 ```yaml
 # MACHINE-MANAGED by scripts/enrich_targets.py. Edit ONLY the human-curated
@@ -164,6 +170,9 @@ version: 1
 targets:
   Avient:
     # ── machine-written (overwritten on each --write) ──
+    target_key: "Avient"                       # stable join key; mirrors the map key today,
+                                               # survives a future rename of the human-readable key
+    metadata_record_status: active             # active | orphaned (machine field, not just a comment)
     zoominfo_company_id: 357374413
     canonical_name: "Avient Corporation"
     hq_revenue_range: "$1B - $5B"
@@ -184,9 +193,15 @@ targets:
 ```
 
 **Merge-preserve rule:** on `--write`, read the existing file; for each target overwrite
-only the machine block and copy `manual_aliases`/`exclude_terms` through verbatim. New
-targets get empty curated lists. Targets removed from `targets.yaml` are **flagged-and-kept**
-(annotated `# orphaned`), never auto-deleted — a human decides.
+only the machine block and copy `target_key`, `manual_aliases`, and `exclude_terms` through
+verbatim. New targets get a `target_key` equal to the map key and empty curated lists.
+Targets present in `targets.yaml` get `metadata_record_status: active`.
+
+**Orphan rule:** a record whose `target_key` no longer matches any active entity in
+`targets.yaml` is **flagged-and-kept** — set `metadata_record_status: orphaned` (a real
+machine field, the authoritative signal) and optionally append a human-readable `# orphaned`
+comment. Records are **never auto-deleted**; a human decides. If an orphaned target later
+reappears in `targets.yaml`, the status flips back to `active`.
 
 ## CLI
 
@@ -211,7 +226,10 @@ token-cache reset fixture).
   - de-suffix guardrail (Avient kept; RTP/BASF suppressed)
   - `company_identity_terms` dedup
   - `industry_relevance_terms` mapping + unmapped→empty+flag
-  - merge-preserve keeps `manual_aliases`/`exclude_terms`; orphan flagging
+  - merge-preserve keeps `target_key`/`manual_aliases`/`exclude_terms`
+  - orphan flagging: a record missing from `targets.yaml` gets
+    `metadata_record_status: orphaned` and is kept (asserted on the field, not a comment);
+    reappearing target flips back to `active`
   - `error` preserves prior machine block
 - **Client extension** — `resolve_company`/`enrich_company` with mocked `requests`:
   happy path, 401/403→`None`, invalid-scope→`None`, 5xx→`None`, malformed body→`None`,
