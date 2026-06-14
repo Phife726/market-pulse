@@ -257,6 +257,69 @@ def test_discover_company_news_does_not_log_token(monkeypatch, caplog):
     assert "super-secret-token" not in caplog.text
 
 
+# ---------------------------------------------------------------------------
+# Published endpoint + request shape (Codex P2 finding)
+# ---------------------------------------------------------------------------
+
+def test_default_endpoint_is_published_path(monkeypatch):
+    monkeypatch.delenv("ZOOMINFO_NEWS_ENDPOINT", raising=False)
+    assert zoominfo_client._endpoint() == "https://api.zoominfo.com/gtm/data/v1/news/enrich"
+
+
+def test_endpoint_override_preserved(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_NEWS_ENDPOINT", "https://example.test/custom/news")
+    assert zoominfo_client._endpoint() == "https://example.test/custom/news"
+
+
+def test_request_uses_published_shape(monkeypatch):
+    """Pagination travels as JSON:API query params; criteria live under
+    data.attributes with ZoomInfo Enrich News field names."""
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    monkeypatch.delenv("ZOOMINFO_NEWS_ENDPOINT", raising=False)
+    mock = _post_mock({"data": {"news": []}})
+    with patch("zoominfo_client.requests.post", return_value=mock) as post:
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=12345678,
+            publishing_date_start="2026-06-12",
+            page_size=5,
+        )
+
+    _, kwargs = post.call_args
+    # Endpoint is the published GTM path.
+    assert kwargs.get("url", (post.call_args.args or [None])[0]) == \
+        "https://api.zoominfo.com/gtm/data/v1/news/enrich"
+
+    # Pagination is in the query params, not the body.
+    assert kwargs["params"] == {"page[number]": 1, "page[size]": 5}
+
+    body = kwargs["json"]
+    assert body["data"]["type"] == "newsEnrichRequest"
+    attrs = body["data"]["attributes"]
+    assert attrs["zoominfoCompanyId"] == 12345678
+    assert attrs["categories"] == zoominfo_client.NEWS_SCOPES
+    assert attrs["publishingDateStart"] == "2026-06-12"
+
+    # Legacy / flat field names must be gone everywhere.
+    for legacy in ("companyId", "rpp", "page", "pageSize", "publishedStartDate", "newsTypes"):
+        assert legacy not in attrs
+        assert legacy not in body
+        assert legacy not in kwargs["json"]["data"]
+
+
+def test_request_passes_page_size_through(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    mock = _post_mock({"data": {"news": []}})
+    with patch("zoominfo_client.requests.post", return_value=mock) as post:
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=999,
+            publishing_date_start="2026-06-01",
+            page_size=10,
+        )
+    _, kwargs = post.call_args
+    assert kwargs["params"]["page[size]"] == 10
+    assert kwargs["json"]["data"]["attributes"]["zoominfoCompanyId"] == 999
+
+
 @pytest.mark.parametrize("status", [401, 403])
 def test_discover_company_news_auth_error_returns_empty(monkeypatch, status):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")

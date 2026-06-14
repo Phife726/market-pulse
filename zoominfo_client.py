@@ -25,7 +25,8 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Override-able so the endpoint can be corrected without a code change.
-_DEFAULT_NEWS_ENDPOINT = "https://api.zoominfo.com/enrich/news"
+# Published ZoomInfo GTM Enrich News endpoint.
+_DEFAULT_NEWS_ENDPOINT = "https://api.zoominfo.com/gtm/data/v1/news/enrich"
 _REQUEST_TIMEOUT = 15  # seconds
 
 # News categories/scopes requested from ZoomInfo.
@@ -127,17 +128,31 @@ def _extract_news_items(payload: object) -> list[dict]:
     return []
 
 
-def _build_request_body(
+def _build_request(
     *, zoominfo_company_id: int, publishing_date_start: str, page_size: int
-) -> dict:
-    """Assemble the News Enrichment request body for a single company."""
-    return {
-        "companyId": zoominfo_company_id,
-        "rpp": page_size,
-        "page": 1,
-        "publishedStartDate": publishing_date_start,
-        "newsTypes": NEWS_SCOPES,
+) -> tuple[dict, dict]:
+    """Assemble the News Enrichment request for a single company.
+
+    Returns ``(params, body)``. Pagination travels as JSON:API query params;
+    the enrichment criteria live under ``data.attributes`` using ZoomInfo
+    Enrich News field semantics (zoominfoCompanyId / categories /
+    publishingDateStart).
+    """
+    params = {
+        "page[number]": 1,
+        "page[size]": page_size,
     }
+    body = {
+        "data": {
+            "type": "newsEnrichRequest",
+            "attributes": {
+                "zoominfoCompanyId": zoominfo_company_id,
+                "categories": NEWS_SCOPES,
+                "publishingDateStart": publishing_date_start,
+            },
+        },
+    }
+    return params, body
 
 
 def discover_company_news(
@@ -163,7 +178,7 @@ def discover_company_news(
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    body = _build_request_body(
+    params, body = _build_request(
         zoominfo_company_id=zoominfo_company_id,
         publishing_date_start=publishing_date_start,
         page_size=page_size,
@@ -171,7 +186,8 @@ def discover_company_news(
 
     try:
         response = requests.post(
-            _endpoint(), json=body, headers=headers, timeout=_REQUEST_TIMEOUT
+            _endpoint(), params=params, json=body, headers=headers,
+            timeout=_REQUEST_TIMEOUT,
         )
         response.raise_for_status()
     except requests.exceptions.HTTPError as exc:
