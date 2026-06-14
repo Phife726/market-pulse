@@ -347,12 +347,12 @@ def test_request_uses_published_shape(monkeypatch):
     body = kwargs["json"]
     assert body["data"]["type"] == "newsEnrichRequest"
     attrs = body["data"]["attributes"]
-    assert attrs["zoominfoCompanyId"] == 12345678
+    assert attrs["companyId"] == 12345678
     assert attrs["categories"] == zoominfo_client.NEWS_SCOPES
     assert attrs["publishingDateStart"] == "2026-06-12"
 
-    # Legacy / flat field names must be gone everywhere.
-    for legacy in ("companyId", "rpp", "page", "pageSize", "publishedStartDate", "newsTypes"):
+    # Legacy / flat / undocumented field names must be gone everywhere.
+    for legacy in ("zoominfoCompanyId", "rpp", "page", "pageSize", "publishedStartDate", "newsTypes"):
         assert legacy not in attrs
         assert legacy not in body
         assert legacy not in kwargs["json"]["data"]
@@ -369,7 +369,62 @@ def test_request_passes_page_size_through(monkeypatch):
         )
     _, kwargs = post.call_args
     assert kwargs["params"]["page[size]"] == 10
-    assert kwargs["json"]["data"]["attributes"]["zoominfoCompanyId"] == 999
+    assert kwargs["json"]["data"]["attributes"]["companyId"] == 999
+
+
+def test_request_body_uses_documented_company_id(monkeypatch):
+    """Enrich News expects companyId (a documented identifier), not the
+    undocumented zoominfoCompanyId that triggered HTTP 400."""
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    mock = _post_mock({"data": {"news": []}})
+    with patch("zoominfo_client.requests.post", return_value=mock) as post:
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=357374413, publishing_date_start="2026-06-12", page_size=5
+        )
+    attrs = post.call_args.kwargs["json"]["data"]["attributes"]
+    assert attrs["companyId"] == 357374413
+    assert "zoominfoCompanyId" not in attrs
+
+
+def _bad_request_resp(text: str) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 400
+    resp.text = text
+    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+    return resp
+
+
+def test_bad_request_400_logs_sanitized_snippet_and_returns_empty(monkeypatch, caplog):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    resp = _bad_request_resp('{"error":"invalid field foo"}')
+    with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("ERROR"):
+        result = zoominfo_client.discover_company_news(
+            zoominfo_company_id=357374413, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert result == []
+    assert "400" in caplog.text
+    assert "invalid field foo" in caplog.text
+
+
+def test_bad_request_400_snippet_capped_at_500(monkeypatch, caplog):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
+    resp = _bad_request_resp("x" * 1000)
+    with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("ERROR"):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert "x" * 500 in caplog.text
+    assert "x" * 501 not in caplog.text
+
+
+def test_bad_request_400_does_not_log_token(monkeypatch, caplog):
+    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "secret-bearer-xyz")
+    resp = _bad_request_resp("bad request body")
+    with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("DEBUG"):
+        zoominfo_client.discover_company_news(
+            zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
+        )
+    assert "secret-bearer-xyz" not in caplog.text
 
 
 @pytest.mark.parametrize("status", [401, 403])

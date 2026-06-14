@@ -255,13 +255,26 @@ def _build_request(
         "data": {
             "type": "newsEnrichRequest",
             "attributes": {
-                "zoominfoCompanyId": zoominfo_company_id,
+                # Documented Enrich News identifier (companyId | companyName |
+                # companyWebsite). The undocumented zoominfoCompanyId returns 400.
+                "companyId": zoominfo_company_id,
                 "categories": NEWS_SCOPES,
                 "publishingDateStart": publishing_date_start,
             },
         },
     }
     return params, body
+
+
+def _response_snippet(response: object, limit: int = 500) -> str:
+    """Return a single-line, length-capped snippet of a response body for
+    diagnostics. Reads only the response body — never request headers/body —
+    so credentials are never surfaced."""
+    try:
+        text = getattr(response, "text", "") or ""
+    except Exception:
+        return ""
+    return " ".join(str(text).split())[:limit]
 
 
 def discover_company_news(
@@ -301,6 +314,11 @@ def discover_company_news(
             logger.error(
                 "ZoomInfo auth error (%s) for company %s — check ZoomInfo credentials and scopes",
                 status, zoominfo_company_id,
+            )
+        elif status == 400:
+            logger.error(
+                "ZoomInfo bad request (400) for company %s — response: %s",
+                zoominfo_company_id, _response_snippet(exc.response),
             )
         elif status == 429:
             logger.warning(
