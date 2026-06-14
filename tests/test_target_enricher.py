@@ -32,3 +32,22 @@ def test_identity_terms_keeps_literal_target_name_even_if_short():
     # "BASF" is the curated targets.yaml name, not an auto-derived acronym.
     terms = te.build_identity_terms("BASF SE", "BASF")
     assert terms == ["BASF SE", "BASF"]
+
+
+def test_de_suffix_six_char_single_token_remainder_kept():
+    # Exactly 6 chars, single token -> kept (the >=6 char branch).
+    assert te.de_suffix("Avient SE") == "Avient"
+
+
+def test_de_suffix_five_char_single_token_remainder_suppressed():
+    # "Xenon" = 5 chars, single token -> suppressed despite a valid suffix.
+    assert te.de_suffix("Xenon Co") is None
+
+
+def test_de_suffix_multiword_remainder_kept_via_token_count():
+    # 3-token remainder satisfies the >=2 token branch regardless of length.
+    assert te.de_suffix("Avient Specialty Materials Corporation") == "Avient Specialty Materials"
+
+
+def test_de_suffix_empty_string_returns_none():
+    assert te.de_suffix("") is None
