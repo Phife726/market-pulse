@@ -252,7 +252,8 @@ def _build_request(*, zoominfo_company_id: int, page_size: int) -> tuple[dict, d
     }
     body = {
         "data": {
-            "type": "newsEnrichRequest",
+            # Documented JSON:API resource type; the live API requires "NewsEnrich".
+            "type": "NewsEnrich",
             "attributes": {
                 # Documented Enrich News identifier (companyId | companyName |
                 # companyWebsite). The undocumented zoominfoCompanyId returns 400.

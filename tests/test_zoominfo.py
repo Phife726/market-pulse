@@ -345,7 +345,8 @@ def test_request_uses_published_shape(monkeypatch):
     assert kwargs["params"] == {"page[number]": 1, "page[size]": 5}
 
     body = kwargs["json"]
-    assert body["data"]["type"] == "newsEnrichRequest"
+    assert body["data"]["type"] == "NewsEnrich"
+    assert "newsEnrichRequest" not in str(body)
     attrs = body["data"]["attributes"]
     assert attrs["companyId"] == 12345678
     assert attrs["categories"] == zoominfo_client.NEWS_SCOPES
