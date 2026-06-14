@@ -91,3 +91,20 @@ def test_enrich_company_error_on_403():
     with patch("zoominfo_client.requests.post", return_value=_err(403)):
         result = zoominfo_client.enrich_company(357374413)
     assert result == {"status": "error"}
+
+
+def test_enrich_company_error_on_transport_failure():
+    with patch(
+        "zoominfo_client.requests.post",
+        side_effect=requests.exceptions.ConnectionError("boom"),
+    ):
+        result = zoominfo_client.enrich_company(357374413)
+    assert result == {"status": "error"}
+
+
+def test_enrich_company_error_on_malformed_json():
+    resp = _ok({})
+    resp.json.side_effect = ValueError("no json")
+    with patch("zoominfo_client.requests.post", return_value=resp):
+        result = zoominfo_client.enrich_company(357374413)
+    assert result == {"status": "error"}
