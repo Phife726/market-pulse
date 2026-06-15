@@ -1,0 +1,125 @@
+# MACHINE-MANAGED by scripts/enrich_targets.py. Edit ONLY the human-curated
+# fields (manual_aliases, exclude_terms); the enricher preserves them.
+version: 1
+targets:
+  Avient:
+    target_key: Avient
+    metadata_record_status: active
+    zoominfo_company_id: 357374413
+    canonical_name: Avient
+    hq_revenue_range: '3281000'
+    employee_range: '9000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - Avient
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-06-15'
+    manual_aliases: []
+    exclude_terms: []
+  BASF:
+    target_key: BASF
+    metadata_record_status: active
+    zoominfo_company_id: 5670215
+    canonical_name: BASF
+    hq_revenue_range: '76299610'
+    employee_range: '111408'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Germany
+    hq_state: Rheinland-Pfalz
+    company_identity_terms:
+    - BASF
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-06-15'
+    manual_aliases: []
+    exclude_terms: []
+  Plastipak:
+    target_key: Plastipak
+    metadata_record_status: active
+    zoominfo_company_id: 95404609
+    canonical_name: Plastipak
+    hq_revenue_range: '2846378'
+    employee_range: '6000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Plastipak
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-06-15'
+    manual_aliases: []
+    exclude_terms: []
+  RTP Company:
+    target_key: RTP Company
+    metadata_record_status: active
+    zoominfo_company_id: 46383930
+    canonical_name: RTP Co
+    hq_revenue_range: '461671'
+    employee_range: '1700'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: Minnesota
+    company_identity_terms:
+    - RTP Co
+    - RTP Company
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-06-15'
+    manual_aliases:
+    - RTP Co
+    - RTP Company
+    exclude_terms:
+    - real-time payments
+    - RTP Network
+    - return to player
+    - casino
+    - slots
+    - Research Triangle Park
+    - RTP Global
+    - Rain Tree Photonics
+  SABIC:
+    target_key: SABIC
+    metadata_record_status: active
+    zoominfo_company_id: 98664698
+    canonical_name: SABIC
+    hq_revenue_range: '37154699'
+    employee_range: '33000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Saudi Arabia
+    hq_state: Ar Riyad
+    company_identity_terms:
+    - SABIC
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-06-15'
+    manual_aliases: []
+    exclude_terms: []
