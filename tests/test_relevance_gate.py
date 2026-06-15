@@ -2,7 +2,7 @@
 (loader tests use tmp_path)."""
 import pytest
 
-from relevance_gate import GateDecision, evaluate
+from relevance_gate import GateDecision, evaluate, load_target_metadata
 
 
 RTP_RECORD = {
@@ -103,3 +103,33 @@ def test_gate_decision_is_frozen():
     d = GateDecision(drop=False)
     with pytest.raises(dataclasses.FrozenInstanceError):
         d.drop = True  # frozen dataclass
+
+
+def test_load_target_metadata_reads_targets(tmp_path):
+    p = tmp_path / "target_metadata.yaml"
+    p.write_text(
+        "version: 1\n"
+        "targets:\n"
+        "  RTP Company:\n"
+        "    metadata_record_status: active\n"
+        "    canonical_name: RTP Co\n"
+    )
+    data = load_target_metadata(str(p))
+    assert "RTP Company" in data
+    assert data["RTP Company"]["canonical_name"] == "RTP Co"
+
+
+def test_load_target_metadata_missing_file_returns_empty():
+    assert load_target_metadata("/nonexistent/target_metadata.yaml") == {}
+
+
+def test_load_target_metadata_bad_yaml_returns_empty(tmp_path):
+    p = tmp_path / "bad.yaml"
+    p.write_text("targets: [unbalanced\n")
+    assert load_target_metadata(str(p)) == {}
+
+
+def test_load_target_metadata_no_targets_key_returns_empty(tmp_path):
+    p = tmp_path / "empty.yaml"
+    p.write_text("version: 1\n")
+    assert load_target_metadata(str(p)) == {}
