@@ -1240,6 +1240,9 @@ def test_pipeline_gate_drops_false_positive_before_scrape(monkeypatch, tmp_path,
     assert captured == []          # nothing stored
     assert scraped == []           # dropped BEFORE scrape
     assert "RELEVANCE_GATE drop" in caplog.text
+    # The end-of-run yield line proves the counter incremented (and the
+    # _log_provider_yield format surfaces the non-zero value).
+    assert "relevance_dropped=1" in caplog.text
 
 
 def test_pipeline_gate_keeps_identity_rescue(monkeypatch, tmp_path):
