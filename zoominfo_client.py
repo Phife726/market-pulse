@@ -93,6 +93,15 @@ def _search_endpoint() -> str:
     return os.environ.get("ZOOMINFO_SEARCH_ENDPOINT", "").strip() or _DEFAULT_SEARCH_ENDPOINT
 
 
+# Verified live 2026-06-14 (company_id 357374413 / Avient): the exact Company
+# Enrich `outputFields` tokens that returned populated attributes. The endpoint
+# requires this list — without it the call 400s. Keep in sync with the response
+# field names target_enricher.extract_firmographics maps.
+_ENRICH_OUTPUT_FIELDS = [
+    "name", "revenue", "employeeCount", "primaryIndustry",
+    "industries", "country", "state",
+]
+
 # Candidate keys ZoomInfo may use for a company id / name in search + enrich bodies.
 _COMPANY_ID_KEYS = ("id", "companyId", "zoominfoCompanyId", "company_id")
 _COMPANY_NAME_KEYS = ("name", "companyName", "canonicalName")  # reserved for enrich_company body builder / firmographics extraction
@@ -328,22 +337,19 @@ def enrich_company(company_id: int) -> dict:
     if not token:
         return {"status": "error"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    # NOTE (verification obligation, REQUIRED before live use): POST + path are
-    # doc-verified, and ZoomInfo's docs confirm the Enrich Companies API selects
-    # returned fields via a REQUIRED `outputFields` list — without it a live,
-    # entitled call can return a company with NONE of the firmographics this
-    # utility populates (revenue, employees, industry, HQ). The exact
-    # `outputFields` token spellings are account-specific and only enumerable via
-    # the authenticated Lookup Enrich endpoint (filter[entity]=company &
-    # filter[fieldType]=output) / "Try It!" explorer, so they are deliberately
-    # NOT guessed here. This PR adds the keys-only structural log + sanitized 400
-    # diagnostic below so an entitled live smoke can capture the exact tokens;
-    # the follow-up PR adds `outputFields` with the verified spellings. Until
-    # then, target_enricher gates `verified` on a populated canonical_name, so a
-    # sparse Enrich response is recorded as `missing`, never a misleading
-    # `verified`.
-    body = {"data": {"type": "CompanyEnrich",
-                     "attributes": {"companyId": company_id}}}
+    # VERIFIED LIVE 2026-06-14 (company_id 357374413 / Avient) via the smoke probe
+    # (scripts/probe_company_enrich.py). The GTM Company Enrich endpoint:
+    #   - identifies records by a `matchCompanyInput` LIST (singular `companyId`
+    #     and plural `companyIds` under data.attributes both return 400), and
+    #   - REQUIRES an `outputFields` list (omitting it returns 400 "Missing
+    #     required field 'outputfields'"); the camelCase `outputFields` key with
+    #     the tokens below produced the 200.
+    # target_enricher still gates `verified` on a populated canonical_name, so a
+    # sparse response is recorded as `missing`, never a misleading `verified`.
+    body = {"data": {"type": "CompanyEnrich", "attributes": {
+        "matchCompanyInput": [{"companyId": company_id}],
+        "outputFields": _ENRICH_OUTPUT_FIELDS,
+    }}}
     context = f"enrich(company_id={company_id})"
     try:
         response = requests.post(

@@ -83,6 +83,56 @@ def test_enrich_company_returns_raw_company_on_success():
     assert result["company"]["revenueRange"] == "$1B - $5B"
 
 
+# ── Verified request shape (live 2026-06-14, company_id 357374413 / Avient) ────
+# Probe result: matchCompanyInput[] + outputFields produced a 200; the singular
+# companyId and plural companyIds shapes returned 400. These tests lock the
+# verified body so a regression can't silently revert to the rejected shape.
+
+def test_enrich_company_sends_matchcompanyinput_identifier():
+    payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
+    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+        zoominfo_client.enrich_company(357374413)
+    attrs = m.call_args.kwargs["json"]["data"]["attributes"]
+    assert m.call_args.kwargs["json"]["data"]["type"] == "CompanyEnrich"
+    assert attrs["matchCompanyInput"] == [{"companyId": 357374413}]
+
+
+def test_enrich_company_no_longer_sends_rejected_shapes():
+    payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
+    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+        zoominfo_client.enrich_company(357374413)
+    attrs = m.call_args.kwargs["json"]["data"]["attributes"]
+    # The two live-rejected (400) identifier shapes must be gone.
+    assert "companyId" not in attrs
+    assert "companyIds" not in attrs
+
+
+def test_enrich_company_requests_verified_output_fields():
+    payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
+    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+        zoominfo_client.enrich_company(357374413)
+    attrs = m.call_args.kwargs["json"]["data"]["attributes"]
+    assert attrs["outputFields"] == [
+        "name", "revenue", "employeeCount", "primaryIndustry",
+        "industries", "country", "state",
+    ]
+
+
+def test_enrich_company_parses_first_item_attributes_from_data_list():
+    # The verified 200 shape: top-level data is a list of JSON:API resource
+    # objects; firmographics live under the first item's attributes.
+    payload = {"data": [{
+        "type": "CompanyEnrich", "id": "357374413", "meta": {},
+        "attributes": {"name": "Avient Corporation", "revenue": 3600000,
+                       "industries": ["Plastics & Rubber Manufacturing"]},
+    }]}
+    with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+        result = zoominfo_client.enrich_company(357374413)
+    assert result["status"] == "ok"
+    assert result["company"]["name"] == "Avient Corporation"
+    assert result["company"]["revenue"] == 3600000
+
+
 def test_enrich_company_empty_when_no_company():
     with patch("zoominfo_client.requests.post", return_value=_ok({"data": []})):
         result = zoominfo_client.enrich_company(999)

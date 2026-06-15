@@ -125,14 +125,58 @@ def _first_value(item: dict, keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _list_value(item: dict, keys: tuple[str, ...]) -> list[str]:
-    """First list/string among keys, normalised to a list of non-empty strings."""
+def _coerce_industry(value: object) -> str:
+    """Coerce one industry value to a clean label string.
+
+    Live GTM Company Enrich returns industry fields as objects (``{"id":...,
+    "name":...}``) or lists of them, not bare strings — so a plain str-or-number
+    extractor yields "" even when the key is present. Handles str / number /
+    ``{"name": ...}`` object / list-of-(str|object); returns "" if unparseable.
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("name", "industry", "label", "value"):
+            inner = value.get(key)
+            if isinstance(inner, str) and inner.strip():
+                return inner.strip()
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            coerced = _coerce_industry(item)
+            if coerced:
+                return coerced
+    return ""
+
+
+def _primary_industry_value(item: dict, keys: tuple[str, ...]) -> str:
+    """First non-empty industry label among *keys*, object/list-aware."""
+    for key in keys:
+        coerced = _coerce_industry(item.get(key))
+        if coerced:
+            return coerced
+    return ""
+
+
+def _industries_value(item: dict, keys: tuple[str, ...]) -> list[str]:
+    """Industry labels among *keys*, normalised to a deduped list of clean
+    strings. Each element is object/list-aware (see ``_coerce_industry``)."""
     for key in keys:
         value = item.get(key)
         if isinstance(value, list):
-            return [str(v).strip() for v in value if str(v).strip()]
-        if isinstance(value, str) and value.strip():
-            return [value.strip()]
+            out: list[str] = []
+            for element in value:
+                coerced = _coerce_industry(element)
+                if coerced and coerced not in out:
+                    out.append(coerced)
+            return out
+        coerced = _coerce_industry(value)
+        if coerced:
+            return [coerced]
     return []
 
 
@@ -144,8 +188,8 @@ def extract_firmographics(raw: dict) -> dict:
         "canonical_name": _first_value(raw, _CANONICAL_NAME_KEYS),
         "hq_revenue_range": _first_value(raw, _REVENUE_KEYS),
         "employee_range": _first_value(raw, _EMPLOYEE_KEYS),
-        "primary_industry": _first_value(raw, _PRIMARY_INDUSTRY_KEYS),
-        "industries": _list_value(raw, _INDUSTRIES_KEYS),
+        "primary_industry": _primary_industry_value(raw, _PRIMARY_INDUSTRY_KEYS),
+        "industries": _industries_value(raw, _INDUSTRIES_KEYS),
         "hq_country": _first_value(raw, _COUNTRY_KEYS),
         "hq_state": _first_value(raw, _STATE_KEYS),
     }
