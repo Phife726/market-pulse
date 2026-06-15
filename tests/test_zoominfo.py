@@ -1105,7 +1105,7 @@ def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, 
 
     assert (
         "Provider yield — zoominfo discovered=0 scraped=0 stored=0 "
-        "discards=0 scrape_failed=0 duplicates=0" in caplog.text
+        "discards=0 relevance_dropped=0 scrape_failed=0 duplicates=0" in caplog.text
     )
 
 
@@ -1140,3 +1140,142 @@ def test_execute_pipeline_omits_metadata_when_disabled(monkeypatch, tmp_path):
     assert "source_metadata" not in payload
     # Core fields still present.
     assert payload["headline"] == "Stored headline"
+
+
+# ---------------------------------------------------------------------------
+# Relevance gate wiring
+# ---------------------------------------------------------------------------
+
+_GATE_RTP_META = {
+    "Magna International": {
+        "metadata_record_status": "active",
+        "canonical_name": "Magna",
+        "company_identity_terms": ["Magna"],
+        "manual_aliases": [],
+        "exclude_terms": ["casino", "real-time payments"],
+    }
+}
+
+
+def _serper_like(title):
+    return {"url": "https://x/s", "title": title, "provider": "serper",
+            "description": "", "zoominfo_company_id": None, "raw": {}}
+
+
+def _zi_like(title, description=""):
+    return {"url": "https://x/z", "title": title, "provider": "zoominfo",
+            "description": description, "zoominfo_company_id": 12345678, "raw": {}}
+
+
+def test_gate_helper_ignores_serper_candidate():
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _serper_like("Casino night"), "Magna International", _GATE_RTP_META)
+    assert d is None
+
+
+def test_gate_helper_noop_when_metadata_empty():
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _zi_like("Casino night"), "Magna International", {})
+    assert d is None
+
+
+def test_gate_helper_noop_when_no_record_for_target():
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _zi_like("Casino night"), "Unknown Co", _GATE_RTP_META)
+    assert d is None
+
+
+def test_gate_helper_ignores_non_active_record():
+    meta = {"Magna International": dict(_GATE_RTP_META["Magna International"],
+                                       metadata_record_status="orphaned")}
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _zi_like("Casino night"), "Magna International", meta)
+    assert d is None
+
+
+def test_gate_helper_drops_exclude_without_rescue():
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _zi_like("Casino night downtown"), "Magna International", _GATE_RTP_META)
+    assert d is not None and d.drop is True
+    assert d.matched_exclude == "casino"
+
+
+def test_gate_helper_keeps_with_identity_rescue():
+    d = ingestion_engine._gate_zoominfo_candidate(
+        _zi_like("Magna opens near a casino"), "Magna International", _GATE_RTP_META)
+    assert d is not None and d.drop is False
+
+
+def _write_gate_metadata(tmp_path):
+    (tmp_path / "target_metadata.yaml").write_text(textwrap.dedent(
+        """\
+        version: 1
+        targets:
+          Magna International:
+            metadata_record_status: active
+            canonical_name: Magna
+            company_identity_terms:
+            - Magna
+            manual_aliases: []
+            exclude_terms:
+            - casino
+            - real-time payments
+        """
+    ))
+
+
+def test_pipeline_gate_drops_false_positive_before_scrape(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
+    captured: list[dict] = []
+    scraped: list[str] = []
+    candidate = _zi_like("Casino jackpot hits record", "real-time payments rollout")
+    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
+    monkeypatch.setattr(ingestion_engine, "scrape_article",
+                        lambda url, mn: scraped.append(url) or "body")
+    _write_gate_metadata(tmp_path)
+
+    with caplog.at_level("INFO"):
+        ingestion_engine.execute_pipeline()
+
+    assert captured == []          # nothing stored
+    assert scraped == []           # dropped BEFORE scrape
+    assert "RELEVANCE_GATE drop" in caplog.text
+    # The end-of-run yield line proves the counter incremented (and the
+    # _log_provider_yield format surfaces the non-zero value).
+    assert "relevance_dropped=1" in caplog.text
+
+
+def test_pipeline_gate_keeps_identity_rescue(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
+    captured: list[dict] = []
+    candidate = _zi_like("Magna expansion near casino district", "")
+    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
+    _write_gate_metadata(tmp_path)
+
+    ingestion_engine.execute_pipeline()
+
+    assert len(captured) == 1      # identity rescue -> stored despite "casino"
+
+
+def test_pipeline_gate_off_is_noop(monkeypatch, tmp_path):
+    monkeypatch.delenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", raising=False)
+    captured: list[dict] = []
+    candidate = _zi_like("Casino jackpot hits record", "real-time payments rollout")
+    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
+    _write_gate_metadata(tmp_path)
+
+    ingestion_engine.execute_pipeline()
+
+    assert len(captured) == 1      # gate disabled -> false positive still stored
+
+
+def test_pipeline_gate_never_gates_serper(monkeypatch, tmp_path):
+    monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
+    captured: list[dict] = []
+    candidate = _serper_like("Casino jackpot hits record")
+    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
+    _write_gate_metadata(tmp_path)
+
+    ingestion_engine.execute_pipeline()
+
+    assert len(captured) == 1      # serper is never gated

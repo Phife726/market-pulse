@@ -37,7 +37,7 @@ Two GitHub Actions workflows exist:
 
 The pipeline is two sequential scripts sharing a Supabase database, plus two pure modules — one owning suppression accounting and one owning every database call:
 
-**`suppression_ledger.py`** — Pure in-process module owning the suppression reason taxonomy (4 ingestion-owned + 9 delivery-owned codes), `SAMPLES_CAP = 10`, and the same-day-retry merge semantics. Used by both engines; performs zero I/O.
+**`suppression_ledger.py`** — Pure in-process module owning the suppression reason taxonomy (5 ingestion-owned + 9 delivery-owned codes), `SAMPLES_CAP = 10`, and the same-day-retry merge semantics. Used by both engines; performs zero I/O.
 
 **`daily_intelligence_repo.py`** — Single seam for every Supabase query the pipeline makes. One Protocol (`IntelligenceRepo`), two adapters (`SupabaseIntelligenceRepo` for prod, `InMemoryIntelligenceRepo` for tests). Reads swallow exceptions and return an empty sentinel; writes raise so silent write failures crash the cron loudly. Callers do `from daily_intelligence_repo import _repo` and call `_repo()`; tests inject the fake at the consumer module — e.g. `monkeypatch.setattr("delivery_engine._repo", lambda: fake)`. The repo does not know about `SuppressionLedger` — the same-day-retry merge for delivery counts lives in `delivery_engine._update_delivery_summary_counts`.
 

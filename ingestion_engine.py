@@ -12,6 +12,7 @@ from typing import Optional
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 import zoominfo_client
+import relevance_gate
 
 import requests
 import yaml
@@ -311,6 +312,29 @@ def _zoominfo_news_enabled() -> bool:
     return os.environ.get("ZOOMINFO_NEWS_ENABLED", "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
+def _relevance_gate_enabled() -> bool:
+    """True when ZOOMINFO_RELEVANCE_GATE_ENABLED is a recognised truthy value.
+    Default off — production behavior is unchanged until explicitly enabled."""
+    return os.environ.get("ZOOMINFO_RELEVANCE_GATE_ENABLED", "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def _gate_zoominfo_candidate(candidate: dict, entity_name: str,
+                             target_metadata: dict) -> Optional[relevance_gate.GateDecision]:
+    """Evaluate the relevance gate for one candidate, or return None when the
+    gate does not apply (non-ZoomInfo provider, gate disabled / empty metadata,
+    no record for the target, or a non-active record). Never raises."""
+    if candidate.get("provider") != "zoominfo" or not target_metadata:
+        return None
+    record = target_metadata.get(entity_name)
+    if not record or record.get("metadata_record_status") != "active":
+        return None
+    return relevance_gate.evaluate(
+        title=candidate.get("title", ""),
+        description=candidate.get("description", ""),
+        record=record,
+    )
+
+
 def _env_int(name: str, default: int) -> int:
     """Read an integer env var, falling back to *default* (with a warning) on
     missing or non-integer values."""
@@ -353,7 +377,7 @@ def _discovery_metadata(candidate: dict) -> dict:
 def _new_provider_yield() -> dict:
     return {
         "discovered": 0, "scraped": 0, "stored": 0,
-        "discards": 0, "scrape_failed": 0, "duplicates": 0,
+        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0, "duplicates": 0,
     }
 
 
@@ -363,9 +387,9 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         y = provider_yield[provider]
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
-            "discards=%d scrape_failed=%d duplicates=%d",
+            "discards=%d relevance_dropped=%d scrape_failed=%d duplicates=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
-            y["discards"], y["scrape_failed"], y["duplicates"],
+            y["discards"], y["relevance_dropped"], y["scrape_failed"], y["duplicates"],
         )
 
 
@@ -911,6 +935,10 @@ def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
 def execute_pipeline() -> None:
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
+    target_metadata = (
+        relevance_gate.load_target_metadata("target_metadata.yaml")
+        if _relevance_gate_enabled() else {}
+    )
     seen_headlines: set[str] = _hydrate_seen_headlines()
     scrapes_attempted = 0
     stats = {
@@ -1000,6 +1028,18 @@ def execute_pipeline() -> None:
                 _bump(provider, "duplicates")
                 suppression_ledger = suppression_ledger.record(
                     "semantic_duplicate", url=raw_url, title=candidate_title,
+                )
+                continue
+
+            gate_decision = _gate_zoominfo_candidate(candidate, entity_name, target_metadata)
+            if gate_decision is not None and gate_decision.drop:
+                logger.info(
+                    "RELEVANCE_GATE drop (%s): exclude=%r no identity rescue | %s",
+                    provider, gate_decision.matched_exclude, normalized,
+                )
+                _bump(provider, "relevance_dropped")
+                suppression_ledger = suppression_ledger.record(
+                    gate_decision.reason, url=raw_url, title=candidate_title,
                 )
                 continue
 
