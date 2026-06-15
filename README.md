@@ -116,6 +116,11 @@ conservative helper terms for a future relevance gate.
 **Daily ingestion never runs this.** Ingestion consumes the checked-in, reviewed
 `target_metadata.yaml` only; enrichment is an offline, human-in-the-loop step.
 
+**Current state.** `target_metadata.yaml` holds reviewed metadata for the first
+five ZoomInfo-backed entity targets (Avient, BASF, SABIC, RTP Company, Plastipak),
+generated from the live-verified Company Enrich path and curated by hand. The
+future relevance gate will consume it; daily ingestion still does not enrich live.
+
 ```bash
 # Dry-run (default): prints a unified diff, writes nothing
 python scripts/enrich_targets.py
