@@ -14,7 +14,7 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 4
+    assert len(INGESTION_CODES) == 5
     assert len(DELIVERY_CODES) == 9
 
 
@@ -291,3 +291,18 @@ def test_to_row_then_from_row_roundtrip():
             .record_count("below_impact_threshold", 4))
     led2 = SuppressionLedger.from_row("delivery", led1.to_row())
     assert led1 == led2
+
+
+def test_zoominfo_company_mismatch_is_ingestion_owned():
+    assert side_of("zoominfo_company_mismatch") == "ingestion"
+    assert label_for("zoominfo_company_mismatch") == "ZoomInfo company mismatch"
+    led = SuppressionLedger.for_ingestion().record(
+        "zoominfo_company_mismatch", url="https://x/1", title="T1",
+    )
+    assert led.breakdown == {"zoominfo_company_mismatch": 1}
+
+
+def test_zoominfo_company_mismatch_rejected_on_delivery_ledger():
+    led = SuppressionLedger.for_delivery()
+    with pytest.raises(ValueError, match="not owned by delivery"):
+        led.record("zoominfo_company_mismatch", url="u", title="t")

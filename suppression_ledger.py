@@ -8,10 +8,11 @@ Side = Literal["ingestion", "delivery"]
 SAMPLES_CAP: int = 10
 
 _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
-    ("duplicate_url",      "duplicate URL"),
-    ("semantic_duplicate", "semantic duplicate"),
-    ("llm_discard",        "LLM discard"),
-    ("scrape_failed",      "scrape failed"),
+    ("duplicate_url",            "duplicate URL"),
+    ("semantic_duplicate",       "semantic duplicate"),
+    ("llm_discard",              "LLM discard"),
+    ("scrape_failed",            "scrape failed"),
+    ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
 _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("below_impact_threshold",              "below impact threshold"),
