@@ -98,5 +98,10 @@ def load_target_metadata(path: str = "target_metadata.yaml") -> dict:
             "relevance gate: could not load %s (%s) — gate disabled", path, exc
         )
         return {}
+    if not isinstance(data, dict):
+        # Syntactically valid YAML with a non-mapping root (e.g. a list or
+        # scalar from a bad edit) — treat as malformed and disable the gate
+        # rather than raising AttributeError on .get() and crashing ingestion.
+        return {}
     targets = data.get("targets")
     return targets if isinstance(targets, dict) else {}

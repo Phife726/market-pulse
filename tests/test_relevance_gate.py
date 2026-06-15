@@ -133,3 +133,16 @@ def test_load_target_metadata_no_targets_key_returns_empty(tmp_path):
     p = tmp_path / "empty.yaml"
     p.write_text("version: 1\n")
     assert load_target_metadata(str(p)) == {}
+
+
+def test_load_target_metadata_list_root_returns_empty(tmp_path):
+    # Valid YAML, non-mapping root: must disable the gate, not crash on .get().
+    p = tmp_path / "list.yaml"
+    p.write_text("- a\n- b\n")
+    assert load_target_metadata(str(p)) == {}
+
+
+def test_load_target_metadata_scalar_root_returns_empty(tmp_path):
+    p = tmp_path / "scalar.yaml"
+    p.write_text("just a string\n")
+    assert load_target_metadata(str(p)) == {}
