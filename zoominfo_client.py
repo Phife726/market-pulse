@@ -337,8 +337,8 @@ def enrich_company(company_id: int) -> dict:
     if not token:
         return {"status": "error"}
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    # VERIFIED LIVE 2026-06-14 (company_id 357374413 / Avient) via the smoke probe
-    # (scripts/probe_company_enrich.py). The GTM Company Enrich endpoint:
+    # VERIFIED LIVE 2026-06-14 (company_id 357374413 / Avient) via a now-removed
+    # request-schema probe run in the smoke workflow. The GTM Company Enrich endpoint:
     #   - identifies records by a `matchCompanyInput` LIST (singular `companyId`
     #     and plural `companyIds` under data.attributes both return 400), and
     #   - REQUIRES an `outputFields` list (omitting it returns 400 "Missing

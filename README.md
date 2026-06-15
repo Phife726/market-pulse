@@ -134,35 +134,28 @@ per-endpoint. When an endpoint returns 401/403/invalid-scope, the affected targe
 degrades to `zoominfo_metadata_status: error` (prior good data is preserved) and
 the run continues; it never crashes.
 
-**`outputFields` is required but not yet wired (schema confirmation pending).**
-ZoomInfo's docs confirm the Company Enrich endpoint selects returned firmographics
-via a required `outputFields` list — without it, an entitled call can return a
-company with none of the fields this utility populates. The exact token spellings
-are account-specific (enumerable only via the authenticated Lookup Enrich endpoint
-/ "Try It!" explorer), so they are **deliberately not guessed** in code. Until they
-are confirmed and added in a follow-up, a sparse Enrich response is recorded as
-`missing` (never a misleading `verified`), and the CLI logs a `WARNING` naming the
+**Company Enrich request shape (verified live).** The GTM Company Enrich endpoint
+identifies records by a `matchCompanyInput` list and **requires** an `outputFields`
+list; `enrich_company` sends both with the verified tokens (`name`, `revenue`,
+`employeeCount`, `primaryIndustry`, `industries`, `country`, `state`). Industry
+fields can come back as objects/lists, so `extract_firmographics` coerces them to
+clean labels. A sparse Enrich response (no `canonical_name`) is still recorded as
+`missing`, never a misleading `verified`, and the CLI logs a `WARNING` naming the
 target when an Enrich returns `ok` but sparse.
 
-**Next step — capture the live schema with an entitled run.** In the GitHub /
-approved environment that has ZoomInfo secrets, run a single-target smoke and
-capture the diagnostics this PR added:
+**Optional — preview a target before `--write`.** A manual GitHub Actions workflow,
+**ZoomInfo Metadata Enrich Dry-Run** (`.github/workflows/zoominfo_company_enrich_smoke.yml`),
+runs `enrich_targets.py --only <target>` inside Actions (where the ZoomInfo secrets
+live) as a dry-run — it writes nothing and only prints the proposed diff. Dispatch
+it from the Actions tab or:
 
 ```bash
-python scripts/enrich_targets.py --only "Avient"   # dry-run; writes nothing
+gh workflow run "ZoomInfo Metadata Enrich Dry-Run" -f target=Avient
 ```
 
-The client emits keys-only structural logs and a sanitized 400 snippet (no tokens,
-headers, request body, or firmographic values are ever logged). Record the
-following so the follow-up PR can wire the exact `outputFields` tokens:
-
-- HTTP **status code** of the Company Enrich call
-- the **safe error pointer/message** if it is a 400 (e.g. "Invalid field requested")
-- **top-level keys** of the response (`top_level_keys=...`)
-- **first data item keys** (`item_keys=...`)
-- **first attributes keys** (`attribute_keys=...`)
-- whether **`canonical_name` / `primary_industry` / `industries`** came back
-  populated (i.e. is the resulting status `verified`/`needs_review`, or `missing`?)
+The client logs are sanitized (keys-only structural summaries; a capped 400
+snippet) — no tokens, headers, request body, or firmographic values are ever
+logged.
 
 **Reviewing output.** Records carry `zoominfo_metadata_status`
 (`verified|needs_review|missing|error`) and `zoominfo_metadata_confidence`
