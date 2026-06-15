@@ -2599,6 +2599,22 @@ def test_render_qa_debug_section_uses_friendly_labels():
     assert "Enterprise / Cross-Segment" in html
 
 
+def test_render_qa_debug_section_includes_relevance_gate_drops():
+    """The ZoomInfo relevance-gate code must get a labeled breakdown row so its
+    count is visible during the test-pipeline validation run (not just folded
+    into the suppressed total)."""
+    from delivery_engine import _render_qa_debug_section
+    macro = {
+        "screened_count": 40,
+        "surfaced_count": 5,
+        "suppression_breakdown": {"zoominfo_company_mismatch": 3},
+        "suppression_samples": [],
+    }
+    html = _render_qa_debug_section(macro)
+    assert "ZoomInfo company mismatch" in html
+    assert ">3</td>" in html
+
+
 # ===========================================================================
 # PR #7 fix — idempotent suppression breakdown on same-day retries
 # ===========================================================================

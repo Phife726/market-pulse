@@ -422,6 +422,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     # Stable display order: ingestion-side first, then delivery-side.
     display_order = [
         "duplicate_url", "semantic_duplicate", "llm_discard", "scrape_failed",
+        "zoominfo_company_mismatch",
         "below_impact_threshold", "weak_relevance",
         "duplicate_headline", "semantic_duplicate_headline",
         "product_listing", "job_posting", "generic_market_report",
