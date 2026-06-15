@@ -127,6 +127,44 @@ def test_extract_firmographics_bool_employee_count_not_coerced():
     assert firmo["employee_range"] == ""
 
 
+# ── primaryIndustry / industries may arrive as objects or lists-of-objects ─────
+# Live GTM Company Enrich returned the primaryIndustry key but the scalar mapper
+# yielded "" (probe: primary_industry populated False), implying a non-string
+# shape. These pin the defensive handling for str / dict / list-of-(str|dict).
+
+def test_primary_industry_as_object_uses_name():
+    raw = {"primaryIndustry": {"id": 123, "name": "Plastics & Rubber Manufacturing"}}
+    assert te.extract_firmographics(raw)["primary_industry"] == "Plastics & Rubber Manufacturing"
+
+
+def test_primary_industry_as_list_of_objects_uses_first_name():
+    raw = {"primaryIndustry": [{"name": "Chemicals Manufacturing"}]}
+    assert te.extract_firmographics(raw)["primary_industry"] == "Chemicals Manufacturing"
+
+
+def test_primary_industry_as_plain_string_still_works():
+    raw = {"primaryIndustry": "Plastics & Rubber Manufacturing"}
+    assert te.extract_firmographics(raw)["primary_industry"] == "Plastics & Rubber Manufacturing"
+
+
+def test_primary_industry_empty_object_stays_blank():
+    raw = {"primaryIndustry": {"id": 5}}  # no name -> unparseable -> blank
+    assert te.extract_firmographics(raw)["primary_industry"] == ""
+
+
+def test_industries_as_list_of_objects_extracts_names():
+    raw = {"industries": [{"id": 1, "name": "Plastics & Rubber Manufacturing"},
+                          {"name": "Chemicals Manufacturing"}]}
+    assert te.extract_firmographics(raw)["industries"] == [
+        "Plastics & Rubber Manufacturing", "Chemicals Manufacturing"]
+
+
+def test_industries_as_list_of_strings_still_works():
+    raw = {"industries": ["Plastics & Rubber Manufacturing", "Chemicals Manufacturing"]}
+    assert te.extract_firmographics(raw)["industries"] == [
+        "Plastics & Rubber Manufacturing", "Chemicals Manufacturing"]
+
+
 _ENRICH_OK = {"status": "ok", "company": {
     "name": "Avient Corporation", "revenueRange": "$1B - $5B",
     "employeeCount": 9000, "primaryIndustry": "Plastics & Rubber Manufacturing",
