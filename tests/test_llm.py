@@ -96,6 +96,18 @@ def test_openai_llm_returns_none_on_transport_error():
     assert result is None
 
 
+def test_openai_llm_returns_none_on_malformed_envelope():
+    # Request succeeds but the response envelope is malformed (empty choices) —
+    # must map to None, not raise out of complete_json.
+    client = MagicMock()
+    completion = MagicMock()
+    completion.choices = []
+    client.chat.completions.create.return_value = completion
+    adapter = OpenAILLM()
+    with patch.object(adapter, "_get_client", return_value=client):
+        assert adapter.complete_json(system="sys", user="usr") is None
+
+
 def test_openai_llm_returns_none_on_empty_content():
     adapter = OpenAILLM()
     with patch.object(adapter, "_get_client", return_value=_client_returning(None)):
