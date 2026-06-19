@@ -3248,3 +3248,149 @@ def test_validate_bullets_rejects_wrong_label_order():
         {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
     ]
     assert _validate_executive_bullets(raw, frozenset()) is None
+
+
+from delivery_engine import (
+    _safe_http_url,
+    _citation_display_map,
+    _render_executive_bullets,
+    _render_sources_footer,
+)
+
+
+def _src(id, headline="H", url="https://x.com/a", domain="x.com"):
+    return {"id": id, "headline": headline, "url": url, "domain": domain,
+            "segment": "Auto", "score": 7}
+
+
+def test_safe_http_url_allows_http_and_https():
+    assert _safe_http_url("https://x.com/a") == "https://x.com/a"
+    assert _safe_http_url("http://x.com/a") == "http://x.com/a"
+
+
+def test_safe_http_url_rejects_other_schemes():
+    assert _safe_http_url("javascript:alert(1)") == ""
+    assert _safe_http_url("data:text/html,x") == ""
+    assert _safe_http_url("") == ""
+    assert _safe_http_url(None) == ""
+
+
+def test_citation_display_map_renumbers_by_first_appearance():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 8]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [8, 2]},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [_src(5), _src(8), _src(2)]
+    assert _citation_display_map(bullets, sources) == {5: 1, 8: 2, 2: 3}
+
+
+def test_citation_display_map_ignores_ids_without_a_source():
+    bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 99]}]
+    assert _citation_display_map(bullets, [_src(5)]) == {5: 1}
+
+
+def test_render_bullets_inline_citation_is_grouped_and_linked():
+    bullets = [
+        {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [5, 8]},
+        {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+    ]
+    sources = [_src(5, url="https://a.com/x"), _src(8, url="https://b.com/y")]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert "Pricing firm." in html_out
+    assert 'href="https://a.com/x"' in html_out
+    assert 'title="https://a.com/x"' in html_out
+    assert ">1</a>" in html_out and ">2</a>" in html_out
+    # Grouped: a comma separates the two numbers, enclosed in brackets.
+    assert "[" in html_out and ", " in html_out and "]" in html_out
+
+
+def test_render_bullets_no_citation_when_empty():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    html_out = _render_executive_bullets(bullets, [], {})
+    assert "<a" not in html_out
+
+
+def test_render_bullets_escapes_malicious_url_and_headline():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [1]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    # javascript: scheme must be dropped -> number rendered as plain text, no href.
+    sources = [_src(1, url="javascript:alert(1)")]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert "javascript:alert(1)" not in html_out
+    assert "href=" not in html_out
+    assert ">1<" in html_out or "[1]" in html_out  # number still shown, just unlinked
+
+
+def test_render_sources_footer_orders_and_escapes():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [8, 5]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [
+        _src(5, headline="Resin <b>up</b>", url="https://a.com/x", domain="a.com"),
+        _src(8, headline="Freight", url="https://b.com/y", domain="b.com"),
+    ]
+    dmap = _citation_display_map(bullets, sources)
+    footer = _render_sources_footer(sources, dmap)
+    # Display order follows first appearance: 8 -> [1], 5 -> [2].
+    assert footer.index("Freight") < footer.index("Resin")
+    assert "b.com" in footer and "a.com" in footer
+    assert "<b>up</b>" not in footer        # escaped
+    assert "&lt;b&gt;up&lt;/b&gt;" in footer
+
+
+def test_render_sources_footer_empty_when_no_citations():
+    assert _render_sources_footer([], {}) == ""
+
+
+def test_render_sources_footer_handles_missing_url_gracefully():
+    bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [1]}]
+    sources = [_src(1, headline="", url="", domain="")]
+    dmap = _citation_display_map(bullets, sources)
+    footer = _render_sources_footer(sources, dmap)
+    assert footer != ""               # does not crash, still renders a row
+    assert "href=" not in footer      # no valid URL -> unlinked
+
+
+def test_render_bullets_escapes_html_metacharacters_in_body():
+    bullets = [
+        {"label": "Market pressure", "body": "Margins fell <5% as AT&T cut orders.",
+         "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    html_out = _render_executive_bullets(bullets, [], {})
+    assert "<5%" not in html_out
+    assert "&lt;5%" in html_out
+    assert "AT&amp;T" in html_out
+
+
+def test_render_marker_mixes_linked_and_unlinked_by_url_safety():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [1, 2]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [
+        _src(1, url="javascript:alert(1)"),   # unsafe -> plain text [1]
+        _src(2, url="https://safe.com/y"),     # safe -> linked [2]
+    ]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert 'href="https://safe.com/y"' in html_out   # id 2 linked
+    assert ">2</a>" in html_out
+    assert "javascript:alert(1)" not in html_out      # id 1 not linked
+    # id 1's display number 1 appears as plain text inside the marker, not as a link
+    assert ">1</a>" not in html_out
