@@ -729,6 +729,7 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         return ""
 
     bullets = macro_summary.get("executive_bullets")
+    sources = macro_summary.get("executive_sources") or []
     legacy_text = macro_summary.get("executive_summary") or ""
     condition = (
         macro_summary.get("dominant_condition")
@@ -736,8 +737,11 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         or ""
     )
 
+    footer_html = ""
     if bullets:
-        body_html = _render_executive_bullets(bullets)
+        display_map = _citation_display_map(bullets, sources)
+        body_html = _render_executive_bullets(bullets, sources, display_map)
+        footer_html = _render_sources_footer(sources, display_map)
     elif legacy_text:
         body_html = (
             f'<p style="margin:0;font-size:14px;color:#1a2a45;'
@@ -768,6 +772,7 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
                   Executive Summary{badge_html}
                 </p>
                 {body_html}
+                {footer_html}
               </td>
             </tr>
           </table>

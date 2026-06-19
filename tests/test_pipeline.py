@@ -3394,3 +3394,72 @@ def test_render_marker_mixes_linked_and_unlinked_by_url_safety():
     assert "javascript:alert(1)" not in html_out      # id 1 not linked
     # id 1's display number 1 appears as plain text inside the marker, not as a link
     assert ">1</a>" not in html_out
+
+
+from delivery_engine import _render_exec_summary
+
+
+def test_exec_summary_renders_inline_citations_and_footer():
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Resin prices climb", "url": "https://reuters.com/x",
+             "domain": "reuters.com", "segment": "Auto", "score": 8},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "Pricing firm." in html_out
+    assert 'href="https://reuters.com/x"' in html_out
+    assert "Sources" in html_out
+    assert "Resin prices climb" in html_out
+    assert "reuters.com" in html_out
+
+
+def test_exec_summary_legacy_row_renders_without_footer():
+    # Old row: bullets without citation_source_ids, no executive_sources.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action", "body": "C."},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "A." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+
+
+def test_exec_summary_prose_fallback_unchanged():
+    macro = {"executive_summary": "Prose summary.", "dominant_condition": "Low Signal"}
+    html_out = _render_exec_summary(macro)
+    assert "Prose summary." in html_out
+    assert "Sources" not in html_out
+
+
+def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
+    # executive_sources is non-empty, but no bullet cites any id -> empty display
+    # map -> no inline markers and no orphan Sources footer.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Unused", "url": "https://x.com/a",
+             "domain": "x.com", "segment": "Auto", "score": 7},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "A." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+    assert "Unused" not in html_out   # uncited source never leaks into output
