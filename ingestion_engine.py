@@ -658,6 +658,59 @@ _EXEC_BULLET_LABELS: tuple[str, ...] = (
     "Market pressure", "Supply chain watch", "Commercial action",
 )
 
+MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
+MAX_EXECUTIVE_BULLET_CITATIONS = 3
+
+
+def _source_domain(url: str) -> str:
+    """Registrable host minus a leading 'www.'; '' when unparseable/empty.
+
+    Uses urlparse().hostname so any :port is stripped and the host is lowercased.
+    """
+    try:
+        host = urlparse(url or "").hostname or ""
+    except (ValueError, TypeError):
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _rank_macro_articles(articles: list[dict]) -> list[dict]:
+    """Deterministic, capped ordering of citable articles.
+
+    Sort key: materiality desc, headline asc, url_hash asc. created_at is NOT
+    used — the in-memory stored-articles buffer does not carry it — but the key
+    is still fully deterministic, so the same article set always ranks the same.
+    """
+    ordered = sorted(
+        articles,
+        key=lambda a: (
+            -insight.effective_impact(a),
+            a.get("headline", "") or "",
+            a.get("url_hash", "") or "",
+        ),
+    )
+    return ordered[:MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES]
+
+
+def _build_macro_source_pack(ranked_articles: list[dict]) -> list[dict]:
+    """Number the already-ranked articles 1..N as the citable source pack.
+
+    Pass the output of _rank_macro_articles. Each entry:
+    {id, headline, url, domain, segment, score}.
+    """
+    pack: list[dict] = []
+    for i, a in enumerate(ranked_articles, start=1):
+        url = a.get("source_url", "") or ""
+        pack.append({
+            "id": i,
+            "headline": a.get("headline", "") or "",
+            "url": url,
+            "domain": _source_domain(url),
+            "segment": insight.commercial_segment(a),
+            "score": insight.effective_impact(a),
+        })
+    return pack
+
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
     user_prompt = (

@@ -3059,3 +3059,79 @@ def test_effective_impact_uses_default_when_both_scores_missing():
     row = {"headline": "test"}
     assert _effective_impact(row) == 5
     assert _alert_tier(row) == "ROUTINE"
+
+
+# ---------------------------------------------------------------------------
+# Source-pack builder (ingestion)
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import (
+    _build_macro_source_pack,
+    _rank_macro_articles,
+    MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES,
+)
+
+
+def _article(headline, *, score=5, url="https://example.com/a", url_hash="h", segment="Healthcare"):
+    return {
+        "headline": headline,
+        "americhem_impact_score": score,
+        "source_url": url,
+        "url_hash": url_hash,
+        "commercial_segment": segment,
+    }
+
+
+def test_source_pack_orders_by_materiality_then_headline_then_hash():
+    articles = [
+        _article("Bravo", score=5, url_hash="h2"),
+        _article("Alpha", score=9, url_hash="h1"),
+        _article("Charlie", score=5, url_hash="h0"),
+    ]
+    pack = _build_macro_source_pack(_rank_macro_articles(articles))
+    # Materiality 9 first; remaining two (score 5) tie-break by headline asc.
+    assert [s["headline"] for s in pack] == ["Alpha", "Bravo", "Charlie"]
+    assert [s["id"] for s in pack] == [1, 2, 3]
+
+
+def test_source_pack_is_deterministic_for_same_set():
+    articles = [_article(f"H{i}", score=i % 4, url_hash=f"h{i}") for i in range(10)]
+    a = _build_macro_source_pack(_rank_macro_articles(list(articles)))
+    b = _build_macro_source_pack(_rank_macro_articles(list(reversed(articles))))
+    assert [(s["id"], s["headline"]) for s in a] == [(s["id"], s["headline"]) for s in b]
+
+
+def test_source_pack_caps_at_max():
+    articles = [_article(f"H{i:02d}", score=5, url_hash=f"h{i:02d}") for i in range(60)]
+    pack = _build_macro_source_pack(_rank_macro_articles(articles))
+    assert len(pack) == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
+    assert pack[-1]["id"] == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
+
+
+def test_source_pack_entry_shape_and_domain():
+    pack = _build_macro_source_pack(_rank_macro_articles(
+        [_article("Alpha", url="https://www.Reuters.com/x", segment="Auto")]
+    ))
+    s = pack[0]
+    assert s == {
+        "id": 1,
+        "headline": "Alpha",
+        "url": "https://www.Reuters.com/x",
+        "domain": "reuters.com",
+        "segment": "Auto",
+        "score": 5,
+    }
+
+
+# ---------------------------------------------------------------------------
+# _source_domain — port-stripping, www-stripping, lowercasing
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import _source_domain
+
+
+def test_source_domain_strips_port_and_www_and_lowercases():
+    assert _source_domain("https://www.Reuters.com:443/x") == "reuters.com"
+    assert _source_domain("http://Example.com:8080/a?b=1") == "example.com"
+    assert _source_domain("") == ""
+    assert _source_domain(None) == ""
