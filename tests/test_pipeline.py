@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from llm import FakeLLM
+
 from ingestion_engine import (
     _TextExtractor,
     _scrape_fallback,
@@ -24,25 +26,14 @@ from ingestion_engine import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_openai_mock(sentiment_score: int | float) -> MagicMock:
-    content = json.dumps(
-        {
-            "headline": "Test Headline",
-            "americhem_impact": "Test impact on Americhem.",
-            "sentiment_score": sentiment_score,
-            "source_url": "https://news.com/article",
-            "entities_mentioned": ["Avient"],
-        }
-    )
-    mock_message = MagicMock()
-    mock_message.content = content
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
-    return mock_client
+def _make_openai_mock(sentiment_score: int | float) -> FakeLLM:
+    return FakeLLM(returns={
+        "headline": "Test Headline",
+        "americhem_impact": "Test impact on Americhem.",
+        "sentiment_score": sentiment_score,
+        "source_url": "https://news.com/article",
+        "entities_mentioned": ["Avient"],
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +72,7 @@ def test_compute_url_hash_collision():
     ],
 )
 def test_sentiment_clamp(raw_score: int, expected: int):
-    with patch("ingestion_engine._get_openai", return_value=_make_openai_mock(raw_score)):
+    with patch("ingestion_engine._llm", return_value=_make_openai_mock(raw_score)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -248,52 +239,30 @@ def test_discard_signal_detected():
 # 6. recommended_action soft default
 # ---------------------------------------------------------------------------
 
-def _make_openai_mock_no_action(sentiment_score: int) -> MagicMock:
-    content = json.dumps(
-        {
-            "headline": "Test Headline",
-            "americhem_impact": "Test impact on Americhem.",
-            "sentiment_score": sentiment_score,
-            "source_url": "https://news.com/article",
-            "entities_mentioned": ["Avient"],
-        }
-    )
-    mock_message = MagicMock()
-    mock_message.content = content
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
-    return mock_client
+def _make_openai_mock_no_action(sentiment_score: int) -> FakeLLM:
+    return FakeLLM(returns={
+        "headline": "Test Headline",
+        "americhem_impact": "Test impact on Americhem.",
+        "sentiment_score": sentiment_score,
+        "source_url": "https://news.com/article",
+        "entities_mentioned": ["Avient"],
+    })
 
 
-def _make_openai_mock_invalid_action(sentiment_score: int) -> MagicMock:
-    content = json.dumps(
-        {
-            "headline": "Test Headline",
-            "americhem_impact": "Test impact on Americhem.",
-            "sentiment_score": sentiment_score,
-            "recommended_action": "Do something weird",
-            "source_url": "https://news.com/article",
-            "entities_mentioned": ["Avient"],
-        }
-    )
-    mock_message = MagicMock()
-    mock_message.content = content
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
-    return mock_client
+def _make_openai_mock_invalid_action(sentiment_score: int) -> FakeLLM:
+    return FakeLLM(returns={
+        "headline": "Test Headline",
+        "americhem_impact": "Test impact on Americhem.",
+        "sentiment_score": sentiment_score,
+        "recommended_action": "Do something weird",
+        "source_url": "https://news.com/article",
+        "entities_mentioned": ["Avient"],
+    })
 
 
 @pytest.mark.parametrize("mock_fn", [_make_openai_mock_no_action, _make_openai_mock_invalid_action])
 def test_recommended_action_default(mock_fn):
-    with patch("ingestion_engine._get_openai", return_value=mock_fn(5)):
+    with patch("ingestion_engine._llm", return_value=mock_fn(5)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -309,7 +278,7 @@ def test_recommended_action_default(mock_fn):
 # ---------------------------------------------------------------------------
 
 def test_article_summary_default():
-    with patch("ingestion_engine._get_openai", return_value=_make_openai_mock(5)):
+    with patch("ingestion_engine._llm", return_value=_make_openai_mock(5)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -320,10 +289,12 @@ def test_article_summary_default():
     assert result["article_summary"] == ""
 
 
-def test_synthesize_insight_uses_gpt_5_4_nano():
-    mock_client = _make_openai_mock(5)
+def test_synthesize_insight_uses_low_temperature():
+    # Model + json-format are the adapter's contract (see test_llm.py); the caller
+    # owns the temperature it requests across the seam.
+    fake = _make_openai_mock(5)
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=fake):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -332,27 +303,21 @@ def test_synthesize_insight_uses_gpt_5_4_nano():
         )
 
     assert result is not None
-    _, kwargs = mock_client.chat.completions.create.call_args
-    assert kwargs["model"] == "gpt-5.4-nano"
+    assert fake.calls[-1]["temperature"] == 0.2
 
 
-def test_generate_macro_summary_uses_gpt_5_4_nano():
-    mock_message = MagicMock()
-    mock_message.content = json.dumps(
-        {
-            "executive_summary": "Summary text.",
-            "macro_sentiment": "Stable",
-        }
-    )
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
+def test_generate_macro_summary_uses_macro_temperature():
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Body."},
+            {"label": "Supply chain watch", "body": "Body."},
+            {"label": "Commercial action", "body": "Body."},
+        ],
+    })
     fake_repo = InMemoryIntelligenceRepo()
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client), \
+    with patch("ingestion_engine._llm", return_value=fake), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         result = generate_macro_summary(
             [
@@ -366,8 +331,7 @@ def test_generate_macro_summary_uses_gpt_5_4_nano():
         )
 
     assert result is True
-    _, kwargs = mock_client.chat.completions.create.call_args
-    assert kwargs["model"] == "gpt-5.4-nano"
+    assert fake.calls[-1]["temperature"] == 0.3
 
 
 # ---------------------------------------------------------------------------
@@ -376,8 +340,6 @@ def test_generate_macro_summary_uses_gpt_5_4_nano():
 
 from delivery_engine import (
     _render_card,
-    _get_openai as _delivery_get_openai,
-    OPENAI_MODEL as _DELIVERY_MODEL,
     synthesize_thematic_paragraphs,
     generate_html_email,
     _config_int,
@@ -397,7 +359,7 @@ def test_render_card_omits_article_summary():
         "recommended_action": "Monitor",
         "article_summary": "BASF announced a new plant in Germany.",
     }
-    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    html = _render_card(item)
     assert "BASF announced a new plant in Germany." not in html
 
 
@@ -608,42 +570,24 @@ def test_scrape_article_no_fallback_on_non_402_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 14. _render_card() — "Monitor" action suppression
+# 14. _render_card() — no ACTION line (deliberately dropped in the 2026-05-21
+#     commercial-brief redesign; recommended_action is a suppression override,
+#     not reader-facing copy)
 # ---------------------------------------------------------------------------
 
-def test_render_card_suppresses_monitor_action():
-    """Cards with recommended_action='Monitor' must NOT render the ACTION line."""
-    item = {
-        "headline": "Test Headline",
-        "source_url": "https://news.com/article",
-        "americhem_impact": "Some impact.",
-        "category": "competitors",
-        "sentiment_score": 5,
-        "source_publication": "Reuters",
-        "sentiment_rationale": "Neutral article.",
-        "recommended_action": "Monitor",
-        "article_summary": "",
-    }
-    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
-    assert "&#9654; ACTION:" not in html
-
-
-def test_render_card_shows_escalation_action():
-    """Cards with recommended_action='Escalate to leadership' MUST render the ACTION line."""
+@pytest.mark.parametrize("action", ["Monitor", "Escalate to leadership"])
+def test_render_card_never_renders_action_line(action):
+    """The shipped card shows no ACTION line for any recommended_action."""
     item = {
         "headline": "Plant fire halts BASF production",
         "source_url": "https://news.com/article",
         "americhem_impact": "Direct feedstock disruption risk.",
         "category": "suppliers",
         "sentiment_score": 2,
-        "source_publication": "Reuters",
-        "sentiment_rationale": "Severe supply disruption.",
-        "recommended_action": "Escalate to leadership",
-        "article_summary": "",
+        "recommended_action": action,
     }
-    html = _render_card(item, accent="#EF4444", bg="#FEF2F2", text="#B91C1C")
-    assert "&#9654; ACTION:" in html
-    assert "Escalate to leadership" in html
+    html = _render_card(item)
+    assert "ACTION:" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +618,7 @@ def test_render_card_excludes_article_summary():
         "sentiment_score": 5,
         "article_summary": "This is the article summary text.",
     }
-    html = _render_card(item, "#000000", "#ffffff", "#000000")
+    html = _render_card(item)
     assert "This is the article summary text." not in html
 
 
@@ -763,16 +707,8 @@ def _make_article(
 # Task 4 — synthesize_thematic_paragraphs
 # ---------------------------------------------------------------------------
 
-def _make_synthesis_mock(paragraphs: dict) -> MagicMock:
-    mock_message = MagicMock()
-    mock_message.content = json.dumps(paragraphs)
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
-    return mock_client
+def _make_synthesis_mock(paragraphs: dict) -> FakeLLM:
+    return FakeLLM(returns=paragraphs)
 
 
 def test_synthesize_thematic_paragraphs_returns_paragraphs():
@@ -786,70 +722,50 @@ def test_synthesize_thematic_paragraphs_returns_paragraphs():
     expected = {"competitors": "Avient and Techmer raised prices."}
     mock_client = _make_synthesis_mock(expected)
 
-    with patch("delivery_engine._get_openai", return_value=mock_client):
+    with patch("delivery_engine._llm", return_value=mock_client):
         result = synthesize_thematic_paragraphs(groups)
 
     assert result == expected
 
 
-def test_synthesize_thematic_paragraphs_uses_json_response_format():
-    """Must call OpenAI with response_format={'type': 'json_object'}."""
+def test_synthesize_thematic_paragraphs_passes_grouped_text_to_seam():
+    """The caller sends one request carrying the grouped category text."""
     groups = {
         "suppliers": [
             _make_article("a", 4, "suppliers"),
             _make_article("b", 5, "suppliers"),
         ]
     }
-    mock_client = _make_synthesis_mock({"suppliers": "Supply chain tightening."})
+    fake = _make_synthesis_mock({"suppliers": "Supply chain tightening."})
 
-    with patch("delivery_engine._get_openai", return_value=mock_client):
+    with patch("delivery_engine._llm", return_value=fake):
         synthesize_thematic_paragraphs(groups)
 
-    _, kwargs = mock_client.chat.completions.create.call_args
-    assert kwargs.get("response_format") == {"type": "json_object"}
-
-
-def test_synthesize_thematic_paragraphs_uses_openai_model():
-    """Must use OPENAI_MODEL constant, not a hardcoded string."""
-    from delivery_engine import OPENAI_MODEL
-    groups = {
-        "markets": [
-            _make_article("a", 6, "markets"),
-            _make_article("b", 6, "markets"),
-        ]
-    }
-    mock_client = _make_synthesis_mock({"markets": "Markets paragraph."})
-
-    with patch("delivery_engine._get_openai", return_value=mock_client):
-        synthesize_thematic_paragraphs(groups)
-
-    _, kwargs = mock_client.chat.completions.create.call_args
-    assert kwargs.get("model") == OPENAI_MODEL
+    assert len(fake.calls) == 1
+    assert "CATEGORY: suppliers" in fake.calls[-1]["user"]
 
 
 def test_synthesize_thematic_paragraphs_empty_groups():
-    """Returns {} immediately without calling OpenAI when groups is empty."""
-    mock_client = MagicMock()
+    """Returns {} immediately without touching the seam when groups is empty."""
+    fake = FakeLLM()
 
-    with patch("delivery_engine._get_openai", return_value=mock_client):
+    with patch("delivery_engine._llm", return_value=fake):
         result = synthesize_thematic_paragraphs({})
 
-    mock_client.chat.completions.create.assert_not_called()
+    assert fake.calls == []
     assert result == {}
 
 
 def test_synthesize_thematic_paragraphs_graceful_degradation():
-    """Returns {} and logs error when OpenAI raises — does not re-raise."""
+    """Returns {} when the seam yields no usable response — does not re-raise."""
     groups = {
         "competitors": [
             _make_article("a", 7, "competitors"),
             _make_article("b", 8, "competitors"),
         ]
     }
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.side_effect = Exception("API timeout")
-
-    with patch("delivery_engine._get_openai", return_value=mock_client):
+    # The seam swallows transport/parse failures and returns None.
+    with patch("delivery_engine._llm", return_value=FakeLLM(returns=None)):
         result = synthesize_thematic_paragraphs(groups)
 
     assert result == {}
@@ -871,7 +787,7 @@ def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
          "commercial_segment": "Enterprise / Cross-Segment"},
     ]
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
@@ -904,7 +820,7 @@ def test_generate_html_email_routes_two_plus_to_segment_watch(monkeypatch):
     ]
     mock_synth = _make_synthesis_mock({"Healthcare": "Synthesis paragraph here."})
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._get_openai", return_value=mock_synth), \
+    with patch("delivery_engine._llm", return_value=mock_synth), \
          patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
@@ -926,7 +842,7 @@ def test_generate_html_email_single_low_relevance_hidden_in_production(monkeypat
              "americhem_impact": ".", "source_url": "https://x/p",
              "entities_mentioned": ["Acme"]}]
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._repo", lambda: fake_repo), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(data)
@@ -1004,8 +920,8 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
 # Relevance upgrade — new field validation in synthesize_insight()
 # ===========================================================================
 
-def _make_openai_mock_with_fields(**overrides) -> MagicMock:
-    """Return an OpenAI mock that outputs a minimal valid insight plus overrides."""
+def _make_openai_mock_with_fields(**overrides) -> FakeLLM:
+    """Return a FakeLLM that outputs a minimal valid insight plus overrides."""
     base = {
         "headline": "Test Headline",
         "americhem_impact": "Direct impact on compounding margins.",
@@ -1018,16 +934,7 @@ def _make_openai_mock_with_fields(**overrides) -> MagicMock:
         "entities_mentioned": ["Avient"],
     }
     base.update(overrides)
-    content = json.dumps(base)
-    mock_message = MagicMock()
-    mock_message.content = content
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
-    return mock_client
+    return FakeLLM(returns=base)
 
 
 # ---------------------------------------------------------------------------
@@ -1038,7 +945,7 @@ def _make_openai_mock_with_fields(**overrides) -> MagicMock:
 def test_synthesize_insight_defaults_invalid_sentiment_tag(bad_tag):
     """Any invalid sentiment_tag must be replaced with 'Neutral'."""
     mock_client = _make_openai_mock_with_fields(sentiment_tag=bad_tag)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
             source_url="https://news.com/article",
@@ -1053,7 +960,7 @@ def test_synthesize_insight_defaults_invalid_sentiment_tag(bad_tag):
 def test_synthesize_insight_preserves_valid_sentiment_tag(valid_tag):
     """Valid sentiment_tag values must be preserved unchanged."""
     mock_client = _make_openai_mock_with_fields(sentiment_tag=valid_tag)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
             source_url="https://news.com/article",
@@ -1080,7 +987,7 @@ def test_synthesize_insight_preserves_valid_sentiment_tag(valid_tag):
 def test_impact_score_clamped(raw_impact, expected):
     """americhem_impact_score must be clamped to the 1–10 range."""
     mock_client = _make_openai_mock_with_fields(americhem_impact_score=raw_impact)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
             source_url="https://news.com/article",
@@ -1095,7 +1002,7 @@ def test_impact_score_clamped(raw_impact, expected):
 def test_impact_score_defaults_on_bad_value(bad_value):
     """Non-convertible or missing americhem_impact_score defaults to 5."""
     mock_client = _make_openai_mock_with_fields(americhem_impact_score=bad_value)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
             source_url="https://news.com/article",
@@ -1140,7 +1047,7 @@ def test_generate_html_email_filters_below_impact_threshold(monkeypatch):
     low_impact = _make_new_article("low", americhem_impact_score=3, headline="Low Impact Headline")
     high_impact = _make_new_article("high", americhem_impact_score=8, headline="High Impact Headline")
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email([low_impact, high_impact])
 
@@ -1159,7 +1066,7 @@ def test_generate_html_email_groups_by_commercial_segment(monkeypatch):
                               headline="FDA clears new medical-grade compound for implantable devices")
 
     mock_client = _make_synthesis_mock({"Healthcare": "Healthcare synthesis paragraph."})
-    with patch("delivery_engine._get_openai", return_value=mock_client), \
+    with patch("delivery_engine._llm", return_value=mock_client), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email([art_a, art_b])
 
@@ -1186,7 +1093,7 @@ def test_render_card_shows_impact_score_and_sentiment_tag():
         "recommended_action": "Flag to procurement",
         "category": "markets",
     }
-    html = _render_card(item, accent="#EF4444", bg="#FEF2F2", text="#B91C1C")
+    html = _render_card(item)
     assert "Impact: 8/10" in html
     assert "Negative" in html
     assert "Score:" not in html
@@ -1203,27 +1110,15 @@ def test_render_card_falls_back_to_sentiment_score_for_old_rows():
         "recommended_action": "Monitor",
         "category": "markets",
     }
-    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
+    html = _render_card(item)
     assert "Score: 6/10" in html
     assert "Impact:" not in html
 
 
-def test_render_card_segment_label_uses_commercial_segment():
-    """The card segment label must read from commercial_segment, not the legacy
-    strategic_segment field. A row carrying both must show commercial_segment."""
-    item = {
-        "headline": "Some Headline",
-        "source_url": "https://news.com/article",
-        "americhem_impact": "Impact.",
-        "americhem_impact_score": 7,
-        "sentiment_tag": "Neutral",
-        "commercial_segment": "Packaging",
-        "strategic_segment": "Healthcare",  # legacy ghost field — must be ignored
-        "category": "markets",
-    }
-    html = _render_card(item, accent="#1B3A6B", bg="#E8EDF5", text="#1B3A6B")
-    assert "PACKAGING" in html
-    assert "HEALTHCARE" not in html
+# Note: the card no longer carries an in-card segment badge — segment is the
+# block header in _render_segment_watch_section. Grouping by commercial_segment
+# (and ignoring the legacy strategic_segment field) is covered by
+# test_group_by_commercial_segment_keys_off_new_field and the insight tests.
 
 
 # ===========================================================================
@@ -1257,7 +1152,7 @@ def test_generate_html_email_per_segment_cap(monkeypatch):
             "max_total_visible_articles": 12,
         }
     }
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value=config):
         html = generate_html_email(articles)
 
@@ -1295,7 +1190,7 @@ def test_generate_html_email_total_articles_cap(monkeypatch):
             "max_total_visible_articles": 10,
         }
     }
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value=config):
         html = generate_html_email(articles)
 
@@ -1322,7 +1217,7 @@ def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
             "max_total_visible_articles": 12,
         }
     }
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value=config):
         html = generate_html_email(articles)
 
@@ -1348,7 +1243,7 @@ def test_generate_html_email_excludes_negative_low_impact_new_style(monkeypatch)
         sentiment_tag="Positive",
         headline="Positive High Impact Headline",
     )
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email([neg_low, pos_high])
 
@@ -1366,7 +1261,7 @@ def test_generate_html_email_shows_negative_high_impact(monkeypatch):
         commercial_segment="Raw Materials / Supply Chain",
         headline="Negative High Impact Supply Disruption",
     )
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email([neg_high])
 
@@ -1517,7 +1412,7 @@ def test_generate_html_email_test_mode_prefixes_header(monkeypatch):
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     data = [_make_new_article("h", 8, headline="Some Headline")]
-    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
         html = generate_html_email(data)
     assert "[TEST]" in html
     assert "TEST RUN" in html
@@ -1530,7 +1425,7 @@ def test_generate_html_email_production_mode_unchanged(monkeypatch):
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     data = [_make_new_article("h", 8, headline="Some Headline")]
-    with patch("delivery_engine._get_openai", return_value=MagicMock()):
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
         html = generate_html_email(data)
     assert "[TEST]" not in html
     assert "TEST RUN" not in html
@@ -1545,8 +1440,8 @@ def test_no_news_email_test_mode_marks_header(monkeypatch):
     assert "TEST RUN" in html
 
 
-def _make_openai_mock_with_new_fields(**overrides) -> MagicMock:
-    """OpenAI mock that returns the new-style per-article payload."""
+def _make_openai_mock_with_new_fields(**overrides) -> FakeLLM:
+    """FakeLLM that returns the new-style per-article payload."""
     base = {
         "headline": "Test Headline",
         "americhem_impact": "Direct effect on compounding margin.",
@@ -1560,12 +1455,7 @@ def _make_openai_mock_with_new_fields(**overrides) -> MagicMock:
         "entities_mentioned": ["Avient"],
     }
     base.update(overrides)
-    msg = MagicMock(); msg.content = json.dumps(base)
-    choice = MagicMock(); choice.message = msg
-    completion = MagicMock(); completion.choices = [choice]
-    client = MagicMock()
-    client.chat.completions.create.return_value = completion
-    return client
+    return FakeLLM(returns=base)
 
 
 @pytest.mark.parametrize(
@@ -1580,7 +1470,7 @@ def _make_openai_mock_with_new_fields(**overrides) -> MagicMock:
 )
 def test_synthesize_insight_preserves_valid_commercial_segment(valid_segment):
     mock = _make_openai_mock_with_new_fields(commercial_segment=valid_segment)
-    with patch("ingestion_engine._get_openai", return_value=mock):
+    with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert result["commercial_segment"] == valid_segment
@@ -1589,7 +1479,7 @@ def test_synthesize_insight_preserves_valid_commercial_segment(valid_segment):
 @pytest.mark.parametrize("bad_segment", [None, "", "  ", "NotASegment", 42])
 def test_synthesize_insight_defaults_invalid_commercial_segment(bad_segment):
     mock = _make_openai_mock_with_new_fields(commercial_segment=bad_segment)
-    with patch("ingestion_engine._get_openai", return_value=mock):
+    with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert result["commercial_segment"] == "Enterprise / Cross-Segment"
@@ -1602,7 +1492,7 @@ def test_synthesize_insight_defaults_invalid_commercial_segment(bad_segment):
 )
 def test_synthesize_insight_preserves_valid_signal_type(valid_signal):
     mock = _make_openai_mock_with_new_fields(signal_type=valid_signal)
-    with patch("ingestion_engine._get_openai", return_value=mock):
+    with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert result["signal_type"] == valid_signal
@@ -1611,7 +1501,7 @@ def test_synthesize_insight_preserves_valid_signal_type(valid_signal):
 @pytest.mark.parametrize("bad_signal", [None, "", "BAD", 42])
 def test_synthesize_insight_defaults_invalid_signal_type(bad_signal):
     mock = _make_openai_mock_with_new_fields(signal_type=bad_signal)
-    with patch("ingestion_engine._get_openai", return_value=mock):
+    with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert result["signal_type"] == "Other"
@@ -1620,7 +1510,7 @@ def test_synthesize_insight_defaults_invalid_signal_type(bad_signal):
 def test_synthesize_insight_drops_strategic_segment_field():
     """If the LLM still returns strategic_segment, it must not appear in the result."""
     mock = _make_openai_mock_with_new_fields(strategic_segment="LegacyValue")
-    with patch("ingestion_engine._get_openai", return_value=mock):
+    with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert "strategic_segment" not in result
@@ -1735,12 +1625,8 @@ def test_config_has_commercial_segments_and_signal_types():
 # Task 5 — structured macro summary (dominant_condition + executive_bullets)
 # ===========================================================================
 
-def _make_macro_mock(payload: dict) -> MagicMock:
-    msg = MagicMock(); msg.content = json.dumps(payload)
-    choice = MagicMock(); choice.message = msg
-    completion = MagicMock(); completion.choices = [choice]
-    client = MagicMock(); client.chat.completions.create.return_value = completion
-    return client
+def _make_macro_mock(payload: dict) -> FakeLLM:
+    return FakeLLM(returns=payload)
 
 
 def _make_articles(n: int) -> list[dict]:
@@ -1778,7 +1664,7 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         assert generate_macro_summary(_make_articles(5)) is True
     row = _capture_summary(fake_repo)
@@ -1800,7 +1686,7 @@ def test_generate_macro_summary_coerces_invalid_dominant_condition():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5))
     row = _capture_summary(fake_repo)
@@ -1817,7 +1703,7 @@ def test_generate_macro_summary_defaults_low_signal_when_few_articles():
         {"label": "Commercial action",  "body": "Anything."},
     ]}
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2))
     row = _capture_summary(fake_repo)
@@ -1835,7 +1721,7 @@ def test_generate_macro_summary_low_signal_coerces_action_body():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2))
     row = _capture_summary(fake_repo)
@@ -1861,7 +1747,7 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {"dominant_condition": "Mixed / Watch", "executive_bullets": bad_bullets}
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5))
     row = _capture_summary(fake_repo)
@@ -1890,7 +1776,7 @@ def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
             {"label": "Commercial action",  "body": "C."},
         ],
     }
-    with patch("ingestion_engine._get_openai", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(
             _make_articles(5),
@@ -2294,7 +2180,7 @@ def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value=config):
         generate_html_email(rows)
 
@@ -2338,7 +2224,7 @@ def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value=config):
         generate_html_email(rows)
 
@@ -2381,7 +2267,7 @@ def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatc
     fake.update_delivery_counts = spy_update
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         generate_html_email(rows)
 
@@ -2469,7 +2355,7 @@ def test_header_falls_back_to_len_data_when_screened_null(monkeypatch):
     ], "dominant_condition": "Competitive Pressure",
        "screened_count": None, "surfaced_count": None}
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2489,7 +2375,7 @@ def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
              "dominant_condition": None, "macro_sentiment": None,
              "screened_count": 5, "surfaced_count": 1}
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2533,7 +2419,7 @@ def test_qa_debug_section_appears_in_test_mode(monkeypatch):
         ],
     }
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2569,7 +2455,7 @@ def test_qa_debug_section_absent_in_production(monkeypatch):
                                  "title": "Pretty plastic tote"}],
     }
 
-    with patch("delivery_engine._get_openai", return_value=MagicMock()), \
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
          patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
         html = generate_html_email(rows, macro_summary=macro)
 
@@ -2800,28 +2686,19 @@ def test_macro_summary_system_prompt_contains_english_rule():
     """The macro-summary system prompt must include the English-output directive."""
     from ingestion_engine import generate_macro_summary
 
-    mock_message = MagicMock()
-    mock_message.content = json.dumps(
-        {
-            "dominant_condition": "Mixed / Watch",
-            "executive_bullets": [
-                {"label": "Market pressure", "body": "Stub bullet body."},
-                {"label": "Supply chain watch", "body": "Stub bullet body."},
-                {"label": "Commercial action", "body": "Stub bullet body."},
-            ],
-        }
-    )
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Stub bullet body."},
+            {"label": "Supply chain watch", "body": "Stub bullet body."},
+            {"label": "Commercial action", "body": "Stub bullet body."},
+        ],
+    })
 
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     fake_repo = InMemoryIntelligenceRepo()
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client), \
+    with patch("ingestion_engine._llm", return_value=fake), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(
             [
@@ -2834,21 +2711,12 @@ def test_macro_summary_system_prompt_contains_english_rule():
             ]
         )
 
-    _, kwargs = mock_client.chat.completions.create.call_args
-    system_message = kwargs["messages"][0]["content"]
-    _assert_english_anchors_present(system_message)
+    _assert_english_anchors_present(fake.calls[-1]["system"])
 
 
 def test_thematic_synthesis_system_prompt_contains_english_rule():
     """The thematic-synthesis system prompt must include the English-output directive."""
-    mock_message = MagicMock()
-    mock_message.content = json.dumps({"Healthcare": "Stub paragraph."})
-    mock_choice = MagicMock()
-    mock_choice.message = mock_message
-    mock_completion = MagicMock()
-    mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
+    fake = FakeLLM(returns={"Healthcare": "Stub paragraph."})
 
     stub_article = {
         "headline": "Stub headline",
@@ -2858,12 +2726,10 @@ def test_thematic_synthesis_system_prompt_contains_english_rule():
         "americhem_impact_score": 7,
     }
 
-    with patch("delivery_engine._get_openai", return_value=mock_client):
+    with patch("delivery_engine._llm", return_value=fake):
         synthesize_thematic_paragraphs({"Healthcare": [stub_article, stub_article]})
 
-    _, kwargs = mock_client.chat.completions.create.call_args
-    system_message = kwargs["messages"][0]["content"]
-    _assert_english_anchors_present(system_message)
+    _assert_english_anchors_present(fake.calls[-1]["system"])
 
 
 def test_synthesize_insight_non_english_body_keeps_english_directive():
@@ -2872,8 +2738,8 @@ def test_synthesize_insight_non_english_body_keeps_english_directive():
     body must be forwarded verbatim in the user prompt (no client-side translation)."""
     chinese_body = "中文测试文本 — Teknor Apex 推出含 70% PCR 的 Crealen R PP 汽车内饰再生材料。"
 
-    mock_client = _make_openai_mock(5)
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    fake = _make_openai_mock(5)
+    with patch("ingestion_engine._llm", return_value=fake):
         result = synthesize_insight(
             article_text=chinese_body,
             source_url="https://example.cn/article",
@@ -2882,9 +2748,8 @@ def test_synthesize_insight_non_english_body_keeps_english_directive():
         )
 
     assert result is not None
-    _, kwargs = mock_client.chat.completions.create.call_args
-    system_message = kwargs["messages"][0]["content"]
-    user_message = kwargs["messages"][1]["content"]
+    system_message = fake.calls[-1]["system"]
+    user_message = fake.calls[-1]["user"]
     _assert_english_anchors_present(system_message)
     assert chinese_body in user_message, (
         "Source-language article body should be forwarded verbatim to the LLM; "
@@ -2945,9 +2810,8 @@ def test_generate_macro_summary_routes_through_repo(monkeypatch):
     fake = InMemoryIntelligenceRepo()
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
 
-    # Mock OpenAI to return a valid macro summary JSON.
-    mock_message = MagicMock()
-    mock_message.content = json.dumps({
+    # Inject a FakeLLM returning a valid macro summary.
+    fake_llm = FakeLLM(returns={
         "dominant_condition": "Mixed / Watch",
         "executive_bullets": [
             {"label": "Market pressure", "body": "Some pressure body text."},
@@ -2955,12 +2819,8 @@ def test_generate_macro_summary_routes_through_repo(monkeypatch):
             {"label": "Commercial action", "body": "Some commercial text."},
         ],
     })
-    mock_choice = MagicMock(); mock_choice.message = mock_message
-    mock_completion = MagicMock(); mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=fake_llm):
         result = generate_macro_summary([
             {"category": "competitors", "headline": "x",
              "sentiment_score": 5, "americhem_impact": "y"}
@@ -2980,8 +2840,7 @@ def test_generate_macro_summary_propagates_repo_write_failure(monkeypatch):
     failing.upsert_summary.side_effect = RuntimeError("DB down")
     monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
 
-    mock_message = MagicMock()
-    mock_message.content = json.dumps({
+    fake_llm = FakeLLM(returns={
         "dominant_condition": "Mixed / Watch",
         "executive_bullets": [
             {"label": "Market pressure", "body": "x"},
@@ -2989,12 +2848,8 @@ def test_generate_macro_summary_propagates_repo_write_failure(monkeypatch):
             {"label": "Commercial action", "body": "z"},
         ],
     })
-    mock_choice = MagicMock(); mock_choice.message = mock_message
-    mock_completion = MagicMock(); mock_completion.choices = [mock_choice]
-    mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = mock_completion
 
-    with patch("ingestion_engine._get_openai", return_value=mock_client):
+    with patch("ingestion_engine._llm", return_value=fake_llm):
         with pytest.raises(RuntimeError, match="DB down"):
             generate_macro_summary([
                 {"category": "competitors", "headline": "x",
