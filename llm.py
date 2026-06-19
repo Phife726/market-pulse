@@ -93,10 +93,12 @@ class OpenAILLM:
             kwargs["temperature"] = temperature
         try:
             completion = self._get_client().chat.completions.create(**kwargs)
+            content = completion.choices[0].message.content
         except Exception as exc:
+            # Covers transport errors and malformed/partial envelopes (empty
+            # choices, missing message) — both must map to None, never raise.
             logger.error("LLM call failed%s: %s", suffix, exc)
             return None
-        content = completion.choices[0].message.content
         if not content:
             logger.error("LLM returned empty content%s", suffix)
             return None
