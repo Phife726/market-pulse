@@ -757,11 +757,32 @@ def store_insight(payload: dict) -> None:
     _repo().upsert_insight(payload)
 
 
-def _validate_executive_bullets(raw) -> Optional[list[dict]]:
-    """Return the bullets list if valid; None otherwise (delivery falls back to prose).
+def _clean_citation_ids(raw, valid_source_ids: frozenset[int]) -> list[int]:
+    """Keep only int ids present in valid_source_ids: dedupe (order preserved),
+    cap at MAX_EXECUTIVE_BULLET_CITATIONS. bool is excluded (it subclasses int).
+    Any non-list / garbage input yields []."""
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    for v in raw:
+        if isinstance(v, bool) or not isinstance(v, int):
+            continue
+        if v not in valid_source_ids or v in out:
+            continue
+        out.append(v)
+        if len(out) >= MAX_EXECUTIVE_BULLET_CITATIONS:
+            break
+    return out
 
-    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in order,
-    and non-empty string body fields.
+
+def _validate_executive_bullets(raw, valid_source_ids: frozenset[int] = frozenset()) -> Optional[list[dict]]:
+    """Return the cleaned bullets list if valid; None otherwise (delivery falls
+    back to prose).
+
+    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in
+    order, and non-empty string body fields. Each returned bullet carries a
+    cleaned citation_source_ids list (only ids in valid_source_ids survive;
+    invalid ids are never stored).
     """
     if not isinstance(raw, list) or len(raw) != 3:
         return None
@@ -775,7 +796,11 @@ def _validate_executive_bullets(raw) -> Optional[list[dict]]:
             return None
         if not isinstance(body, str) or not body.strip():
             return None
-        cleaned.append({"label": label, "body": body.strip()})
+        cleaned.append({
+            "label": label,
+            "body": body.strip(),
+            "citation_source_ids": _clean_citation_ids(item.get("citation_source_ids"), valid_source_ids),
+        })
     return cleaned
 
 

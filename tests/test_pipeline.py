@@ -13,6 +13,7 @@ from llm import FakeLLM
 from ingestion_engine import (
     _TextExtractor,
     _scrape_fallback,
+    _validate_executive_bullets,
     build_query,
     compute_url_hash,
     generate_macro_summary,
@@ -1669,7 +1670,13 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
         assert generate_macro_summary(_make_articles(5)) is True
     row = _capture_summary(fake_repo)
     assert row["dominant_condition"] == "Competitive Pressure"
-    assert row["executive_bullets"] == payload["executive_bullets"]
+    # Each bullet gains citation_source_ids (empty when LLM returns none)
+    expected_bullets = [
+        {"label": "Market pressure",    "body": "Body A.", "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "Body B.", "citation_source_ids": []},
+        {"label": "Commercial action",  "body": "Body C.", "citation_source_ids": []},
+    ]
+    assert row["executive_bullets"] == expected_bullets
     # Legacy fields still populated for backward compat:
     assert row["macro_sentiment"] == "Competitive Pressure"
     assert row["executive_summary"]  # joined paragraph
@@ -3135,3 +3142,53 @@ def test_source_domain_strips_port_and_www_and_lowercases():
     assert _source_domain("http://Example.com:8080/a?b=1") == "example.com"
     assert _source_domain("") == ""
     assert _source_domain(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# _validate_executive_bullets — citation_source_ids cleaning
+# ---------------------------------------------------------------------------
+
+def _raw_bullets(a_ids, b_ids, c_ids):
+    return [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": a_ids},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": b_ids},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": c_ids},
+    ]
+
+
+def test_validate_bullets_keeps_only_in_pack_ids():
+    out = _validate_executive_bullets(_raw_bullets([1, 99], [2], []), frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == [1]   # 99 not in pack -> dropped
+    assert out[1]["citation_source_ids"] == [2]
+    assert out[2]["citation_source_ids"] == []
+
+
+def test_validate_bullets_dedupes_preserving_order():
+    out = _validate_executive_bullets(_raw_bullets([2, 1, 2, 1], [], []), frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == [2, 1]
+
+
+def test_validate_bullets_caps_citations_per_bullet():
+    out = _validate_executive_bullets(_raw_bullets([1, 2, 3, 4], [], []), frozenset({1, 2, 3, 4}))
+    assert out[0]["citation_source_ids"] == [1, 2, 3]   # MAX_EXECUTIVE_BULLET_CITATIONS
+
+
+def test_validate_bullets_garbage_citations_become_empty():
+    raw = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": "nope"},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [None, "x", True, 1.5]},
+        {"label": "Commercial action", "body": "C."},  # key missing entirely
+    ]
+    out = _validate_executive_bullets(raw, frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == []
+    assert out[1]["citation_source_ids"] == []   # bool True excluded, non-ints excluded
+    assert out[2]["citation_source_ids"] == []
+
+
+def test_validate_bullets_rejects_wrong_label_order():
+    raw = [
+        {"label": "Supply chain watch", "body": "A.", "citation_source_ids": []},
+        {"label": "Market pressure", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    assert _validate_executive_bullets(raw, frozenset()) is None
