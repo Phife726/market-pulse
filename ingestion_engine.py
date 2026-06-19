@@ -826,11 +826,15 @@ def generate_macro_summary(
         logger.warning("No articles to summarize — skipping macro summary generation.")
         return False
 
+    ranked = _rank_macro_articles(articles)
+    source_pack = _build_macro_source_pack(ranked)
+    valid_source_ids = frozenset(s["id"] for s in source_pack)
+
     article_digest = "\n".join(
-        f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
-        f"(Impact {a.get('americhem_impact_score', a.get('sentiment_score', ''))}/10): "
+        f"[{i}] [{a.get('category', '').upper()}] {a.get('headline', '')} "
+        f"(Impact {insight.effective_impact(a)}/10): "
         f"{a.get('americhem_impact', '')}"
-        for a in articles
+        for i, a in enumerate(ranked, start=1)
     )
 
     macro_conditions_text = ", ".join(sorted(_VALID_MACRO_CONDITIONS))
@@ -844,16 +848,20 @@ def generate_macro_summary(
         "   today's overall commercial weather across the digest:\n"
         f"     {macro_conditions_text}\n\n"
         "2. executive_bullets — exactly three objects, in this order, with these exact labels:\n"
-        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>"}}\n'
-        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>"}}\n'
-        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>"}}\n\n'
+        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
+        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
+        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n\n'
         '   Each body must reference specific named entities or segments from the digest.\n'
+        '   citation_source_ids: the bracketed [n] source numbers from the digest that\n'
+        f'   directly support that body. Cite 1 to {MAX_EXECUTIVE_BULLET_CITATIONS} of the most relevant\n'
+        '   sources, most relevant first. Use ONLY source numbers that appear in the digest.\n'
+        '   If a bullet is not supported by any specific source, use an empty list [].\n'
         '   Do NOT hedge ("may", "could", "potentially") without a specific data point.\n'
         '   Do NOT write generic statements ("monitor closely", "remain vigilant").\n\n'
         '   Low-signal special case:\n'
         '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
-        '   literal string "No action required." The other two bullets MUST describe the\n'
-        '   absence of meaningful signal.'
+        '   literal string "No action required." with citation_source_ids []. The other two\n'
+        '   bullets MUST describe the absence of meaningful signal.'
     )
 
     user_prompt = (
@@ -878,12 +886,23 @@ def generate_macro_summary(
     else:
         cond = cond_raw
 
-    # Validate executive_bullets.
-    bullets = _validate_executive_bullets(parsed.get("executive_bullets"))
+    # Validate executive_bullets (cleans per-bullet citation_source_ids against the pack).
+    bullets = _validate_executive_bullets(parsed.get("executive_bullets"), valid_source_ids)
 
     # Low Signal: force the third bullet body.
     if bullets is not None and cond == "Low Signal":
-        bullets[2] = {"label": _EXEC_BULLET_LABELS[2], "body": "No action required."}
+        bullets[2] = {
+            "label": _EXEC_BULLET_LABELS[2],
+            "body": "No action required.",
+            "citation_source_ids": [],
+        }
+
+    # executive_sources: pack entries cited by at least one surviving bullet.
+    cited_ids: set[int] = set()
+    if bullets is not None:
+        for b in bullets:
+            cited_ids.update(b["citation_source_ids"])
+    executive_sources = [s for s in source_pack if s["id"] in cited_ids]
 
     # Legacy executive_summary string for backward compat.
     if bullets is not None:
@@ -897,6 +916,7 @@ def generate_macro_summary(
         "run_mode": _run_mode(),
         "dominant_condition": cond,
         "executive_bullets": bullets,
+        "executive_sources": executive_sources,
         "executive_summary": executive_summary,
         "macro_sentiment": cond,
         "screened_count": screened_count,

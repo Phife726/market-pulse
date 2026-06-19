@@ -1763,6 +1763,62 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
     assert row["executive_summary"]
 
 
+def test_generate_macro_summary_persists_validated_citations():
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1, 99]},
+            {"label": "Supply chain watch", "body": "Freight rising.", "citation_source_ids": [2, 2]},
+            {"label": "Commercial action", "body": "Watch packaging.", "citation_source_ids": []},
+        ],
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    articles = [
+        {"category": "competitors", "headline": "Alpha", "americhem_impact_score": 9,
+         "americhem_impact": "x", "source_url": "https://a.com/1", "url_hash": "h1",
+         "commercial_segment": "Healthcare"},
+        {"category": "competitors", "headline": "Bravo", "americhem_impact_score": 7,
+         "americhem_impact": "y", "source_url": "https://b.com/2", "url_hash": "h2",
+         "commercial_segment": "Auto"},
+    ]
+
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        assert generate_macro_summary(articles) is True
+
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    bullets = stored["executive_bullets"]
+    assert bullets[0]["citation_source_ids"] == [1]   # 99 dropped (not in pack)
+    assert bullets[1]["citation_source_ids"] == [2]   # deduped
+    assert bullets[2]["citation_source_ids"] == []
+    # executive_sources holds only cited ids (1 and 2), with full metadata.
+    src_ids = sorted(s["id"] for s in stored["executive_sources"])
+    assert src_ids == [1, 2]
+    assert {s["domain"] for s in stored["executive_sources"]} == {"a.com", "b.com"}
+
+
+def test_generate_macro_summary_numbers_the_digest():
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    articles = [
+        {"category": "competitors", "headline": "TopMateriality", "americhem_impact_score": 9,
+         "americhem_impact": "x", "source_url": "https://a.com/1", "url_hash": "h1"},
+    ]
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        generate_macro_summary(articles)
+
+    user_prompt = fake.calls[-1]["user"]
+    assert "[1]" in user_prompt and "TopMateriality" in user_prompt
+
+
 # ===========================================================================
 # Task 6 — ingestion-side suppression accounting
 # ===========================================================================
