@@ -1,5 +1,4 @@
 import hashlib
-import json
 import logging
 import os
 import time
@@ -11,12 +10,13 @@ from typing import Optional
 
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
+from llm import _llm
+import insight
 import zoominfo_client
 import relevance_gate
 
 import requests
 import yaml
-from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ def _run_mode() -> str:
 
 
 MAX_DAILY_SCRAPES = 150
-OPENAI_MODEL = "gpt-5.4-nano"
 PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
@@ -199,8 +198,6 @@ def _scrape_fallback(url: str) -> Optional[str]:
     return text if text else None
 
 
-def _get_openai() -> OpenAI:
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 def load_targets(config_path: str) -> list[dict]:
@@ -651,26 +648,6 @@ def _build_system_prompt(config: dict) -> str:
         .replace("{rule5}", rule5)
     )
 
-_VALID_ACTIONS: frozenset[str] = frozenset({
-    "No action", "Monitor", "Flag to procurement",
-    "Share with sales", "Escalate to leadership",
-})
-
-_VALID_SENTIMENT_TAGS: frozenset[str] = frozenset({"Negative", "Neutral", "Positive"})
-
-_VALID_COMMERCIAL_SEGMENTS: frozenset[str] = frozenset({
-    "Healthcare", "Fibers",
-    "Transportation - Automotive", "Transportation - Non-Automotive",
-    "Transportation - Aerospace",
-    "Industrial", "Packaging", "Engineered Resins",
-    "Enterprise / Cross-Segment",
-})
-
-_VALID_SIGNAL_TYPES: frozenset[str] = frozenset({
-    "Competitive", "Customer", "Regulatory", "Sustainability",
-    "Supply Chain", "Technology", "Macro", "Other",
-})
-
 _VALID_MACRO_CONDITIONS: frozenset[str] = frozenset({
     "Competitive Pressure", "Supply Volatility", "Demand Expansion",
     "Demand Softness", "Regulatory Pressure", "Sustainability Pull",
@@ -683,76 +660,22 @@ _EXEC_BULLET_LABELS: tuple[str, ...] = (
 
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
-    client = _get_openai()
     user_prompt = (
         f"Trigger entity: {trigger_entity}\nCategory: {category}\n"
         f"Source URL: {source_url}\n\nArticle text:\n{article_text}"
     )
     system_prompt = _build_system_prompt(_load_mp_config())
-    try:
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-        )
-    except Exception as exc:
-        logger.error("OpenAI API call failed for entity '%s': %s", trigger_entity, exc)
+    raw = _llm().complete_json(
+        system=system_prompt,
+        user=user_prompt,
+        temperature=0.2,
+        context=f"entity '{trigger_entity}'",
+    )
+    if raw is None:
         return None
-    raw_content = completion.choices[0].message.content or ""
-    try:
-        insight = json.loads(raw_content)
-    except json.JSONDecodeError as exc:
-        logger.error("Failed to parse OpenAI JSON response: %s", exc)
-        return None
-    if insight.get("americhem_impact") == "DISCARD":
-        return insight
-    required_keys = {"headline", "americhem_impact", "sentiment_score", "source_url", "entities_mentioned"}
-    missing = required_keys - insight.keys()
-    if missing:
-        logger.error("OpenAI response missing keys %s", missing)
-        return None
-    try:
-        score = int(insight["sentiment_score"])
-        insight["sentiment_score"] = max(1, min(10, score))
-    except (ValueError, TypeError):
-        insight["sentiment_score"] = 5
-    # Validate and default new relevance fields.
-    if insight.get("sentiment_tag") not in _VALID_SENTIMENT_TAGS:
-        insight["sentiment_tag"] = "Neutral"
-    try:
-        impact = int(insight["americhem_impact_score"])
-        insight["americhem_impact_score"] = max(1, min(10, impact))
-    except (ValueError, TypeError, KeyError):
-        insight["americhem_impact_score"] = 5
-    insight.setdefault("impact_rationale", "")
-    # commercial_segment validation (RULE 4)
-    seg = (insight.get("commercial_segment") or "").strip() if isinstance(insight.get("commercial_segment"), str) else ""
-    if seg in _VALID_COMMERCIAL_SEGMENTS:
-        insight["commercial_segment"] = seg
-    else:
-        insight["commercial_segment"] = "Enterprise / Cross-Segment"
-
-    # signal_type validation (RULE 5)
-    sig = (insight.get("signal_type") or "").strip() if isinstance(insight.get("signal_type"), str) else ""
-    if sig in _VALID_SIGNAL_TYPES:
-        insight["signal_type"] = sig
-    else:
-        insight["signal_type"] = "Other"
-
-    # Drop legacy strategic_segment if the LLM still returns it.
-    insight.pop("strategic_segment", None)
-    if not isinstance(insight["entities_mentioned"], list):
-        insight["entities_mentioned"] = []
-    insight.setdefault("source_publication", "")
-    insight.setdefault("sentiment_rationale", "")
-    insight.setdefault("article_summary", "")
-    if insight.get("recommended_action") not in _VALID_ACTIONS:
-        insight["recommended_action"] = "Monitor"
-    return insight
+    if insight.is_discard(raw):
+        return raw
+    return insight.normalize(raw)
 
 
 def is_semantic_duplicate(candidate: str, seen_headlines: set[str]) -> tuple[bool, str, int]:
@@ -825,8 +748,6 @@ def generate_macro_summary(
         logger.warning("No articles to summarize — skipping macro summary generation.")
         return False
 
-    client = _get_openai()
-
     article_digest = "\n".join(
         f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
         f"(Impact {a.get('americhem_impact_score', a.get('sentiment_score', ''))}/10): "
@@ -862,22 +783,14 @@ def generate_macro_summary(
         f"{article_digest}\n\nOutput ONLY the JSON object."
     )
 
-    try:
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.3,
-        )
-        content = completion.choices[0].message.content
-        if content is None:
-            raise ValueError("OpenAI returned empty content for macro summary")
-        parsed = json.loads(content)
-    except Exception as exc:
-        logger.error("Failed to generate macro summary from OpenAI: %s", exc)
+    parsed = _llm().complete_json(
+        system=system_prompt,
+        user=user_prompt,
+        temperature=0.3,
+        context="macro summary",
+    )
+    if parsed is None:
+        logger.error("Macro summary generation failed — no usable LLM response.")
         return False
 
     # Validate dominant_condition.
@@ -1056,13 +969,13 @@ def execute_pipeline() -> None:
                 time.sleep(1.5)
                 continue
 
-            insight = synthesize_insight(article_text, normalized, entity_name, category)
-            if insight is None:
+            article_insight = synthesize_insight(article_text, normalized, entity_name, category)
+            if article_insight is None:
                 stats["errors"] += 1
                 time.sleep(1.5)
                 continue
 
-            if insight.get("americhem_impact") == "DISCARD":
+            if insight.is_discard(article_insight):
                 logger.info("DISCARD — false positive (%s): %s", provider, normalized)
                 _bump(provider, "discards")
                 suppression_ledger = suppression_ledger.record(
@@ -1072,23 +985,23 @@ def execute_pipeline() -> None:
                 continue
 
             payload = {
-                "headline": insight["headline"],
-                "americhem_impact": insight["americhem_impact"],
-                "sentiment_score": insight["sentiment_score"],
-                "source_url": insight["source_url"],
+                "headline": article_insight["headline"],
+                "americhem_impact": article_insight["americhem_impact"],
+                "sentiment_score": article_insight["sentiment_score"],
+                "source_url": article_insight["source_url"],
                 "url_hash": url_hash,
-                "entities_mentioned": insight["entities_mentioned"],
+                "entities_mentioned": article_insight["entities_mentioned"],
                 "category": category,
                 "trigger_entity": entity_name,
-                "source_publication": insight.get("source_publication", ""),
-                "sentiment_rationale": insight.get("sentiment_rationale", ""),
-                "recommended_action": insight.get("recommended_action", "Monitor"),
-                "article_summary": insight.get("article_summary", ""),
-                "sentiment_tag": insight.get("sentiment_tag", "Neutral"),
-                "americhem_impact_score": insight.get("americhem_impact_score", 5),
-                "impact_rationale": insight.get("impact_rationale", ""),
-                "commercial_segment": insight.get("commercial_segment", "Enterprise / Cross-Segment"),
-                "signal_type": insight.get("signal_type", "Other"),
+                "source_publication": article_insight.get("source_publication", ""),
+                "sentiment_rationale": article_insight.get("sentiment_rationale", ""),
+                "recommended_action": article_insight.get("recommended_action", "Monitor"),
+                "article_summary": article_insight.get("article_summary", ""),
+                "sentiment_tag": article_insight.get("sentiment_tag", "Neutral"),
+                "americhem_impact_score": article_insight.get("americhem_impact_score", 5),
+                "impact_rationale": article_insight.get("impact_rationale", ""),
+                "commercial_segment": article_insight.get("commercial_segment", "Enterprise / Cross-Segment"),
+                "signal_type": article_insight.get("signal_type", "Other"),
             }
             # Discovery provenance is gated behind STORE_DISCOVERY_METADATA so
             # production upserts keep working until migration 003 is applied.
@@ -1104,14 +1017,14 @@ def execute_pipeline() -> None:
                 logger.info(
                     "Stored [provider=%s, impact=%d, sentiment=%s] %s",
                     provider,
-                    insight.get("americhem_impact_score", 5),
-                    insight.get("sentiment_tag", "Neutral"),
-                    insight["headline"],
+                    article_insight.get("americhem_impact_score", 5),
+                    article_insight.get("sentiment_tag", "Neutral"),
+                    article_insight["headline"],
                 )
                 stats["insights_stored"] += 1
                 _bump(provider, "stored")
                 stored_articles_buffer.append(payload)
-                seen_headlines.add(insight["headline"])
+                seen_headlines.add(article_insight["headline"])
 
             time.sleep(1.5)
 

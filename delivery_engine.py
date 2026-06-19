@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import random
@@ -8,10 +7,17 @@ from typing import Optional
 
 import requests
 import yaml
-from openai import OpenAI
 
 from suppression_ledger import SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
+from llm import _llm
+from insight import (
+    effective_impact as _effective_impact,
+    commercial_segment as _commercial_segment_of,
+    signal_type as _signal_type_of,
+)
+import scoring
+from scoring import Scoring, tier as _alert_tier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,60 +69,6 @@ def _load_mp_config() -> dict:
     return _MP_CONFIG
 
 
-def _effective_impact(row: dict) -> int:
-    """Return routing score: americhem_impact_score preferred, sentiment_score fallback.
-
-    Robust to malformed values — invalid americhem_impact_score falls back to
-    sentiment_score; invalid sentiment_score falls back to 5. Bad row data
-    should degrade the score, not crash the delivery run."""
-    score = row.get("americhem_impact_score")
-    if score is not None:
-        try:
-            return int(score)
-        except (TypeError, ValueError):
-            logger.warning(
-                "Invalid americhem_impact_score %r for row %r; falling back to sentiment_score.",
-                score,
-                row.get("source_url") or row.get("headline") or row.get("url_hash"),
-            )
-
-    fallback = row.get("sentiment_score")
-    if fallback is not None:
-        try:
-            return int(fallback)
-        except (TypeError, ValueError):
-            logger.warning(
-                "Invalid sentiment_score %r for row %r; using default score 5.",
-                fallback,
-                row.get("source_url") or row.get("headline") or row.get("url_hash"),
-            )
-
-    return 5
-
-
-def _alert_tier(row: dict) -> str:
-    """Return the alert tier label for a row: CRITICAL / STRATEGIC / ROUTINE.
-    Computed from _effective_impact — used only for batch logging."""
-    impact = _effective_impact(row)
-    if impact <= 3:
-        return "CRITICAL"
-    if impact >= 8:
-        return "STRATEGIC"
-    return "ROUTINE"
-
-
-def _commercial_segment_of(row: dict) -> str:
-    """Return commercial_segment if set; else default."""
-    seg = (row.get("commercial_segment") or "").strip()
-    return seg or "Enterprise / Cross-Segment"
-
-
-def _signal_type_of(row: dict) -> str:
-    """Return signal_type if set on the row; else 'Other'."""
-    sig = (row.get("signal_type") or "").strip()
-    return sig if sig else "Other"
-
-
 # ---------------------------------------------------------------------------
 # Task 10: Commercial segment grouping + new section renderer
 # ---------------------------------------------------------------------------
@@ -163,15 +115,42 @@ def _render_meta_strip(item: dict) -> str:
 
     # CRITICAL badge for legacy low-sentiment rows.
     critical_html = ""
-    if score is None:
-        legacy_sentiment = item.get("sentiment_score")
-        if legacy_sentiment is not None and int(legacy_sentiment) <= 3:
-            critical_html = (
-                '<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
-                '<span style="color:#DC2626;font-weight:700;">CRITICAL</span>'
-            )
+    if scoring.is_legacy_critical(item):
+        critical_html = (
+            '<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+            '<span style="color:#DC2626;font-weight:700;">CRITICAL</span>'
+        )
 
     return f'{score_html}{tag_html}{signal_html}{critical_html}'
+
+
+def _render_card(item: dict) -> str:
+    """Render one article card row: meta strip, linked headline, "So what".
+
+    This is the card the email actually ships (per the 2026-05-21 commercial-brief
+    redesign). The segment is the block header, so it is not repeated in the card;
+    `recommended_action` and `impact_rationale` are deliberately not shown here —
+    the action is consumed by the suppression policy, not the reader."""
+    meta = _render_meta_strip(item)
+    headline = item.get("headline", "")
+    source_url = item.get("source_url", "#")
+    americhem_impact = item.get("americhem_impact", "")
+    so_what_html = (
+        f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
+        f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+        f'<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
+        if americhem_impact else ""
+    )
+    return (
+        f'<tr><td style="padding:6px 0 10px 0;">'
+        f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
+        f'font-family:Arial,sans-serif;">{meta}</p>'
+        f'<a href="{source_url}" style="font-size:14px;font-weight:700;'
+        f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
+        f'text-decoration:none;line-height:1.35;">{headline}</a>'
+        f'{so_what_html}'
+        f'</td></tr>'
+    )
 
 
 def _render_segment_watch_section(
@@ -201,32 +180,11 @@ def _render_segment_watch_section(
             f'{para}</p>'
         ) if para else ""
 
-        cards_html = ""
         articles_sorted = sorted(
             articles,
             key=lambda x: -int(x.get("americhem_impact_score") or x.get("sentiment_score") or 0),
         )
-        for art in articles_sorted:
-            meta = _render_meta_strip(art)
-            headline = art.get("headline", "")
-            source_url = art.get("source_url", "#")
-            americhem_impact = art.get("americhem_impact", "")
-            so_what_html = (
-                f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
-                f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
-                f'<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
-                if americhem_impact else ""
-            )
-            cards_html += (
-                f'<tr><td style="padding:6px 0 10px 0;">'
-                f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
-                f'font-family:Arial,sans-serif;">{meta}</p>'
-                f'<a href="{source_url}" style="font-size:14px;font-weight:700;'
-                f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
-                f'text-decoration:none;line-height:1.35;">{headline}</a>'
-                f'{so_what_html}'
-                f'</td></tr>'
-            )
+        cards_html = "".join(_render_card(art) for art in articles_sorted)
 
         blocks_html += (
             f'<tr><td style="padding:18px 0 0 0;">'
@@ -512,18 +470,6 @@ _RESEND_API_URL        = "https://api.resend.com/emails"
 _TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
 
 # ---------------------------------------------------------------------------
-# OpenAI client
-# ---------------------------------------------------------------------------
-
-OPENAI_MODEL = "gpt-5.4-nano"
-
-
-def _get_openai() -> OpenAI:
-    """Return an authenticated OpenAI client using env credentials."""
-    return OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-
-# ---------------------------------------------------------------------------
 # 1. Data fetch — with Monday 72-hour lookback
 # ---------------------------------------------------------------------------
 
@@ -640,24 +586,16 @@ def synthesize_thematic_paragraphs(
         "Only include categories that appear in the input."
     )
 
-    try:
-        client = _get_openai()
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": grouped_text},
-            ],
-        )
-        result: dict[str, str] = json.loads(completion.choices[0].message.content)
-        logger.info("Thematic synthesis complete — %d categories.", len(result))
-        return result
-    except Exception as exc:
-        logger.error(
-            "Thematic synthesis failed — falling back to bullets-only: %s", exc
-        )
+    result = _llm().complete_json(
+        system=system_prompt,
+        user=grouped_text,
+        context="thematic synthesis",
+    )
+    if result is None:
+        logger.error("Thematic synthesis failed — falling back to bullets-only.")
         return {}
+    logger.info("Thematic synthesis complete — %d categories.", len(result))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -762,150 +700,6 @@ _SENTIMENT_TAG_COLORS: dict[str, str] = {
 }
 
 
-def _render_card(item: dict, accent: str, bg: str, text: str) -> str:
-    headline            = item.get("headline", "No headline")
-    source_url          = item.get("source_url", "#")
-    americhem_impact    = item.get("americhem_impact", "")
-    source_publication  = item.get("source_publication", "")
-    recommended_action  = item.get("recommended_action", "")
-
-    # Segment label: commercial_segment preferred, category fallback
-    segment_label = (item.get("commercial_segment") or item.get("category") or "").upper()
-
-    # Score display: new fields preferred, old sentiment_score fallback
-    impact_score_raw = item.get("americhem_impact_score")
-    sentiment_tag    = item.get("sentiment_tag")
-    if impact_score_raw is not None and sentiment_tag:
-        tag_color   = _SENTIMENT_TAG_COLORS.get(sentiment_tag, "#6B7280")
-        score_html  = (
-            f'<span style="color:{_BRAND_NAVY};font-weight:600;">'
-            f'Impact: {impact_score_raw}/10</span>'
-            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
-            f'<span style="color:{tag_color};font-weight:600;">{sentiment_tag}</span>'
-        )
-        rationale_text = item.get("impact_rationale", "")
-    else:
-        score = item.get("sentiment_score", "")
-        sentiment_word, sentiment_color = _sentiment_word(int(score) if score else 5)
-        score_html = (
-            f'<span style="color:{sentiment_color};font-weight:600;">'
-            f'{sentiment_word}</span>'
-            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Score: {score}/10</span>'
-        )
-        rationale_text = item.get("sentiment_rationale", "")
-
-    source_pub_html = (
-        f'<span style="font-size:11px;color:#9CA3AF;'
-        f'font-family:Arial,sans-serif;">via {source_publication}</span>'
-        if source_publication else ""
-    )
-
-    rationale_html = (
-        f'<p style="margin:0 0 10px 0;font-size:12px;color:#6B7280;'
-        f'font-family:Arial,sans-serif;font-style:italic;line-height:1.4;">'
-        f'{rationale_text}</p>'
-        if rationale_text else ""
-    )
-
-    action_html = (
-        f'<p style="margin:0 0 10px 0;padding:6px 10px;background-color:#F9FAFB;'
-        f'border-left:3px solid {accent};font-size:12px;font-weight:600;'
-        f'font-family:Arial,sans-serif;color:{accent};">'
-        f'&#9654; ACTION: {recommended_action}</p>'
-        if recommended_action and recommended_action not in {"No action", "Monitor"} else ""
-    )
-
-    return f"""
-            <tr>
-              <td style="padding:0 0 10px 0;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0"
-                       style="border:0.5px solid #E5E7EB;border-radius:6px;
-                              overflow:hidden;background-color:#ffffff;">
-                  <tr>
-                    <td style="background-color:{accent};height:3px;
-                                font-size:0;line-height:0;">&nbsp;</td>
-                  </tr>
-                  <tr>
-                    <td style="padding:14px 16px;">
-                      <a href="{source_url}"
-                         style="font-size:14px;font-weight:700;color:{accent};
-                                font-family:Arial,sans-serif;text-decoration:none;
-                                line-height:1.4;display:block;margin-bottom:8px;">
-                        {headline}
-                      </a>
-                      <p style="margin:0 0 8px 0;font-size:13px;color:#374151;
-                                 font-family:Georgia,'Times New Roman',serif;
-                                 line-height:1.6;">
-                        {americhem_impact}
-                      </p>
-                      {rationale_html}
-                      {action_html}
-                      <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                        <tr>
-                          <td>
-                            <span style="display:inline-block;font-size:10px;
-                                          font-weight:700;letter-spacing:0.8px;
-                                          text-transform:uppercase;padding:2px 6px;
-                                          border-radius:3px;background-color:{bg};
-                                          color:{text};border:1px solid {accent};
-                                          font-family:Arial,sans-serif;">
-                              {segment_label}
-                            </span>
-                            <span style="margin-left:6px;">{source_pub_html}</span>
-                          </td>
-                          <td align="right"
-                              style="font-size:11px;font-family:Arial,sans-serif;">
-                            {score_html}
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>"""
-
-
-def _render_section(
-    tier: str,
-    label: str,
-    accent: str,
-    bg: str,
-    text: str,
-    items: list[dict],
-) -> str:
-    if not items:
-        return ""
-
-    cards_html = "".join(
-        _render_card(item, accent, bg, text) for item in items
-    )
-
-    return f"""
-      <tr>
-        <td style="padding:24px 32px 4px 32px;">
-          <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="padding-bottom:10px;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                                text-transform:uppercase;color:{text};
-                                font-family:Arial,sans-serif;white-space:nowrap;
-                                padding-right:12px;">
-                      {label.upper()}
-                    </td>
-                    <td style="border-bottom:1px solid {accent};width:100%;"></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            {cards_html}
-          </table>
-        </td>
-      </tr>"""
-
-
 # ---------------------------------------------------------------------------
 # 3. Main email generator
 # ---------------------------------------------------------------------------
@@ -916,15 +710,15 @@ def generate_html_email(
 ) -> str:
     config = _load_mp_config()
     reporting_cfg          = config.get("reporting", {})
-    visible_threshold: int = _config_int(reporting_cfg, "visible_impact_threshold", 6)
     max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
     max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
+    scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
     kept, delivery_ledger = _apply_delivery_suppression(data, config)
 
     # 2. Visibility filter.
-    visible_pool = [r for r in kept if _effective_impact(r) >= visible_threshold]
+    visible_pool = [r for r in kept if scorer.is_visible(r)]
     below_threshold_count = len(kept) - len(visible_pool)
 
     # 3. Group by commercial segment.
@@ -954,7 +748,7 @@ def generate_html_email(
     final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
     weak_relevance_count = sum(
         1 for r in kept
-        if 4 <= _effective_impact(r) <= 5
+        if scorer.is_weak_relevance(r)
         and r.get("url_hash") not in final_hashes
     )
 
