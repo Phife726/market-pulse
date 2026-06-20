@@ -737,8 +737,17 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         or ""
     )
 
+    # Only take the structured citation path when bullets is a non-empty list of
+    # dict bullets. A legacy/malformed row whose executive_bullets is a list of
+    # strings would otherwise render blank "• :" rows and skip the prose fallback.
+    structured_bullets = (
+        isinstance(bullets, list)
+        and bool(bullets)
+        and all(isinstance(b, dict) for b in bullets)
+    )
+
     footer_html = ""
-    if bullets:
+    if structured_bullets:
         display_map = _citation_display_map(bullets, sources)
         body_html = _render_executive_bullets(bullets, sources, display_map)
         footer_html = _render_sources_footer(sources, display_map)

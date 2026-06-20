@@ -3443,6 +3443,21 @@ def test_exec_summary_prose_fallback_unchanged():
     assert "Sources" not in html_out
 
 
+def test_exec_summary_legacy_string_bullets_fall_back_to_prose():
+    # Legacy/malformed row: executive_bullets is a truthy list of strings (not
+    # dicts) AND prose is present. The structured citation path would render
+    # blank "• :" rows, so we must fall through to the legacy prose instead.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": ["Market pressure: pricing firm.", "Freight up.", "Watch."],
+        "executive_summary": "Prose summary stands in.",
+    }
+    html_out = _render_exec_summary(macro)
+    assert "Prose summary stands in." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+
+
 def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
     # executive_sources is non-empty, but no bullet cites any id -> empty display
     # map -> no inline markers and no orphan Sources footer.
