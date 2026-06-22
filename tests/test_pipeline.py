@@ -3413,11 +3413,14 @@ def test_exec_summary_renders_inline_citations_and_footer():
         ],
     }
     html_out = _render_exec_summary(macro)
+    # Inline citation marker + link stay in the executive summary block...
     assert "Pricing firm." in html_out
     assert 'href="https://reuters.com/x"' in html_out
-    assert "Sources" in html_out
-    assert "Resin prices climb" in html_out
-    assert "reuters.com" in html_out
+    assert ">1</a>" in html_out
+    # ...but the Sources list itself now lives in its own bottom-of-email section,
+    # NOT inside the executive summary block.
+    assert "Sources" not in html_out
+    assert "Resin prices climb" not in html_out
 
 
 def test_exec_summary_legacy_row_renders_without_footer():
@@ -3456,6 +3459,92 @@ def test_exec_summary_legacy_string_bullets_fall_back_to_prose():
     assert "Prose summary stands in." in html_out
     assert "Sources" not in html_out
     assert "<a" not in html_out
+
+
+from delivery_engine import _render_sources_section
+
+
+def _macro_with_citations():
+    return {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": [2]},
+            {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Resin prices climb", "url": "https://reuters.com/x",
+             "domain": "reuters.com", "segment": "Auto", "score": 8},
+            {"id": 2, "headline": "Freight rates spike", "url": "https://icis.com/y",
+             "domain": "icis.com", "segment": "Auto", "score": 7},
+        ],
+    }
+
+
+def test_render_sources_section_renders_footer_when_cited():
+    html_out = _render_sources_section(_macro_with_citations())
+    assert "Sources" in html_out
+    assert "Resin prices climb" in html_out
+    assert "reuters.com" in html_out
+    assert 'href="https://reuters.com/x"' in html_out
+    # Wrapped as a full-width email row so it sits in the outer email table.
+    assert "<tr>" in html_out and "<td" in html_out
+
+
+def test_render_sources_section_empty_for_legacy_and_uncited():
+    # No structured bullets / no executive_sources -> no bottom Sources section.
+    assert _render_sources_section(None) == ""
+    assert _render_sources_section({"executive_summary": "Prose."}) == ""
+    assert _render_sources_section({
+        "executive_bullets": ["string bullet"],
+        "executive_summary": "Prose.",
+    }) == ""
+    assert _render_sources_section({
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Unused", "url": "https://x.com/a", "domain": "x.com"},
+        ],
+    }) == ""
+
+
+def test_sources_section_numbering_matches_inline_markers():
+    macro = _macro_with_citations()
+    exec_html = _render_exec_summary(macro)
+    sources_html = _render_sources_section(macro)
+    # Inline markers show [1] and [2]; the footer lists [1] and [2] for the same
+    # sources (shared deterministic display map).
+    assert ">1</a>" in exec_html and ">2</a>" in exec_html
+    assert "[1]" in sources_html and "[2]" in sources_html
+    assert sources_html.index("Resin prices climb") < sources_html.index("Freight rates spike")
+
+
+def test_generate_html_email_places_sources_at_bottom(monkeypatch):
+    fake_repo = InMemoryIntelligenceRepo()
+    macro = _macro_with_citations()
+    data = [{
+        "headline": "Packaging market update",  # distinct from the source headline
+        "source_url": "https://example.com/card",
+        "americhem_impact": "Pricing pressure on packaging.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+        "commercial_segment": "Packaging",
+        "signal_type": "Pricing",
+    }]
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
+         patch("delivery_engine._repo", lambda: fake_repo):
+        html = generate_html_email(data, macro)
+
+    # The cited-source headline now appears only in the bottom Sources section
+    # (it was removed from the executive summary block), exactly once.
+    assert html.count("Resin prices climb") == 1
+    assert "Sources" in html
+    # Sources block sits AFTER the executive summary block (moved to the bottom).
+    assert html.index("Executive Summary") < html.index("Resin prices climb")
+    assert html.index("Pricing firm.") < html.index("Resin prices climb")
 
 
 def test_exec_summary_sources_present_but_none_cited_renders_no_footer():

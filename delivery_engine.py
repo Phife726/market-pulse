@@ -719,16 +719,32 @@ def _render_sources_footer(sources: Optional[list[dict]], display_map: dict) -> 
     )
 
 
+def _structured_exec_bullets(macro_summary: dict | None):
+    """Return executive_bullets when it's a non-empty list of dict bullets; else
+    None (legacy/empty/malformed rows). Shared gate so the inline citation
+    markers and the bottom-of-email Sources section agree on when to render and
+    derive the same display-number map.
+
+    A legacy/malformed row whose executive_bullets is a list of strings would
+    otherwise render blank "• :" rows and skip the prose fallback.
+    """
+    bullets = (macro_summary or {}).get("executive_bullets")
+    if isinstance(bullets, list) and bullets and all(isinstance(b, dict) for b in bullets):
+        return bullets
+    return None
+
+
 def _render_exec_summary(macro_summary: dict | None) -> str:
     """Render the Executive Summary row.
 
     Prefers structured executive_bullets; falls back to legacy executive_summary prose.
-    Returns empty string when no summary data is present.
+    Returns empty string when no summary data is present. The cited-source list
+    itself is rendered separately at the bottom of the email by
+    _render_sources_section, not inside this block.
     """
     if not macro_summary:
         return ""
 
-    bullets = macro_summary.get("executive_bullets")
     sources = macro_summary.get("executive_sources") or []
     legacy_text = macro_summary.get("executive_summary") or ""
     condition = (
@@ -737,20 +753,10 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         or ""
     )
 
-    # Only take the structured citation path when bullets is a non-empty list of
-    # dict bullets. A legacy/malformed row whose executive_bullets is a list of
-    # strings would otherwise render blank "• :" rows and skip the prose fallback.
-    structured_bullets = (
-        isinstance(bullets, list)
-        and bool(bullets)
-        and all(isinstance(b, dict) for b in bullets)
-    )
-
-    footer_html = ""
-    if structured_bullets:
+    bullets = _structured_exec_bullets(macro_summary)
+    if bullets is not None:
         display_map = _citation_display_map(bullets, sources)
         body_html = _render_executive_bullets(bullets, sources, display_map)
-        footer_html = _render_sources_footer(sources, display_map)
     elif legacy_text:
         body_html = (
             f'<p style="margin:0;font-size:14px;color:#1a2a45;'
@@ -781,10 +787,30 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
                   Executive Summary{badge_html}
                 </p>
                 {body_html}
-                {footer_html}
               </td>
             </tr>
           </table>
+        </td>
+      </tr>"""
+
+
+def _render_sources_section(macro_summary: dict | None) -> str:
+    """Render the cited-source list as a full-width row at the very bottom of the
+    email. Reuses the same display-number map as the inline citation markers in
+    the executive summary, so the numbering is identical. Returns '' when there
+    are no cited sources (legacy rows, or no bullet cited anything)."""
+    bullets = _structured_exec_bullets(macro_summary)
+    if bullets is None:
+        return ""
+    sources = macro_summary.get("executive_sources") or []
+    display_map = _citation_display_map(bullets, sources)
+    footer_html = _render_sources_footer(sources, display_map)
+    if not footer_html:
+        return ""
+    return f"""
+      <tr>
+        <td style="padding:0 32px 8px 32px;">
+          {footer_html}
         </td>
       </tr>"""
 
@@ -883,6 +909,10 @@ def generate_html_email(
     # upgrade to consume executive_bullets).
     exec_html = _render_exec_summary(macro_summary)
 
+    # Cited-source list, rendered at the very bottom of the email (below the
+    # segment-watch content) rather than under the executive summary block.
+    sources_html = _render_sources_section(macro_summary)
+
     # Header counts. Null-safe handling is finalized in Task 13.
     today_str = datetime.now().strftime("%A, %B %d, %Y")
     screened = (macro_summary or {}).get("screened_count")
@@ -966,6 +996,7 @@ def generate_html_email(
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             {exec_html}
             {sections_html}
+            {sources_html}
             {qa_html}
             <tr><td style="height:24px;"></td></tr>
           </table>
