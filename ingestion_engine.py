@@ -658,6 +658,59 @@ _EXEC_BULLET_LABELS: tuple[str, ...] = (
     "Market pressure", "Supply chain watch", "Commercial action",
 )
 
+MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
+MAX_EXECUTIVE_BULLET_CITATIONS = 3
+
+
+def _source_domain(url: str) -> str:
+    """Registrable host minus a leading 'www.'; '' when unparseable/empty.
+
+    Uses urlparse().hostname so any :port is stripped and the host is lowercased.
+    """
+    try:
+        host = urlparse(url or "").hostname or ""
+    except (ValueError, TypeError):
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _rank_macro_articles(articles: list[dict]) -> list[dict]:
+    """Deterministic, capped ordering of citable articles.
+
+    Sort key: materiality desc, headline asc, url_hash asc. created_at is NOT
+    used — the in-memory stored-articles buffer does not carry it — but the key
+    is still fully deterministic, so the same article set always ranks the same.
+    """
+    ordered = sorted(
+        articles,
+        key=lambda a: (
+            -insight.effective_impact(a),
+            a.get("headline", "") or "",
+            a.get("url_hash", "") or "",
+        ),
+    )
+    return ordered[:MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES]
+
+
+def _build_macro_source_pack(ranked_articles: list[dict]) -> list[dict]:
+    """Number the already-ranked articles 1..N as the citable source pack.
+
+    Pass the output of _rank_macro_articles. Each entry:
+    {id, headline, url, domain, segment, score}.
+    """
+    pack: list[dict] = []
+    for i, a in enumerate(ranked_articles, start=1):
+        url = a.get("source_url", "") or ""
+        pack.append({
+            "id": i,
+            "headline": a.get("headline", "") or "",
+            "url": url,
+            "domain": _source_domain(url),
+            "segment": insight.commercial_segment(a),
+            "score": insight.effective_impact(a),
+        })
+    return pack
+
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
     user_prompt = (
@@ -704,11 +757,32 @@ def store_insight(payload: dict) -> None:
     _repo().upsert_insight(payload)
 
 
-def _validate_executive_bullets(raw) -> Optional[list[dict]]:
-    """Return the bullets list if valid; None otherwise (delivery falls back to prose).
+def _clean_citation_ids(raw, valid_source_ids: frozenset[int]) -> list[int]:
+    """Keep only int ids present in valid_source_ids: dedupe (order preserved),
+    cap at MAX_EXECUTIVE_BULLET_CITATIONS. bool is excluded (it subclasses int).
+    Any non-list / garbage input yields []."""
+    if not isinstance(raw, list):
+        return []
+    out: list[int] = []
+    for v in raw:
+        if isinstance(v, bool) or not isinstance(v, int):
+            continue
+        if v not in valid_source_ids or v in out:
+            continue
+        out.append(v)
+        if len(out) >= MAX_EXECUTIVE_BULLET_CITATIONS:
+            break
+    return out
 
-    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in order,
-    and non-empty string body fields.
+
+def _validate_executive_bullets(raw, valid_source_ids: frozenset[int] = frozenset()) -> Optional[list[dict]]:
+    """Return the cleaned bullets list if valid; None otherwise (delivery falls
+    back to prose).
+
+    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in
+    order, and non-empty string body fields. Each returned bullet carries a
+    cleaned citation_source_ids list (only ids in valid_source_ids survive;
+    invalid ids are never stored).
     """
     if not isinstance(raw, list) or len(raw) != 3:
         return None
@@ -722,7 +796,11 @@ def _validate_executive_bullets(raw) -> Optional[list[dict]]:
             return None
         if not isinstance(body, str) or not body.strip():
             return None
-        cleaned.append({"label": label, "body": body.strip()})
+        cleaned.append({
+            "label": label,
+            "body": body.strip(),
+            "citation_source_ids": _clean_citation_ids(item.get("citation_source_ids"), valid_source_ids),
+        })
     return cleaned
 
 
@@ -748,11 +826,15 @@ def generate_macro_summary(
         logger.warning("No articles to summarize — skipping macro summary generation.")
         return False
 
+    ranked = _rank_macro_articles(articles)
+    source_pack = _build_macro_source_pack(ranked)
+    valid_source_ids = frozenset(s["id"] for s in source_pack)
+
     article_digest = "\n".join(
-        f"- [{a.get('category', '').upper()}] {a.get('headline', '')} "
-        f"(Impact {a.get('americhem_impact_score', a.get('sentiment_score', ''))}/10): "
+        f"[{i}] [{a.get('category', '').upper()}] {a.get('headline', '')} "
+        f"(Impact {insight.effective_impact(a)}/10): "
         f"{a.get('americhem_impact', '')}"
-        for a in articles
+        for i, a in enumerate(ranked, start=1)
     )
 
     macro_conditions_text = ", ".join(sorted(_VALID_MACRO_CONDITIONS))
@@ -766,16 +848,20 @@ def generate_macro_summary(
         "   today's overall commercial weather across the digest:\n"
         f"     {macro_conditions_text}\n\n"
         "2. executive_bullets — exactly three objects, in this order, with these exact labels:\n"
-        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>"}}\n'
-        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>"}}\n'
-        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>"}}\n\n'
+        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
+        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
+        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n\n'
         '   Each body must reference specific named entities or segments from the digest.\n'
+        '   citation_source_ids: the bracketed [n] source numbers from the digest that\n'
+        f'   directly support that body. Cite 1 to {MAX_EXECUTIVE_BULLET_CITATIONS} of the most relevant\n'
+        '   sources, most relevant first. Use ONLY source numbers that appear in the digest.\n'
+        '   If a bullet is not supported by any specific source, use an empty list [].\n'
         '   Do NOT hedge ("may", "could", "potentially") without a specific data point.\n'
         '   Do NOT write generic statements ("monitor closely", "remain vigilant").\n\n'
         '   Low-signal special case:\n'
         '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
-        '   literal string "No action required." The other two bullets MUST describe the\n'
-        '   absence of meaningful signal.'
+        '   literal string "No action required." with citation_source_ids []. The other two\n'
+        '   bullets MUST describe the absence of meaningful signal.'
     )
 
     user_prompt = (
@@ -800,12 +886,23 @@ def generate_macro_summary(
     else:
         cond = cond_raw
 
-    # Validate executive_bullets.
-    bullets = _validate_executive_bullets(parsed.get("executive_bullets"))
+    # Validate executive_bullets (cleans per-bullet citation_source_ids against the pack).
+    bullets = _validate_executive_bullets(parsed.get("executive_bullets"), valid_source_ids)
 
     # Low Signal: force the third bullet body.
     if bullets is not None and cond == "Low Signal":
-        bullets[2] = {"label": _EXEC_BULLET_LABELS[2], "body": "No action required."}
+        bullets[2] = {
+            "label": _EXEC_BULLET_LABELS[2],
+            "body": "No action required.",
+            "citation_source_ids": [],
+        }
+
+    # executive_sources: pack entries cited by at least one surviving bullet.
+    cited_ids: set[int] = set()
+    if bullets is not None:
+        for b in bullets:
+            cited_ids.update(b["citation_source_ids"])
+    executive_sources = [s for s in source_pack if s["id"] in cited_ids]
 
     # Legacy executive_summary string for backward compat.
     if bullets is not None:
@@ -819,6 +916,7 @@ def generate_macro_summary(
         "run_mode": _run_mode(),
         "dominant_condition": cond,
         "executive_bullets": bullets,
+        "executive_sources": executive_sources,
         "executive_summary": executive_summary,
         "macro_sentiment": cond,
         "screened_count": screened_count,

@@ -118,8 +118,9 @@ class SupabaseIntelligenceRepo:
                 self._supabase().table("daily_summaries")
                 .select(
                     "run_date, run_mode, executive_summary, macro_sentiment, "
-                    "dominant_condition, executive_bullets, screened_count, "
-                    "surfaced_count, suppression_breakdown, suppression_samples"
+                    "dominant_condition, executive_bullets, executive_sources, "
+                    "screened_count, surfaced_count, suppression_breakdown, "
+                    "suppression_samples"
                 )
                 .eq("run_mode", run_mode)
                 .gte("run_date", min_date)

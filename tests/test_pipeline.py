@@ -13,6 +13,7 @@ from llm import FakeLLM
 from ingestion_engine import (
     _TextExtractor,
     _scrape_fallback,
+    _validate_executive_bullets,
     build_query,
     compute_url_hash,
     generate_macro_summary,
@@ -1669,7 +1670,13 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
         assert generate_macro_summary(_make_articles(5)) is True
     row = _capture_summary(fake_repo)
     assert row["dominant_condition"] == "Competitive Pressure"
-    assert row["executive_bullets"] == payload["executive_bullets"]
+    # Each bullet gains citation_source_ids (empty when LLM returns none)
+    expected_bullets = [
+        {"label": "Market pressure",    "body": "Body A.", "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "Body B.", "citation_source_ids": []},
+        {"label": "Commercial action",  "body": "Body C.", "citation_source_ids": []},
+    ]
+    assert row["executive_bullets"] == expected_bullets
     # Legacy fields still populated for backward compat:
     assert row["macro_sentiment"] == "Competitive Pressure"
     assert row["executive_summary"]  # joined paragraph
@@ -1754,6 +1761,62 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
     assert row["executive_bullets"] is None
     # Legacy executive_summary still populated so delivery has a fallback:
     assert row["executive_summary"]
+
+
+def test_generate_macro_summary_persists_validated_citations():
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1, 99]},
+            {"label": "Supply chain watch", "body": "Freight rising.", "citation_source_ids": [2, 2]},
+            {"label": "Commercial action", "body": "Watch packaging.", "citation_source_ids": []},
+        ],
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    articles = [
+        {"category": "competitors", "headline": "Alpha", "americhem_impact_score": 9,
+         "americhem_impact": "x", "source_url": "https://a.com/1", "url_hash": "h1",
+         "commercial_segment": "Healthcare"},
+        {"category": "competitors", "headline": "Bravo", "americhem_impact_score": 7,
+         "americhem_impact": "y", "source_url": "https://b.com/2", "url_hash": "h2",
+         "commercial_segment": "Auto"},
+    ]
+
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        assert generate_macro_summary(articles) is True
+
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    bullets = stored["executive_bullets"]
+    assert bullets[0]["citation_source_ids"] == [1]   # 99 dropped (not in pack)
+    assert bullets[1]["citation_source_ids"] == [2]   # deduped
+    assert bullets[2]["citation_source_ids"] == []
+    # executive_sources holds only cited ids (1 and 2), with full metadata.
+    src_ids = sorted(s["id"] for s in stored["executive_sources"])
+    assert src_ids == [1, 2]
+    assert {s["domain"] for s in stored["executive_sources"]} == {"a.com", "b.com"}
+
+
+def test_generate_macro_summary_numbers_the_digest():
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    articles = [
+        {"category": "competitors", "headline": "TopMateriality", "americhem_impact_score": 9,
+         "americhem_impact": "x", "source_url": "https://a.com/1", "url_hash": "h1"},
+    ]
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        generate_macro_summary(articles)
+
+    user_prompt = fake.calls[-1]["user"]
+    assert "[1]" in user_prompt and "TopMateriality" in user_prompt
 
 
 # ===========================================================================
@@ -3059,3 +3122,359 @@ def test_effective_impact_uses_default_when_both_scores_missing():
     row = {"headline": "test"}
     assert _effective_impact(row) == 5
     assert _alert_tier(row) == "ROUTINE"
+
+
+# ---------------------------------------------------------------------------
+# Source-pack builder (ingestion)
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import (
+    _build_macro_source_pack,
+    _rank_macro_articles,
+    MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES,
+)
+
+
+def _article(headline, *, score=5, url="https://example.com/a", url_hash="h", segment="Healthcare"):
+    return {
+        "headline": headline,
+        "americhem_impact_score": score,
+        "source_url": url,
+        "url_hash": url_hash,
+        "commercial_segment": segment,
+    }
+
+
+def test_source_pack_orders_by_materiality_then_headline_then_hash():
+    articles = [
+        _article("Bravo", score=5, url_hash="h2"),
+        _article("Alpha", score=9, url_hash="h1"),
+        _article("Charlie", score=5, url_hash="h0"),
+    ]
+    pack = _build_macro_source_pack(_rank_macro_articles(articles))
+    # Materiality 9 first; remaining two (score 5) tie-break by headline asc.
+    assert [s["headline"] for s in pack] == ["Alpha", "Bravo", "Charlie"]
+    assert [s["id"] for s in pack] == [1, 2, 3]
+
+
+def test_source_pack_is_deterministic_for_same_set():
+    articles = [_article(f"H{i}", score=i % 4, url_hash=f"h{i}") for i in range(10)]
+    a = _build_macro_source_pack(_rank_macro_articles(list(articles)))
+    b = _build_macro_source_pack(_rank_macro_articles(list(reversed(articles))))
+    assert [(s["id"], s["headline"]) for s in a] == [(s["id"], s["headline"]) for s in b]
+
+
+def test_source_pack_caps_at_max():
+    articles = [_article(f"H{i:02d}", score=5, url_hash=f"h{i:02d}") for i in range(60)]
+    pack = _build_macro_source_pack(_rank_macro_articles(articles))
+    assert len(pack) == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
+    assert pack[-1]["id"] == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
+
+
+def test_source_pack_entry_shape_and_domain():
+    pack = _build_macro_source_pack(_rank_macro_articles(
+        [_article("Alpha", url="https://www.Reuters.com/x", segment="Auto")]
+    ))
+    s = pack[0]
+    assert s == {
+        "id": 1,
+        "headline": "Alpha",
+        "url": "https://www.Reuters.com/x",
+        "domain": "reuters.com",
+        "segment": "Auto",
+        "score": 5,
+    }
+
+
+# ---------------------------------------------------------------------------
+# _source_domain — port-stripping, www-stripping, lowercasing
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import _source_domain
+
+
+def test_source_domain_strips_port_and_www_and_lowercases():
+    assert _source_domain("https://www.Reuters.com:443/x") == "reuters.com"
+    assert _source_domain("http://Example.com:8080/a?b=1") == "example.com"
+    assert _source_domain("") == ""
+    assert _source_domain(None) == ""
+
+
+# ---------------------------------------------------------------------------
+# _validate_executive_bullets — citation_source_ids cleaning
+# ---------------------------------------------------------------------------
+
+def _raw_bullets(a_ids, b_ids, c_ids):
+    return [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": a_ids},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": b_ids},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": c_ids},
+    ]
+
+
+def test_validate_bullets_keeps_only_in_pack_ids():
+    out = _validate_executive_bullets(_raw_bullets([1, 99], [2], []), frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == [1]   # 99 not in pack -> dropped
+    assert out[1]["citation_source_ids"] == [2]
+    assert out[2]["citation_source_ids"] == []
+
+
+def test_validate_bullets_dedupes_preserving_order():
+    out = _validate_executive_bullets(_raw_bullets([2, 1, 2, 1], [], []), frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == [2, 1]
+
+
+def test_validate_bullets_caps_citations_per_bullet():
+    out = _validate_executive_bullets(_raw_bullets([1, 2, 3, 4], [], []), frozenset({1, 2, 3, 4}))
+    assert out[0]["citation_source_ids"] == [1, 2, 3]   # MAX_EXECUTIVE_BULLET_CITATIONS
+
+
+def test_validate_bullets_garbage_citations_become_empty():
+    raw = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": "nope"},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [None, "x", True, 1.5]},
+        {"label": "Commercial action", "body": "C."},  # key missing entirely
+    ]
+    out = _validate_executive_bullets(raw, frozenset({1, 2}))
+    assert out[0]["citation_source_ids"] == []
+    assert out[1]["citation_source_ids"] == []   # bool True excluded, non-ints excluded
+    assert out[2]["citation_source_ids"] == []
+
+
+def test_validate_bullets_rejects_wrong_label_order():
+    raw = [
+        {"label": "Supply chain watch", "body": "A.", "citation_source_ids": []},
+        {"label": "Market pressure", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    assert _validate_executive_bullets(raw, frozenset()) is None
+
+
+from delivery_engine import (
+    _safe_http_url,
+    _citation_display_map,
+    _render_executive_bullets,
+    _render_sources_footer,
+)
+
+
+def _src(id, headline="H", url="https://x.com/a", domain="x.com"):
+    return {"id": id, "headline": headline, "url": url, "domain": domain,
+            "segment": "Auto", "score": 7}
+
+
+def test_safe_http_url_allows_http_and_https():
+    assert _safe_http_url("https://x.com/a") == "https://x.com/a"
+    assert _safe_http_url("http://x.com/a") == "http://x.com/a"
+
+
+def test_safe_http_url_rejects_other_schemes():
+    assert _safe_http_url("javascript:alert(1)") == ""
+    assert _safe_http_url("data:text/html,x") == ""
+    assert _safe_http_url("") == ""
+    assert _safe_http_url(None) == ""
+
+
+def test_citation_display_map_renumbers_by_first_appearance():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 8]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [8, 2]},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [_src(5), _src(8), _src(2)]
+    assert _citation_display_map(bullets, sources) == {5: 1, 8: 2, 2: 3}
+
+
+def test_citation_display_map_ignores_ids_without_a_source():
+    bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 99]}]
+    assert _citation_display_map(bullets, [_src(5)]) == {5: 1}
+
+
+def test_render_bullets_inline_citation_is_grouped_and_linked():
+    bullets = [
+        {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [5, 8]},
+        {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+    ]
+    sources = [_src(5, url="https://a.com/x"), _src(8, url="https://b.com/y")]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert "Pricing firm." in html_out
+    assert 'href="https://a.com/x"' in html_out
+    assert 'title="https://a.com/x"' in html_out
+    assert ">1</a>" in html_out and ">2</a>" in html_out
+    # Grouped: a comma separates the two numbers, enclosed in brackets.
+    assert "[" in html_out and ", " in html_out and "]" in html_out
+
+
+def test_render_bullets_no_citation_when_empty():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    html_out = _render_executive_bullets(bullets, [], {})
+    assert "<a" not in html_out
+
+
+def test_render_bullets_escapes_malicious_url_and_headline():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [1]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    # javascript: scheme must be dropped -> number rendered as plain text, no href.
+    sources = [_src(1, url="javascript:alert(1)")]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert "javascript:alert(1)" not in html_out
+    assert "href=" not in html_out
+    assert ">1<" in html_out or "[1]" in html_out  # number still shown, just unlinked
+
+
+def test_render_sources_footer_orders_and_escapes():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [8, 5]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [
+        _src(5, headline="Resin <b>up</b>", url="https://a.com/x", domain="a.com"),
+        _src(8, headline="Freight", url="https://b.com/y", domain="b.com"),
+    ]
+    dmap = _citation_display_map(bullets, sources)
+    footer = _render_sources_footer(sources, dmap)
+    # Display order follows first appearance: 8 -> [1], 5 -> [2].
+    assert footer.index("Freight") < footer.index("Resin")
+    assert "b.com" in footer and "a.com" in footer
+    assert "<b>up</b>" not in footer        # escaped
+    assert "&lt;b&gt;up&lt;/b&gt;" in footer
+
+
+def test_render_sources_footer_empty_when_no_citations():
+    assert _render_sources_footer([], {}) == ""
+
+
+def test_render_sources_footer_handles_missing_url_gracefully():
+    bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [1]}]
+    sources = [_src(1, headline="", url="", domain="")]
+    dmap = _citation_display_map(bullets, sources)
+    footer = _render_sources_footer(sources, dmap)
+    assert footer != ""               # does not crash, still renders a row
+    assert "href=" not in footer      # no valid URL -> unlinked
+
+
+def test_render_bullets_escapes_html_metacharacters_in_body():
+    bullets = [
+        {"label": "Market pressure", "body": "Margins fell <5% as AT&T cut orders.",
+         "citation_source_ids": []},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    html_out = _render_executive_bullets(bullets, [], {})
+    assert "<5%" not in html_out
+    assert "&lt;5%" in html_out
+    assert "AT&amp;T" in html_out
+
+
+def test_render_marker_mixes_linked_and_unlinked_by_url_safety():
+    bullets = [
+        {"label": "Market pressure", "body": "A.", "citation_source_ids": [1, 2]},
+        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+    ]
+    sources = [
+        _src(1, url="javascript:alert(1)"),   # unsafe -> plain text [1]
+        _src(2, url="https://safe.com/y"),     # safe -> linked [2]
+    ]
+    dmap = _citation_display_map(bullets, sources)
+    html_out = _render_executive_bullets(bullets, sources, dmap)
+    assert 'href="https://safe.com/y"' in html_out   # id 2 linked
+    assert ">2</a>" in html_out
+    assert "javascript:alert(1)" not in html_out      # id 1 not linked
+    # id 1's display number 1 appears as plain text inside the marker, not as a link
+    assert ">1</a>" not in html_out
+
+
+from delivery_engine import _render_exec_summary
+
+
+def test_exec_summary_renders_inline_citations_and_footer():
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Resin prices climb", "url": "https://reuters.com/x",
+             "domain": "reuters.com", "segment": "Auto", "score": 8},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "Pricing firm." in html_out
+    assert 'href="https://reuters.com/x"' in html_out
+    assert "Sources" in html_out
+    assert "Resin prices climb" in html_out
+    assert "reuters.com" in html_out
+
+
+def test_exec_summary_legacy_row_renders_without_footer():
+    # Old row: bullets without citation_source_ids, no executive_sources.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A."},
+            {"label": "Supply chain watch", "body": "B."},
+            {"label": "Commercial action", "body": "C."},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "A." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+
+
+def test_exec_summary_prose_fallback_unchanged():
+    macro = {"executive_summary": "Prose summary.", "dominant_condition": "Low Signal"}
+    html_out = _render_exec_summary(macro)
+    assert "Prose summary." in html_out
+    assert "Sources" not in html_out
+
+
+def test_exec_summary_legacy_string_bullets_fall_back_to_prose():
+    # Legacy/malformed row: executive_bullets is a truthy list of strings (not
+    # dicts) AND prose is present. The structured citation path would render
+    # blank "• :" rows, so we must fall through to the legacy prose instead.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": ["Market pressure: pricing firm.", "Freight up.", "Watch."],
+        "executive_summary": "Prose summary stands in.",
+    }
+    html_out = _render_exec_summary(macro)
+    assert "Prose summary stands in." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+
+
+def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
+    # executive_sources is non-empty, but no bullet cites any id -> empty display
+    # map -> no inline markers and no orphan Sources footer.
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Unused", "url": "https://x.com/a",
+             "domain": "x.com", "segment": "Auto", "score": 7},
+        ],
+    }
+    html_out = _render_exec_summary(macro)
+    assert "A." in html_out
+    assert "Sources" not in html_out
+    assert "<a" not in html_out
+    assert "Unused" not in html_out   # uncited source never leaks into output

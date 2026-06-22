@@ -58,6 +58,8 @@ create table if not exists daily_summaries (
     run_mode text not null default 'production',
     dominant_condition text,
     executive_bullets jsonb,
+    -- Executive-summary source citations (migration 004)
+    executive_sources jsonb,
     screened_count integer,
     surfaced_count integer,
     suppression_breakdown jsonb,

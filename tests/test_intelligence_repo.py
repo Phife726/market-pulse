@@ -605,3 +605,49 @@ def test_supabase_require_delivery_state_returns_none_when_no_row(supabase_repo)
     )
     chain.data = []
     assert repo.require_delivery_state(run_date="2026-05-26", run_mode="production") is None
+
+
+# ---------------------------------------------------------------------------
+# SupabaseIntelligenceRepo — executive_sources column coverage
+# ---------------------------------------------------------------------------
+
+class _RecordingTable:
+    def __init__(self):
+        self.select_arg = None
+
+    def select(self, arg):
+        self.select_arg = arg
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def gte(self, *a, **k):
+        return self
+
+    def order(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        class _R:
+            data = []
+        return _R()
+
+
+class _RecordingSupabase:
+    def __init__(self):
+        self.table_obj = _RecordingTable()
+
+    def table(self, name):
+        return self.table_obj
+
+
+def test_fetch_latest_summary_selects_executive_sources(monkeypatch):
+    repo = SupabaseIntelligenceRepo()
+    rec = _RecordingSupabase()
+    monkeypatch.setattr(repo, "_supabase", lambda: rec)
+    repo.fetch_latest_summary(run_mode="production", min_date="2026-01-01")
+    assert "executive_sources" in rec.table_obj.select_arg

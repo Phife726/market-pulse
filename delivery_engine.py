@@ -1,9 +1,11 @@
+import html
 import logging
 import os
 import random
 import time
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 import yaml
@@ -602,26 +604,118 @@ def synthesize_thematic_paragraphs(
 # 3. HTML generation helpers
 # ---------------------------------------------------------------------------
 
-def _render_executive_bullets(bullets: list[dict]) -> str:
-    """Render the 3-bullet executive summary body.
+def _safe_http_url(url: Optional[str]) -> str:
+    """Return url only when its scheme is http/https; otherwise ''. Guards
+    against javascript:/data: and malformed values being placed into href."""
+    if not isinstance(url, str) or not url:
+        return ""
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except (ValueError, TypeError):
+        return ""
+    return url if scheme in ("http", "https") else ""
 
-    Each bullet uses bold label + body text. Labels come from the data, which
-    guarantees they match the configured executive_bullet_labels enforced by
-    ingestion's _validate_executive_bullets().
+
+def _citation_display_map(bullets: list[dict], sources: Optional[list[dict]]) -> dict[int, int]:
+    """Map raw cited source id -> sequential display number (1..N), ordered by
+    first appearance across bullets. Only ids that have a matching source entry
+    are numbered, so legacy rows (no executive_sources) yield an empty map."""
+    src_ids = {s["id"] for s in (sources or []) if isinstance(s, dict) and "id" in s}
+    order: list = []
+    for b in bullets or []:
+        if not isinstance(b, dict):
+            continue
+        for cid in b.get("citation_source_ids") or []:
+            if cid in src_ids and cid not in order:
+                order.append(cid)
+    return {cid: n for n, cid in enumerate(order, start=1)}
+
+
+def _render_citation_marker(cited_ids: Optional[list], src_by_id: dict, display_map: dict) -> str:
+    """Grouped inline citation, e.g. [1, 2]. Each number links to its source URL
+    (http/https only; otherwise plain text). Returns '' when nothing to show."""
+    parts: list[str] = []
+    for cid in cited_ids or []:
+        if cid not in display_map:
+            continue
+        n = display_map[cid]
+        url = _safe_http_url((src_by_id.get(cid) or {}).get("url"))
+        if url:
+            safe = html.escape(url, quote=True)
+            parts.append(
+                f'<a href="{safe}" title="{safe}" '
+                f'style="color:{_BRAND_NAVY};text-decoration:none;">{n}</a>'
+            )
+        else:
+            parts.append(str(n))
+    if not parts:
+        return ""
+    inner = ", ".join(parts)
+    return (
+        f'&nbsp;<span style="font-size:10px;color:{_BRAND_NAVY};'
+        f'vertical-align:super;">[{inner}]</span>'
+    )
+
+
+def _render_executive_bullets(bullets: list[dict], sources=None, display_map=None) -> str:
+    """Render the 3-bullet executive summary body, each bullet followed by its
+    grouped inline citation marker when it has resolvable cited sources.
+
+    sources/display_map default to empty so legacy callers (and legacy rows with
+    no citations) render exactly as before, with no markers.
     """
+    sources = sources or []
+    display_map = display_map or {}
+    src_by_id = {s["id"]: s for s in sources if isinstance(s, dict) and "id" in s}
     items_html = ""
     for b in bullets:
-        label = b.get("label", "")
-        body = b.get("body", "")
+        label = html.escape(b.get("label", "") if isinstance(b, dict) else "")
+        body = html.escape(b.get("body", "") if isinstance(b, dict) else "")
+        cited = b.get("citation_source_ids", []) if isinstance(b, dict) else []
+        marker = _render_citation_marker(cited, src_by_id, display_map)
         items_html += (
             f'<tr><td style="padding:2px 0;font-size:13px;color:#1a2a45;'
             f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
-            f'&bull;&nbsp;<strong>{label}:</strong> {body}'
+            f'&bull;&nbsp;<strong>{label}:</strong> {body}{marker}'
             f'</td></tr>'
         )
     return (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'{items_html}</table>'
+    )
+
+
+def _render_sources_footer(sources: Optional[list[dict]], display_map: dict) -> str:
+    """Render the 'Sources' footer: one row per cited source, ordered by display
+    number, as '[n] headline — domain' linked to the source URL. Empty string
+    when there are no cited sources."""
+    if not display_map:
+        return ""
+    src_by_id = {s["id"]: s for s in (sources or []) if isinstance(s, dict) and "id" in s}
+    rows = ""
+    for cid, n in sorted(display_map.items(), key=lambda kv: kv[1]):
+        src = src_by_id.get(cid) or {}
+        headline = html.escape(src.get("headline") or "Headline unavailable")
+        domain = html.escape(src.get("domain") or "source link")
+        label = f"[{n}] {headline} &mdash; {domain}"
+        url = _safe_http_url(src.get("url"))
+        if url:
+            safe = html.escape(url, quote=True)
+            entry = (
+                f'<a href="{safe}" style="color:{_BRAND_NAVY};text-decoration:none;">{label}</a>'
+            )
+        else:
+            entry = label
+        rows += (
+            f'<tr><td style="padding:1px 0;font-size:11px;color:#5a6678;'
+            f"font-family:Arial,sans-serif;line-height:1.5;\">{entry}</td></tr>"
+        )
+    return (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin-top:10px;border-top:1px solid #d8deec;padding-top:6px;">'
+        f'<tr><td style="padding:4px 0 2px 0;font-size:9px;font-weight:700;'
+        f'letter-spacing:1px;color:#5a6678;font-family:Arial,sans-serif;'
+        f'text-transform:uppercase;">Sources</td></tr>{rows}</table>'
     )
 
 
@@ -635,6 +729,7 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         return ""
 
     bullets = macro_summary.get("executive_bullets")
+    sources = macro_summary.get("executive_sources") or []
     legacy_text = macro_summary.get("executive_summary") or ""
     condition = (
         macro_summary.get("dominant_condition")
@@ -642,8 +737,20 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
         or ""
     )
 
-    if bullets:
-        body_html = _render_executive_bullets(bullets)
+    # Only take the structured citation path when bullets is a non-empty list of
+    # dict bullets. A legacy/malformed row whose executive_bullets is a list of
+    # strings would otherwise render blank "• :" rows and skip the prose fallback.
+    structured_bullets = (
+        isinstance(bullets, list)
+        and bool(bullets)
+        and all(isinstance(b, dict) for b in bullets)
+    )
+
+    footer_html = ""
+    if structured_bullets:
+        display_map = _citation_display_map(bullets, sources)
+        body_html = _render_executive_bullets(bullets, sources, display_map)
+        footer_html = _render_sources_footer(sources, display_map)
     elif legacy_text:
         body_html = (
             f'<p style="margin:0;font-size:14px;color:#1a2a45;'
@@ -674,6 +781,7 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
                   Executive Summary{badge_html}
                 </p>
                 {body_html}
+                {footer_html}
               </td>
             </tr>
           </table>
