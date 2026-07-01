@@ -232,7 +232,7 @@ customers:
     - name: Lexmark
       active: false  # acquired by Tarkett (2018); tracked as Tarkett
     - name: Tarkett
-      domain: tarkett.com
+      domain: commercial.tarkett.com
       active: true
     - name: Fuyao Automotive Glass
       zoominfo_company_id: 110167534
