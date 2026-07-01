@@ -38,6 +38,7 @@ competitors:
     - name: Polymax
       active: false  # acquired by Geon (2023); tracked as Geon
     - name: Geon
+      zoominfo_company_id: 15860017
       domain: geon.com
       active: true
     - name: Primex Color Compounding
@@ -111,6 +112,7 @@ customers:
       zoominfo_company_id: 53298876
       active: true
     - name: Inoac Automotive
+      zoominfo_company_id: 363001903
       domain: inoacusa.com
       active: true
     - name: Integrated Fiber Solutions
@@ -145,12 +147,16 @@ customers:
       zoominfo_company_id: 1207763488
       active: true
     - name: Kinderhook Industries
+      zoominfo_company_id: 153388198
       domain: kinderhook.com
       active: true
     - name: Shaw Industries
+      zoominfo_company_id: 551839191
       domain: shawinc.com
       active: true
     - name: Advanced Composites
+      zoominfo_company_id: 1158466928
+      domain: advcmp.com
       active: true
     - name: Magna International
       zoominfo_company_id: 31164078
@@ -178,6 +184,7 @@ customers:
     - name: Performance Plastics
       active: false  # acquired by Pexco (2022); tracked as Pexco
     - name: Pexco
+      zoominfo_company_id: 92128803
       domain: pexco.com
       active: true
     - name: Summit Polymers
@@ -235,6 +242,7 @@ customers:
       zoominfo_company_id: 38421820
       active: true
     - name: Freudenberg
+      zoominfo_company_id: 111232765
       domain: freudenberg.com
       active: true
     - name: Wilbert
@@ -255,8 +263,7 @@ suppliers:
     - "securities analyst reports"
   entities:
     - name: AdvanSix Resin
-      domain: advansix.com
-      active: true
+      active: false  # duplicate of AdvanSix (resolves to the same ZoomInfo company)
     - name: AM Stabilizers
       zoominfo_company_id: 356446246
       active: true
@@ -287,11 +294,13 @@ suppliers:
     - name: Ferro Pigments
       active: false  # legacy brand unified under Vibrantz; tracked as Vibrantz
     - name: Vibrantz
+      zoominfo_company_id: 565012260
       domain: vibrantz.com
       active: true
     - name: Heucotech
       active: false  # Heubach acquired by Sudarshan Chemical (SCIL); tracked as Sudarshan
     - name: Sudarshan
+      zoominfo_company_id: 36929544
       domain: sudarshan.com
       active: true
     - name: Huntsman Corporation
@@ -299,6 +308,7 @@ suppliers:
       domain: huntsman.com
       active: true
     - name: Interspersal
+      zoominfo_company_id: 557947310
       domain: interspersal.com
       active: true
     - name: Milliken
@@ -324,6 +334,7 @@ suppliers:
       zoominfo_company_id: 368294277
       active: true
     - name: Nexeo Solutions
+      zoominfo_company_id: 475896029
       domain: nexeoplastics.com
       active: true
     - name: Oxy Vinyls

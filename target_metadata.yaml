@@ -93,24 +93,23 @@ targets:
   Advanced Composites:
     target_key: Advanced Composites
     metadata_record_status: active
-    zoominfo_company_id: 47989491
-    canonical_name: Toray Advanced Composites
-    hq_revenue_range: '386761'
-    employee_range: '821'
+    zoominfo_company_id: 1158466928
+    canonical_name: Advanced Composites
+    hq_revenue_range: '146'
+    employee_range: '2'
     primary_industry: Manufacturing
     industries:
     - Manufacturing
     - Chemicals & Related Products
-    - Aerospace & Defense
+    - Automotive Parts
     hq_country: United States
-    hq_state: California
+    hq_state: Ohio
     company_identity_terms:
-    - Toray Advanced Composites
     - Advanced Composites
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -880,24 +879,27 @@ targets:
   Freudenberg:
     target_key: Freudenberg
     metadata_record_status: active
-    zoominfo_company_id: 111232767
-    canonical_name: Freudenberg Sealing Technologies
-    hq_revenue_range: '2857844'
-    employee_range: '15000'
-    primary_industry: Manufacturing
+    zoominfo_company_id: 111232765
+    canonical_name: Freudenberg
+    hq_revenue_range: '1332000'
+    employee_range: '52104'
+    primary_industry: Holding Companies & Conglomerates
     industries:
+    - Holding Companies & Conglomerates
     - Manufacturing
+    - Chemicals & Related Products
+    - Textiles & Apparel
     - Tires & Rubber
-    - Automotive Parts
     hq_country: Germany
     hq_state: Baden-Wuerttemberg
     company_identity_terms:
-    - Freudenberg Sealing Technologies
     - Freudenberg
-    industry_relevance_terms: []
-    industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -966,6 +968,30 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: approved
     zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Geon:
+    target_key: Geon
+    metadata_record_status: active
+    zoominfo_company_id: 15860017
+    canonical_name: GEON Performance Solutions
+    hq_revenue_range: '471085'
+    employee_range: '1000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - GEON Performance Solutions
+    - Geon
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -1115,22 +1141,25 @@ targets:
   Inoac Automotive:
     target_key: Inoac Automotive
     metadata_record_status: active
-    zoominfo_company_id: 1310813389
-    canonical_name: Inoac Automotive
-    hq_revenue_range: '10699'
-    employee_range: '45'
+    zoominfo_company_id: 363001903
+    canonical_name: INOAC USA
+    hq_revenue_range: '488828'
+    employee_range: '1800'
     primary_industry: Manufacturing
     industries:
     - Manufacturing
-    - Automotive Parts
-    hq_country: Thailand
-    hq_state: Chonburi
+    - Plastic, Packaging & Containers
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: United States
+    hq_state: Michigan
     company_identity_terms:
+    - INOAC USA
     - Inoac Automotive
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -1162,24 +1191,22 @@ targets:
   Interspersal:
     target_key: Interspersal
     metadata_record_status: active
-    zoominfo_company_id: 19726671
-    canonical_name: Intersperse
-    hq_revenue_range: '3824'
-    employee_range: '22'
-    primary_industry: Software
+    zoominfo_company_id: 557947310
+    canonical_name: Interspersal
+    hq_revenue_range: '1249'
+    employee_range: '14'
+    primary_industry: Manufacturing
     industries:
-    - Software
-    - Business Services
-    - Custom Software & IT Services
-    hq_country: ''
-    hq_state: ''
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Pennsylvania
     company_identity_terms:
-    - Intersperse
     - Interspersal
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -1208,10 +1235,10 @@ targets:
   Kinderhook Industries:
     target_key: Kinderhook Industries
     metadata_record_status: active
-    zoominfo_company_id: 1291280544
+    zoominfo_company_id: 153388198
     canonical_name: Kinderhook Industries
-    hq_revenue_range: '30216'
-    employee_range: '41'
+    hq_revenue_range: '19242'
+    employee_range: '40'
     primary_industry: Finance
     industries:
     - Finance
@@ -1222,8 +1249,8 @@ targets:
     - Kinderhook Industries
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -1718,20 +1745,25 @@ targets:
   Nexeo Solutions:
     target_key: Nexeo Solutions
     metadata_record_status: active
-    zoominfo_company_id: null
-    canonical_name: ''
-    hq_revenue_range: ''
-    employee_range: ''
-    primary_industry: ''
-    industries: []
-    hq_country: ''
-    hq_state: ''
+    zoominfo_company_id: 475896029
+    canonical_name: Nexeo Plastics
+    hq_revenue_range: '329760'
+    employee_range: '700'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Retail
+    - Office Products Retail & Distribution
+    hq_country: United States
+    hq_state: Texas
     company_identity_terms:
+    - Nexeo Plastics
     - Nexeo Solutions
     industry_relevance_terms: []
-    industry_unmapped: false
-    zoominfo_metadata_status: missing
-    zoominfo_metadata_confidence: low
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -1872,6 +1904,28 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: needs_review
     zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Pexco:
+    target_key: Pexco
+    metadata_record_status: active
+    zoominfo_company_id: 92128803
+    canonical_name: Pexco
+    hq_revenue_range: '242368'
+    employee_range: '800'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Pexco
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -2155,26 +2209,28 @@ targets:
   Shaw Industries:
     target_key: Shaw Industries
     metadata_record_status: active
-    zoominfo_company_id: 559691802
-    canonical_name: Shaw Contract
-    hq_revenue_range: '302886'
-    employee_range: '760'
-    primary_industry: Manufacturing
+    zoominfo_company_id: 551839191
+    canonical_name: Shaw Floors
+    hq_revenue_range: '4888277'
+    employee_range: '18000'
+    primary_industry: Retail
     industries:
+    - Retail
+    - Home Improvement & Hardware Retail
     - Manufacturing
-    - Household Goods
-    - Textiles & Apparel
+    - Building Materials
+    - Furniture
     hq_country: United States
     hq_state: Georgia
     company_identity_terms:
-    - Shaw Contract
+    - Shaw Floors
     - Shaw Industries
     industry_relevance_terms:
-    - fibers
-    - textiles
+    - building materials
+    - construction
     industry_unmapped: false
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
@@ -2245,6 +2301,28 @@ targets:
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
+  Sudarshan:
+    target_key: Sudarshan
+    metadata_record_status: active
+    zoominfo_company_id: 36929544
+    canonical_name: Sudarshan
+    hq_revenue_range: '300647'
+    employee_range: '1262'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Sudarshan
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
   Summit Polymers:
     target_key: Summit Polymers
     metadata_record_status: active
@@ -2285,6 +2363,31 @@ targets:
     industry_relevance_terms: []
     industry_unmapped: true
     zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Tarkett:
+    target_key: Tarkett
+    metadata_record_status: active
+    zoominfo_company_id: 1312587948
+    canonical_name: Tarkett
+    hq_revenue_range: '3737161'
+    employee_range: '12000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Building Materials
+    hq_country: France
+    hq_state: Ile-de-France
+    company_identity_terms:
+    - Tarkett
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: needs_review
     zoominfo_metadata_confidence: low
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
@@ -2496,6 +2599,29 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: approved
     zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Vibrantz:
+    target_key: Vibrantz
+    metadata_record_status: active
+    zoominfo_company_id: 565012260
+    canonical_name: Vibrantz Technologies
+    hq_revenue_range: '2355422'
+    employee_range: '4000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Vibrantz Technologies
+    - Vibrantz
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
