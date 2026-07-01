@@ -63,6 +63,7 @@ competitors:
     - name: Kraiburg TPE
       active: true
     - name: Grafe Advanced Polymers
+      domain: grafe.com
       active: true
 
 customers:
@@ -125,18 +126,22 @@ customers:
     - name: Mohawk Industries
       active: true
     - name: Pilkington
+      domain: pilkington.com
       active: true
     - name: AdvanSix
       active: true
     - name: Saint-Gobain Glass
+      domain: saint-gobain.com
       active: true
     - name: Performance Plastics
       active: true
     - name: Summit Polymers
       active: true
     - name: Yanfeng Global
+      domain: yanfeng.com
       active: true
     - name: Asahi Glass
+      domain: agc.com
       active: true
     - name: Mannington Mills
       active: true
@@ -163,6 +168,7 @@ customers:
     - name: Lexmark
       active: true
     - name: Fuyao Automotive Glass
+      domain: fuyaogroup.com
       active: true
     - name: Tokai Rika
       active: true
@@ -207,14 +213,17 @@ suppliers:
     - name: Ferro Pigments
       active: true
     - name: Heucotech
+      domain: heucotech.com
       active: true
     - name: Huntsman Corporation
+      domain: huntsman.com
       active: true
     - name: Interspersal
       active: true
     - name: Milliken
       active: true
     - name: Mitsui Plastics
+      domain: mitsuiplastics.com
       active: true
     - name: Nycoa
       active: true
@@ -251,6 +260,7 @@ suppliers:
     - name: Venator Materials
       active: true
     - name: BYK Additives
+      domain: byk.com
       active: true
     - name: Dow
       active: true
