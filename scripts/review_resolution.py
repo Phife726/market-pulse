@@ -2,11 +2,13 @@
 
 Surfaces target -> resolved id, canonical_name, HQ country, and primary industry
 so name-only mismatches are easy to spot across many records. A row is flagged
-(⚠) when EITHER:
+(⚠) when ANY of:
+  - the resolved canonical_name is blank (an id with no reviewable company name
+    is not approvable), OR
   - the target name and canonical_name share no token (likely wrong entity), OR
   - the resolved primary_industry is off-domain (clearly not a chemicals /
     plastics / manufacturing company — e.g. Software, Hospitality).
-Unresolved rows show as (∅). Flagged/unresolved rows sort to the top.
+Unresolved rows (no id at all) show as (∅). Flagged/unresolved rows sort first.
 
 The HQ COUNTRY column is shown but not auto-flagged: many legitimate targets are
 non-US (BASF, SABIC, Radici), so a foreign HQ is a *look*, not a fail. It is the
@@ -38,11 +40,14 @@ def _tokens(s: str) -> set[str]:
 
 
 def flag_for(key: str, cid, canon: str, industry: str) -> tuple[str, str]:
-    """Return (flag, reason). '∅' unresolved; '⚠' name and/or industry mismatch."""
+    """Return (flag, reason). '∅' unresolved (no id); '⚠' blank/mismatched
+    canonical and/or off-domain industry."""
     if not cid:
         return "∅", "no id"
     reasons = []
-    if canon and not (_tokens(key) & _tokens(canon)):
+    if not canon.strip():
+        reasons.append("canonical")
+    elif not (_tokens(key) & _tokens(canon)):
         reasons.append("name")
     if industry.strip().lower() in OFF_DOMAIN_INDUSTRIES:
         reasons.append("industry")

@@ -48,6 +48,11 @@ def test_missing_id_is_unresolved():
     assert rr.flag_for("Ferro Pigments", None, "", "") == ("∅", "no id")
 
 
+def test_resolved_id_with_blank_canonical_is_flagged():
+    # An id with no reviewable company name must not read as plausible.
+    assert rr.flag_for("Sparse Co", 12345, "", "Manufacturing") == ("⚠", "canonical")
+
+
 def test_build_rows_sorts_flagged_and_unresolved_first():
     recs = {
         "Good Co": _rec(1, "Good Co"),
