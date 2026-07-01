@@ -223,7 +223,6 @@ customers:
       zoominfo_company_id: 42255740
       active: true
     - name: Lexmark
-      domain: lexmarkcarpet.com
       active: true
     - name: Fuyao Automotive Glass
       zoominfo_company_id: 110167534
