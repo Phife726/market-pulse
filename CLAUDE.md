@@ -35,6 +35,8 @@ Two GitHub Actions workflows exist:
 
 ## Architecture
 
+`CONTEXT.md` is the companion glossary — the shared vocabulary for seams and domain terms (Insight, materiality, relevance thresholds, macro summary, relevance gate). Read it alongside this section when the naming matters.
+
 The pipeline is two sequential scripts sharing a Supabase database, plus three seam modules — one owning suppression accounting, one owning every database call, and one owning every structured LLM call — plus `insight.py` (the per-article schema: taxonomies, normalization, field readers) and `scoring.py` (the relevance thresholds the report applies):
 
 **`suppression_ledger.py`** — Pure in-process module owning the suppression reason taxonomy (5 ingestion-owned + 9 delivery-owned codes), `SAMPLES_CAP = 10`, and the same-day-retry merge semantics. Used by both engines; performs zero I/O.
@@ -47,15 +49,25 @@ The pipeline is two sequential scripts sharing a Supabase database, plus three s
 
 **`scoring.py`** — Pure module owning the relevance thresholds the report applies to an Insight's materiality. `Scoring.from_config(config)` resolves the configurable bands (`reporting.visible_impact_threshold` default 6, `supporting_impact_threshold` default 4) and exposes `is_visible(row)` / `is_weak_relevance(row)`; module-level `tier(row)` (CRITICAL ≤3 / STRATEGIC ≥8 / ROUTINE) and `is_legacy_critical(row)` use fixed edges. Builds on `insight.effective_impact` (the *what*); scoring is the *what it means for the report*. `delivery_engine` constructs a `Scoring` in `generate_html_email`, re-exports `tier` as `_alert_tier`, and calls `is_legacy_critical` for the meta-strip badge. **Out of scope** (left where they are): the suppression policy's `enterprise_min_impact` (a suppression parameter) and `_sentiment_word`'s legacy directional-sentiment mapping (tone, not materiality). Tested directly in `tests/test_scoring.py`.
 
+### Discovery & enrichment subsystem (ZoomInfo)
+
+A second, feature-flagged article-discovery path that supplements Serper. All flags default **off** — production behaviour is unchanged until each is explicitly enabled, and the ingestion engine does not write the discovery-provenance columns until `STORE_DISCOVERY_METADATA` is truthy.
+
+**`zoominfo_client.py`** — ZoomInfo company-news discovery provider. Company/news enrichment **only** — never calls a Contact API and never returns contact data. Auth priority: OAuth client-credentials (`ZOOMINFO_CLIENT_ID` + `ZOOMINFO_CLIENT_SECRET`, token cached in-process) → static `ZOOMINFO_BEARER_TOKEN` → none (warn, return `[]`). Endpoints are override-able via env vars so a published-path change never needs code. Every failure mode is swallowed to `[]` — a ZoomInfo outage degrades discovery instead of crashing the cron; no secret or token is ever logged. Gated per-entity by `_zoominfo_target_eligible` (flag on + a mapped `zoominfo_company_id` + `zoominfo_news` not disabled); concept-mode targets carry no company id and short-circuit.
+
+**`relevance_gate.py`** — Pure ZoomInfo false-positive suppressor (NOT a second entity resolver). ZoomInfo candidates are already company-linked; `evaluate` drops one only when a curated `exclude_term` appears AND no identity term (canonical name / identity terms / manual aliases) rescues it — identity rescue is checked first, absence of identity text alone never drops. `load_target_metadata` is the only I/O and swallows read/parse errors to `{}`, so a missing or malformed companion file silently disables the gate. Gated by `ZOOMINFO_RELEVANCE_GATE_ENABLED`; suppression reason is `zoominfo_company_mismatch`.
+
+**`target_enricher.py`** + **`scripts/enrich_targets.py`** — An offline, operator-run utility (not part of the daily cron) that populates `target_metadata.yaml`. `target_enricher.py` is a pure, mock-free transform (ZoomInfo raw response + prior metadata → proposed metadata: status, confidence, conservative de-suffixed identity/industry terms; no acronyms); the clock and all I/O live in the CLI. Run with `python scripts/enrich_targets.py`. `target_metadata.yaml` is **machine-managed** — the CLI header marks which fields are hand-editable; do not hand-edit the generated ones.
+
 **`ingestion_engine.py`** — Scrape → Synthesize → Store
 
 1. Loads `targets.yaml` to get active targets — two modes: **entity** (one Serper query per company name) and **concept** (one combined OR query per group, gated by `active: true` at group level)
-2. Queries Serper.dev for recent article URLs; runs semantic deduplication (`rapidfuzz token_sort_ratio >= 88`) against headlines seen in the last 72 h before scraping
+2. Gathers candidate URLs from up to **two discovery providers**: Serper.dev (always on) and, per-entity, ZoomInfo company-news enrichment (feature-flagged — see the discovery/enrichment subsystem below). Runs semantic deduplication (`rapidfuzz token_sort_ratio >= 88`) against headlines seen in the last 72 h before scraping
 3. Strips URL query parameters, computes SHA-256 hash → skips if already in DB
 4. Extracts article markdown via Firecrawl; falls back to a direct-HTTP scraper on HTTP 402 (quota exhaustion); skips if below `min_article_length`
 5. Calls OpenAI `gpt-5.4-nano` with article text; receives structured JSON including `headline`, `americhem_impact` (BLUF "so what"), `sentiment_score` (1–10, legacy directional), the relevance-upgrade fields `sentiment_tag` (Negative/Neutral/Positive), `americhem_impact_score` (1–10, **materiality** — independent of tone), `impact_rationale`, `commercial_segment` and `signal_type` (validated against the labels in `market_pulse_config.yaml`), and `recommended_action`. The model may return `{"americhem_impact": "DISCARD"}` to drop false-positive entity matches.
 6. Upserts row into `daily_intelligence` table (unique constraint on `url_hash`)
-7. After all articles are stored, calls `generate_macro_summary()` — a second OpenAI call that writes `executive_summary` and `macro_sentiment` to the `daily_summaries` table (keyed on `run_date`)
+7. After all articles are stored, calls `generate_macro_summary()` — a second OpenAI call that writes `executive_summary`, `macro_sentiment`, the structured `dominant_condition` / `executive_bullets`, and `executive_sources` to the `daily_summaries` table (keyed on `run_date`). Each executive bullet may carry `citation_source_ids`; `executive_sources` is the packed list of only those sources cited by at least one surviving bullet (`[{id, headline, url, domain, segment, score}]`). Delivery renders these as inline citation markers plus a "Sources" list at the bottom of the email.
 8. Enforces `MAX_DAILY_SCRAPES = 150` hard cap and `PIPELINE_DEADLINE_SECONDS = 600` wall-clock deadline (keeps runtime inside the GitHub Actions 15-min limit)
 
 **`delivery_engine.py`** — Fetch → Format → Send
@@ -79,7 +91,12 @@ When `MARKET_PULSE_RUN_MODE=test`, both the subject line and the rendered HTML a
 
 **Database** (`schema.sql`) — Two tables: `daily_intelligence` (articles) and `daily_summaries` (one macro summary row per run date). The `todays_intelligence` view adds an `alert_tier` column for ad-hoc queries; the unique index on `url_hash` is the deduplication gate.
 
-`migrations/` holds incremental SQL applied via the Supabase SQL editor. `001_add_relevance_fields.sql` adds the relevance-upgrade columns (`sentiment_tag`, `americhem_impact_score`, `impact_rationale`, `strategic_segment`, `include_in_report`); existing DBs must run this before the current code stores rows. A fresh DB can initialize from `schema.sql` alone — it already contains those columns.
+`migrations/` holds incremental SQL applied via the Supabase SQL editor; each file is idempotent (safe to re-run). A fresh DB can initialize from `schema.sql` alone — it already contains the current columns; existing DBs must apply the migrations in order before running the matching code:
+
+- `001_add_relevance_fields.sql` — relevance-upgrade columns (`sentiment_tag`, `americhem_impact_score`, `impact_rationale`, `strategic_segment`, `include_in_report`).
+- `002_split_segment_and_structured_summary.sql` — splits `commercial_segment` from `signal_type`; adds the structured macro-summary fields (`dominant_condition`, `executive_bullets`), `run_mode` isolation, and suppression counts/samples.
+- `003_add_discovery_metadata.sql` — multi-provider discovery provenance (`discovery_source`, `external_company_id`, `published_at`, `source_metadata`). **Rollout order matters**: merge the ZoomInfo code (flags off) → apply this migration → set `STORE_DISCOVERY_METADATA=true`.
+- `004_add_executive_sources.sql` — `executive_sources` jsonb for citations. **Required, not flag-gated** — apply this migration *before* deploying the citation code, or ingestion upserts crash and delivery's summary blanks out.
 
 **`targets.yaml`** — The first of two non-technical control files. Add/remove entities here; no Python changes required. Top-level keys:
 
@@ -97,7 +114,7 @@ When `MARKET_PULSE_RUN_MODE=test`, both the subject line and the rendered HTML a
 
 ## Tests
 
-`tests/test_pipeline.py` covers: URL normalization (query params/fragments stripped), SHA-256 hash collision (UTM-polluted vs. clean URL must hash identically), sentiment score clamping to [1, 10], and `load_targets()` filtering inactive entities. All external API clients (OpenAI, Supabase, Serper, Firecrawl) are mocked — no live calls in the test suite.
+`tests/test_pipeline.py` covers: URL normalization (query params/fragments stripped), SHA-256 hash collision (UTM-polluted vs. clean URL must hash identically), sentiment score clamping to [1, 10], and `load_targets()` filtering inactive entities. The pure seam/schema modules are tested directly and in isolation — `test_insight.py`, `test_scoring.py`, `test_suppression_ledger.py`, `test_intelligence_repo.py`, `test_llm.py` (the SDK-shape contract, asserted once). The ZoomInfo/enrichment subsystem has its own coverage — `test_zoominfo.py`, `test_zoominfo_company.py`, `test_relevance_gate.py`, `test_target_enricher.py`, `test_enrich_targets_cli.py`. All external API clients (OpenAI, Supabase, Serper, Firecrawl, ZoomInfo) are mocked or use the in-memory adapter — no live calls in the test suite.
 
 ## Key Invariants
 
@@ -111,6 +128,7 @@ When `MARKET_PULSE_RUN_MODE=test`, both the subject line and the rendered HTML a
 - `RECIPIENT_EMAILS` is the **only** source for the Resend `to:` list — there are no hardcoded fallbacks. The production workflow injects the production recipient pool; the test workflow injects `TEST_RECIPIENT_EMAILS` instead. Swapping pools is therefore a workflow-level secret change.
 - Report filtering uses `americhem_impact_score` (materiality), **not** `sentiment_tag` (tone). A Negative-low-impact article is excluded; a Negative-high-impact supply disruption appears prominently. Don't conflate the two.
 - `MARKET_PULSE_RUN_MODE=test` is the single switch that marks both the subject line (`[TEST]`) and the HTML body (amber banner row). The test workflow sets it; production never does.
+- ZoomInfo discovery is gated by three independent flags, all defaulting **off**: `ZOOMINFO_NEWS_ENABLED` (turns the provider on), `ZOOMINFO_RELEVANCE_GATE_ENABLED` (turns the false-positive gate on), `STORE_DISCOVERY_METADATA` (persists provenance columns — leave off until migration 003 is applied). Enabling them out of order degrades gracefully; it does not crash the cron.
 
 ## Python Conventions
 
