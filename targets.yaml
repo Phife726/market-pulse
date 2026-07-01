@@ -145,6 +145,7 @@ customers:
     - name: Shaw Industries
       active: true
     - name: Advanced Composites
+      domain: advcmp.com
       active: true
     - name: Magna International
       zoominfo_company_id: 31164078
