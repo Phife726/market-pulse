@@ -93,24 +93,23 @@ targets:
   Advanced Composites:
     target_key: Advanced Composites
     metadata_record_status: active
-    zoominfo_company_id: 47989491
-    canonical_name: Toray Advanced Composites
-    hq_revenue_range: '386761'
-    employee_range: '821'
+    zoominfo_company_id: 1158466928
+    canonical_name: Advanced Composites
+    hq_revenue_range: '146'
+    employee_range: '2'
     primary_industry: Manufacturing
     industries:
     - Manufacturing
     - Chemicals & Related Products
-    - Aerospace & Defense
+    - Automotive Parts
     hq_country: United States
-    hq_state: California
+    hq_state: Ohio
     company_identity_terms:
-    - Toray Advanced Composites
     - Advanced Composites
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: needs_review
-    zoominfo_metadata_confidence: low
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
