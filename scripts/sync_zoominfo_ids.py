@@ -5,7 +5,15 @@ the metadata companion) turns on for the newly enriched companies.
 Comment-preserving: patches by line insertion, never round-trips the whole YAML.
 Dry-run by default (prints a unified diff, writes nothing); --write applies.
 Only fills entities that are (a) active, (b) currently missing an id, and
-(c) present with an id in an active target_metadata.yaml record.
+(c) present with an id in an active target_metadata.yaml record whose ZoomInfo
+status is approved/verified.
+
+Syncing an id into targets.yaml makes that company an active ZoomInfo news
+discovery target. So the bridge deliberately refuses to promote `needs_review`
+rows: a low-confidence name-only match stays review-only until an operator
+records an explicit `approved` status (or the enricher wrote `verified` for a
+precurated/domain match). This keeps the helper a review step, not an
+auto-approval step.
 """
 from __future__ import annotations
 
@@ -16,10 +24,17 @@ import sys
 
 import yaml
 
+# ZoomInfo statuses that gate a record for sync into targets.yaml. `verified` is
+# written by the enricher for precurated/domain (high-confidence) matches;
+# `approved` is an operator-set token for a reviewed name-only match. Anything
+# still `needs_review` / `missing` / `error` is intentionally NOT synced.
+APPROVED_ZOOMINFO_STATUSES = {"verified", "approved"}
+
 
 def load_resolved_ids(metadata_path: str) -> dict[str, int]:
     """Return {target_key: zoominfo_company_id} for active metadata records that
-    carry an id. Missing file or malformed records yield an empty mapping."""
+    carry an id AND an approved/verified ZoomInfo status. Missing file, malformed
+    records, or unreviewed (`needs_review`) rows yield no entry."""
     with open(metadata_path) as fh:
         data = yaml.safe_load(fh) or {}
     out: dict[str, int] = {}
@@ -27,8 +42,13 @@ def load_resolved_ids(metadata_path: str) -> dict[str, int]:
         if not isinstance(rec, dict):
             continue
         cid = rec.get("zoominfo_company_id")
-        status = rec.get("metadata_record_status", "active")
-        if cid and status == "active":
+        metadata_status = rec.get("metadata_record_status", "active")
+        zoominfo_status = rec.get("zoominfo_metadata_status")
+        if (
+            cid
+            and metadata_status == "active"
+            and zoominfo_status in APPROVED_ZOOMINFO_STATUSES
+        ):
             out[str(key)] = cid
     return out
 

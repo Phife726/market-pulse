@@ -24,6 +24,8 @@ def _targets(tmp_path):
               zoominfo_company_id: 357374413
             - name: Teknor Apex
               active: true
+            - name: Needs Review Co
+              active: true
             - name: Paused Co
               active: false
             - name: Unresolved Co
@@ -41,20 +43,42 @@ def _metadata(tmp_path):
         targets:
           Teknor Apex:
             metadata_record_status: active
+            zoominfo_metadata_status: verified
             zoominfo_company_id: 73040436
+          Needs Review Co:
+            metadata_record_status: active
+            zoominfo_metadata_status: needs_review
+            zoominfo_company_id: 44445555
           Paused Co:
             metadata_record_status: active
+            zoominfo_metadata_status: approved
             zoominfo_company_id: 11112222
           Dropped Co:
             metadata_record_status: retired
+            zoominfo_metadata_status: verified
             zoominfo_company_id: 99998888
         """)
 
 
-def test_load_resolved_ids_takes_active_records_with_ids_only(tmp_path):
+def test_load_resolved_ids_requires_active_and_approved_status(tmp_path):
     ids = sync.load_resolved_ids(str(_metadata(tmp_path)))
+    # verified + approved records with ids are eligible.
     assert ids == {"Teknor Apex": 73040436, "Paused Co": 11112222}
-    assert "Dropped Co" not in ids  # retired record is ignored
+    # needs_review is review-only — never eligible for sync, even with an id.
+    assert "Needs Review Co" not in ids
+    # retired metadata record is ignored regardless of ZoomInfo status.
+    assert "Dropped Co" not in ids
+
+
+def test_needs_review_row_is_not_written_into_targets(tmp_path):
+    targets = _targets(tmp_path)
+    ids = sync.load_resolved_ids(str(_metadata(tmp_path)))
+    _, new, filled = sync.patch_targets(str(targets), ids)
+
+    # 'Needs Review Co' is an active, id-less entity — the ONLY reason it is not
+    # filled is its needs_review status. This is the safety contract.
+    assert "Needs Review Co" not in filled
+    assert "44445555" not in new
 
 
 def test_patch_fills_only_active_missing_entities(tmp_path):
@@ -62,10 +86,10 @@ def test_patch_fills_only_active_missing_entities(tmp_path):
     ids = sync.load_resolved_ids(str(_metadata(tmp_path)))
     old, new, filled = sync.patch_targets(str(targets), ids)
 
-    # Only the active, id-less, metadata-present entity is filled.
+    # Only the active, id-less, approved/verified entity is filled.
     assert filled == ["Teknor Apex"]
     assert "zoominfo_company_id: 73040436" in new
-    # Inactive 'Paused Co' is skipped even though metadata has an id for it.
+    # Inactive 'Paused Co' is skipped even though its metadata is approved.
     assert "11112222" not in new
     # Already-curated Avient keeps its single id — no duplicate line.
     assert new.count("357374413") == 1
