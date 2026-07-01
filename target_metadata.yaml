@@ -1366,7 +1366,7 @@ targets:
     - Lexmark
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: approved
+    zoominfo_metadata_status: needs_review
     zoominfo_metadata_confidence: low
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
@@ -1989,7 +1989,7 @@ targets:
     - Polymax
     industry_relevance_terms: []
     industry_unmapped: true
-    zoominfo_metadata_status: approved
+    zoominfo_metadata_status: needs_review
     zoominfo_metadata_confidence: low
     zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []

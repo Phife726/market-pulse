@@ -36,7 +36,6 @@ competitors:
       zoominfo_company_id: 71322777
       active: true
     - name: Polymax
-      zoominfo_company_id: 223363439
       active: true
     - name: Primex Color Compounding
       zoominfo_company_id: 403107998
@@ -215,7 +214,6 @@ customers:
       zoominfo_company_id: 42255740
       active: true
     - name: Lexmark
-      zoominfo_company_id: 564553451
       active: true
     - name: Fuyao Automotive Glass
       zoominfo_company_id: 110167534
