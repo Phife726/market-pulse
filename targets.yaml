@@ -27,42 +27,57 @@ competitors:
   exclude_any: []
   entities:
     - name: Audia Elastomers
+      zoominfo_company_id: 450692084
       active: true
     - name: Aurora Fine Chemicals
+      zoominfo_company_id: 353852276
       active: true
     - name: Liochem
+      zoominfo_company_id: 71322777
       active: true
     - name: Polymax
       active: true
     - name: Primex Color Compounding
+      zoominfo_company_id: 403107998
       active: true
     - name: Avient
       active: true
       zoominfo_company_id: 357374413
       zoominfo_news: true
     - name: Standridge Color
+      zoominfo_company_id: 113705241
       active: true
     - name: Ampacet
+      zoominfo_company_id: 2113561
       active: true
     - name: Teknor Apex
+      zoominfo_company_id: 73040436
       active: true
     - name: Mitsubishi Chemical
+      zoominfo_company_id: 150438451
       active: true
     - name: Uniform Color
+      zoominfo_company_id: 81592562
       active: true
     - name: Akro-Mils
+      zoominfo_company_id: 999794
       active: true
     - name: RTP Company
       active: true
       zoominfo_company_id: 46383930
       zoominfo_news: true
     - name: Penn Color
+      zoominfo_company_id: 29999928
       active: true
     - name: Techmer PM
+      zoominfo_company_id: 37699817
       active: true
     - name: Kraiburg TPE
+      zoominfo_company_id: 66537649
       active: true
     - name: Grafe Advanced Polymers
+      zoominfo_company_id: 347431641
+      domain: grafe.com
       active: true
 
 customers:
@@ -73,42 +88,57 @@ customers:
     - "securities analyst reports"
   entities:
     - name: Cavanaugh Building Corporation
+      zoominfo_company_id: 18008481
       active: true
     - name: Closure Systems International
+      zoominfo_company_id: 3542850
       active: true
     - name: Cocona
       active: true
     - name: CS Manufacturing
+      zoominfo_company_id: 345387036
       active: true
     - name: Fiberon
+      zoominfo_company_id: 5000041008
       active: true
     - name: GAF Roofing
+      zoominfo_company_id: 354985978
       active: true
     - name: Homeland Vinyl
+      zoominfo_company_id: 53298876
       active: true
     - name: Inoac Automotive
       active: true
     - name: Integrated Fiber Solutions
+      zoominfo_company_id: 1302202973
       active: true
     - name: Marglen Industries
+      zoominfo_company_id: 373790974
       active: true
     - name: Marquis Industries
+      zoominfo_company_id: 152388418
       active: true
     - name: Mitchell Plastics
+      zoominfo_company_id: 45827147
       active: true
     - name: Motus Integrated
+      zoominfo_company_id: 359431247
       active: true
     - name: NYX Inc
+      zoominfo_company_id: 75171612
       active: true
     - name: Plast-O-Foam
+      zoominfo_company_id: 1108464433
       active: true
     - name: Plastipak
       active: true
       zoominfo_company_id: 95404609
       zoominfo_news: true
     - name: Polymer Process Development
+      zoominfo_company_id: 93897589
       active: true
     - name: TruNorth Composites
+      zoominfo_company_id: 1207763488
       active: true
     - name: Kinderhook Industries
       active: true
@@ -117,62 +147,91 @@ customers:
     - name: Advanced Composites
       active: true
     - name: Magna International
+      zoominfo_company_id: 31164078
       active: true
     - name: Kimberly-Clark
+      zoominfo_company_id: 80970479
       active: true
     - name: Ply Gem
+      zoominfo_company_id: 71124290
       active: true
     - name: Mohawk Industries
+      zoominfo_company_id: 185385707
       active: true
     - name: Pilkington
+      zoominfo_company_id: 47547522
+      domain: pilkington.com
       active: true
     - name: AdvanSix
+      zoominfo_company_id: 398108996
       active: true
     - name: Saint-Gobain Glass
+      zoominfo_company_id: 230752507
+      domain: saint-gobain.com
       active: true
     - name: Performance Plastics
       active: true
     - name: Summit Polymers
+      zoominfo_company_id: 101679778
       active: true
     - name: Yanfeng Global
+      zoominfo_company_id: 475055848
+      domain: yanfeng.com
       active: true
     - name: Asahi Glass
+      zoominfo_company_id: 1753186
+      domain: agc.com
       active: true
     - name: Mannington Mills
+      zoominfo_company_id: 23675315
       active: true
     - name: Koch Industries
+      zoominfo_company_id: 138102457
       active: true
     - name: SABIC
       active: true
       zoominfo_company_id: 98664698
       zoominfo_news: true
     - name: Farathane
+      zoominfo_company_id: 125255773
       active: true
     - name: 3M
+      zoominfo_company_id: 196821345
       active: true
     - name: Universal Fiber
+      zoominfo_company_id: 122060815
       active: true
     - name: Associated Materials
+      zoominfo_company_id: 3129785
       active: true
     - name: Bonar
+      zoominfo_company_id: 23151726
       active: true
     - name: Ascend Performance Materials
+      zoominfo_company_id: 353839702
       active: true
     - name: Radici Group
+      zoominfo_company_id: 42255740
       active: true
     - name: Lexmark
       active: true
     - name: Fuyao Automotive Glass
+      zoominfo_company_id: 110167534
+      domain: fuyaogroup.com
       active: true
     - name: Tokai Rika
+      zoominfo_company_id: 38421820
       active: true
     - name: Freudenberg
       active: true
     - name: Wilbert
+      zoominfo_company_id: 157843522
       active: true
     - name: Indorama Ventures
+      zoominfo_company_id: 44615354
       active: true
     - name: Mayco Industries
+      zoominfo_company_id: 75482707
       active: true
 
 suppliers:
@@ -185,10 +244,12 @@ suppliers:
     - name: AdvanSix Resin
       active: true
     - name: AM Stabilizers
+      zoominfo_company_id: 356446246
       active: true
     - name: Bamberger Amco Polymers
       active: true
     - name: Baerlocher
+      zoominfo_company_id: 4998785
       active: true
     - name: BASF
       active: true
@@ -197,76 +258,112 @@ suppliers:
     - name: Cal-Chem
       active: true
     - name: Channel Prime Alliance
+      zoominfo_company_id: 16945216
       active: true
     - name: DCL Corp
+      zoominfo_company_id: 85641343
       active: true
     - name: Dynasol
+      zoominfo_company_id: 1214706332
       active: true
     - name: ExxonMobil Chemical
+      zoominfo_company_id: 565806499
       active: true
     - name: Ferro Pigments
       active: true
     - name: Heucotech
+      domain: heucotech.com
       active: true
     - name: Huntsman Corporation
+      zoominfo_company_id: 46353663
+      domain: huntsman.com
       active: true
     - name: Interspersal
       active: true
     - name: Milliken
+      zoominfo_company_id: 25067815
       active: true
     - name: Mitsui Plastics
+      zoominfo_company_id: 1128530104
+      domain: mitsuiplastics.com
       active: true
     - name: Nycoa
+      zoominfo_company_id: 78152427
       active: true
     - name: Shepherd Color
+      zoominfo_company_id: 108315013
       active: true
     - name: Shintech
+      zoominfo_company_id: 146604266
       active: true
     - name: Univar Solutions
+      zoominfo_company_id: 145440833
       active: true
     - name: Chemours
+      zoominfo_company_id: 368294277
       active: true
     - name: Nexeo Solutions
       active: true
     - name: Oxy Vinyls
+      zoominfo_company_id: 77726835
       active: true
     - name: Clariant
+      zoominfo_company_id: 8355930
       active: true
     - name: Sun Chemical
+      zoominfo_company_id: 101695688
       active: true
     - name: Kronos Worldwide
+      zoominfo_company_id: 72387019
       active: true
     - name: Kuraray
+      zoominfo_company_id: 68372029
       active: true
     - name: Lanxess
+      zoominfo_company_id: 61460318
       active: true
     - name: Cytec Industries
+      zoominfo_company_id: 10354891
       active: true
     - name: Trinseo
+      zoominfo_company_id: 368916064
       active: true
     - name: Barentz
+      zoominfo_company_id: 28053637
       active: true
     - name: Orion Engineered Carbons
+      zoominfo_company_id: 1342224318
       active: true
     - name: Venator Materials
+      zoominfo_company_id: 402977450
       active: true
     - name: BYK Additives
+      zoominfo_company_id: 18795852
+      domain: byk.com
       active: true
     - name: Dow
+      zoominfo_company_id: 42959322
       active: true
     - name: Cabot Corporation
+      zoominfo_company_id: 6144277
       active: true
     - name: Formosa Plastics
+      zoominfo_company_id: 30950806
       active: true
     - name: Chase Plastics
+      zoominfo_company_id: 24202102
       active: true
     - name: Lubrizol
+      zoominfo_company_id: 23216831
       active: true
     - name: Omya
+      zoominfo_company_id: 71960258
       active: true
     - name: Galata Chemicals
+      zoominfo_company_id: 347807331
       active: true
     - name: Honeywell
+      zoominfo_company_id: 18071933
       active: true
 
 # ── CONCEPT MODE GROUPS ───────────────────────────────────────

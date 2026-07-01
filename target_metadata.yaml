@@ -2,6 +2,283 @@
 # fields (manual_aliases, exclude_terms); the enricher preserves them.
 version: 1
 targets:
+  3M:
+    target_key: 3M
+    metadata_record_status: active
+    zoominfo_company_id: 196821345
+    canonical_name: 3M
+    hq_revenue_range: '25024000'
+    employee_range: '60500'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Cleaning Products
+    - Medical Devices & Equipment
+    hq_country: United States
+    hq_state: Minnesota
+    company_identity_terms:
+    - 3M
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  AM Stabilizers:
+    target_key: AM Stabilizers
+    metadata_record_status: active
+    zoominfo_company_id: 356446246
+    canonical_name: AM Stabilizers
+    hq_revenue_range: '13868'
+    employee_range: '53'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Indiana
+    company_identity_terms:
+    - AM Stabilizers
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  AdvanSix:
+    target_key: AdvanSix
+    metadata_record_status: active
+    zoominfo_company_id: 398108996
+    canonical_name: AdvanSix
+    hq_revenue_range: '1548626'
+    employee_range: '1410'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - AdvanSix
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  AdvanSix Resin:
+    target_key: AdvanSix Resin
+    metadata_record_status: active
+    zoominfo_company_id: null
+    canonical_name: ''
+    hq_revenue_range: ''
+    employee_range: ''
+    primary_industry: ''
+    industries: []
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - AdvanSix Resin
+    industry_relevance_terms: []
+    industry_unmapped: false
+    zoominfo_metadata_status: missing
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Advanced Composites:
+    target_key: Advanced Composites
+    metadata_record_status: active
+    zoominfo_company_id: 47989491
+    canonical_name: Toray Advanced Composites
+    hq_revenue_range: '386761'
+    employee_range: '821'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Aerospace & Defense
+    hq_country: United States
+    hq_state: California
+    company_identity_terms:
+    - Toray Advanced Composites
+    - Advanced Composites
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Akro-Mils:
+    target_key: Akro-Mils
+    metadata_record_status: active
+    zoominfo_company_id: 999794
+    canonical_name: Akro-Mils
+    hq_revenue_range: '60868'
+    employee_range: '211'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Industrial Machinery & Equipment
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - Akro-Mils
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Ampacet:
+    target_key: Ampacet
+    metadata_record_status: active
+    zoominfo_company_id: 2113561
+    canonical_name: Ampacet
+    hq_revenue_range: '1648796'
+    employee_range: '3500'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New York
+    company_identity_terms:
+    - Ampacet
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Asahi Glass:
+    target_key: Asahi Glass
+    metadata_record_status: active
+    zoominfo_company_id: 1753186
+    canonical_name: AGC
+    hq_revenue_range: '13678310'
+    employee_range: '56724'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Glass & Clay
+    - Chemicals & Related Products
+    hq_country: Japan
+    hq_state: Tokyo
+    company_identity_terms:
+    - AGC
+    - Asahi Glass
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Ascend Performance Materials:
+    target_key: Ascend Performance Materials
+    metadata_record_status: active
+    zoominfo_company_id: 353839702
+    canonical_name: Ascend Performance Materials
+    hq_revenue_range: '950499'
+    employee_range: '3500'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Ascend Performance Materials
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Associated Materials:
+    target_key: Associated Materials
+    metadata_record_status: active
+    zoominfo_company_id: 3129785
+    canonical_name: Associated Materials
+    hq_revenue_range: '1060357'
+    employee_range: '3500'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Building Materials
+    - Retail
+    - Home Improvement & Hardware Retail
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - Associated Materials
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Audia Elastomers:
+    target_key: Audia Elastomers
+    metadata_record_status: active
+    zoominfo_company_id: 450692084
+    canonical_name: Audia Elastomers
+    hq_revenue_range: '13614'
+    employee_range: '103'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: United States
+    hq_state: Pennsylvania
+    company_identity_terms:
+    - Audia Elastomers
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Aurora Fine Chemicals:
+    target_key: Aurora Fine Chemicals
+    metadata_record_status: active
+    zoominfo_company_id: 353852276
+    canonical_name: Aurora Fine Chemicals
+    hq_revenue_range: '5630'
+    employee_range: '14'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Business Services
+    - Research & Development
+    hq_country: United States
+    hq_state: California
+    company_identity_terms:
+    - Aurora Fine Chemicals
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
   Avient:
     target_key: Avient
     metadata_record_status: active
@@ -12,6 +289,8 @@ targets:
     primary_industry: Manufacturing
     industries:
     - Manufacturing
+    - Chemicals & Related Products
+    - Plastic, Packaging & Containers
     hq_country: United States
     hq_state: Ohio
     company_identity_terms:
@@ -20,7 +299,7 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: verified
     zoominfo_metadata_confidence: high
-    zoominfo_metadata_last_refreshed: '2026-06-15'
+    zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
   BASF:
@@ -42,7 +321,1606 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: verified
     zoominfo_metadata_confidence: high
-    zoominfo_metadata_last_refreshed: '2026-06-15'
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  BYK Additives:
+    target_key: BYK Additives
+    metadata_record_status: active
+    zoominfo_company_id: 18795852
+    canonical_name: BYK
+    hq_revenue_range: '607434'
+    employee_range: '1415'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Germany
+    hq_state: Nordrhein-Westfalen
+    company_identity_terms:
+    - BYK
+    - BYK Additives
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Baerlocher:
+    target_key: Baerlocher
+    metadata_record_status: active
+    zoominfo_company_id: 4998785
+    canonical_name: Baerlocher
+    hq_revenue_range: '541747'
+    employee_range: '948'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Germany
+    hq_state: Bavaria
+    company_identity_terms:
+    - Baerlocher
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Bamberger Amco Polymers:
+    target_key: Bamberger Amco Polymers
+    metadata_record_status: active
+    zoominfo_company_id: null
+    canonical_name: ''
+    hq_revenue_range: ''
+    employee_range: ''
+    primary_industry: ''
+    industries: []
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Bamberger Amco Polymers
+    industry_relevance_terms: []
+    industry_unmapped: false
+    zoominfo_metadata_status: missing
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Barentz:
+    target_key: Barentz
+    metadata_record_status: active
+    zoominfo_company_id: 28053637
+    canonical_name: Barentz International
+    hq_revenue_range: '2649842'
+    employee_range: '2900'
+    primary_industry: Retail
+    industries:
+    - Retail
+    - Home Improvement & Hardware Retail
+    - Drug Stores & Pharmacies
+    - Grocery Retail
+    hq_country: Netherlands
+    hq_state: North Holland
+    company_identity_terms:
+    - Barentz International
+    - Barentz
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Bonar:
+    target_key: Bonar
+    metadata_record_status: active
+    zoominfo_company_id: 23151726
+    canonical_name: Low & Bonar
+    hq_revenue_range: '370930'
+    employee_range: '318'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Industrial Machinery & Equipment
+    hq_country: United Kingdom
+    hq_state: Greater London
+    company_identity_terms:
+    - Low & Bonar
+    - Bonar
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  CS Manufacturing:
+    target_key: CS Manufacturing
+    metadata_record_status: active
+    zoominfo_company_id: 345387036
+    canonical_name: CS Manufacturing
+    hq_revenue_range: '50313'
+    employee_range: '287'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - CS Manufacturing
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Cabot Corporation:
+    target_key: Cabot Corporation
+    metadata_record_status: active
+    zoominfo_company_id: 6144277
+    canonical_name: Cabot
+    hq_revenue_range: '3575001'
+    employee_range: '4064'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Massachusetts
+    company_identity_terms:
+    - Cabot
+    - Cabot Corporation
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Cal-Chem:
+    target_key: Cal-Chem
+    metadata_record_status: active
+    zoominfo_company_id: 7734361
+    canonical_name: ChemCal
+    hq_revenue_range: '19128'
+    employee_range: '64'
+    primary_industry: Business Services
+    industries:
+    - Business Services
+    - Research & Development
+    - Management Consulting
+    hq_country: United States
+    hq_state: Minnesota
+    company_identity_terms:
+    - ChemCal
+    - Cal-Chem
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Cavanaugh Building Corporation:
+    target_key: Cavanaugh Building Corporation
+    metadata_record_status: active
+    zoominfo_company_id: 18008481
+    canonical_name: Cavanaugh Building
+    hq_revenue_range: '4426'
+    employee_range: '21'
+    primary_industry: Construction
+    industries:
+    - Construction
+    - Commercial & Residential Construction
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - Cavanaugh Building
+    - Cavanaugh Building Corporation
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Channel Prime Alliance:
+    target_key: Channel Prime Alliance
+    metadata_record_status: active
+    zoominfo_company_id: 16945216
+    canonical_name: Channel Prime Alliance
+    hq_revenue_range: '111099'
+    employee_range: '150'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Retail
+    - Office Products Retail & Distribution
+    hq_country: United States
+    hq_state: Iowa
+    company_identity_terms:
+    - Channel Prime Alliance
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Chase Plastics:
+    target_key: Chase Plastics
+    metadata_record_status: active
+    zoominfo_company_id: 24202102
+    canonical_name: Chase Plastics
+    hq_revenue_range: '11310'
+    employee_range: '145'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Retail
+    - Office Products Retail & Distribution
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Chase Plastics
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Chemours:
+    target_key: Chemours
+    metadata_record_status: active
+    zoominfo_company_id: 368294277
+    canonical_name: Chemours
+    hq_revenue_range: '5821001'
+    employee_range: '5700'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Delaware
+    company_identity_terms:
+    - Chemours
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Clariant:
+    target_key: Clariant
+    metadata_record_status: active
+    zoominfo_company_id: 8355930
+    canonical_name: Clariant
+    hq_revenue_range: '5174507'
+    employee_range: '10568'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Switzerland
+    hq_state: Basel-Landschaft
+    company_identity_terms:
+    - Clariant
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Closure Systems International:
+    target_key: Closure Systems International
+    metadata_record_status: active
+    zoominfo_company_id: 3542850
+    canonical_name: Closure Systems International
+    hq_revenue_range: '908878'
+    employee_range: '3000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Industrial Machinery & Equipment
+    hq_country: United States
+    hq_state: Indiana
+    company_identity_terms:
+    - Closure Systems International
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Cocona:
+    target_key: Cocona
+    metadata_record_status: active
+    zoominfo_company_id: 457229777
+    canonical_name: Coconas
+    hq_revenue_range: '4370'
+    employee_range: '13'
+    primary_industry: Media & Internet
+    industries:
+    - Media & Internet
+    - Data Collection & Internet Portals
+    - Business Services
+    - HR & Staffing
+    hq_country: Japan
+    hq_state: Tokyo
+    company_identity_terms:
+    - Coconas
+    - Cocona
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Cytec Industries:
+    target_key: Cytec Industries
+    metadata_record_status: active
+    zoominfo_company_id: 10354891
+    canonical_name: Cytec Industries
+    hq_revenue_range: '100649'
+    employee_range: '258'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Aerospace & Defense
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Cytec Industries
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  DCL Corp:
+    target_key: DCL Corp
+    metadata_record_status: active
+    zoominfo_company_id: 85641343
+    canonical_name: DCL
+    hq_revenue_range: '141326'
+    employee_range: '300'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Canada
+    hq_state: Ontario
+    company_identity_terms:
+    - DCL
+    - DCL Corp
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Dow:
+    target_key: Dow
+    metadata_record_status: active
+    zoominfo_company_id: 42959322
+    canonical_name: The Dow
+    hq_revenue_range: '39331001'
+    employee_range: '34600'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - The Dow
+    - Dow
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Dynasol:
+    target_key: Dynasol
+    metadata_record_status: active
+    zoominfo_company_id: 1214706332
+    canonical_name: Dynasol
+    hq_revenue_range: '289495'
+    employee_range: '1066'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Dynasol
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  ExxonMobil Chemical:
+    target_key: ExxonMobil Chemical
+    metadata_record_status: active
+    zoominfo_company_id: 565806499
+    canonical_name: ExxonMobil Chemical
+    hq_revenue_range: '4710843'
+    employee_range: '10000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Belgium
+    hq_state: Flanders
+    company_identity_terms:
+    - ExxonMobil Chemical
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Farathane:
+    target_key: Farathane
+    metadata_record_status: active
+    zoominfo_company_id: 125255773
+    canonical_name: US Farathane
+    hq_revenue_range: '1000000'
+    employee_range: '5700'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - US Farathane
+    - Farathane
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Ferro Pigments:
+    target_key: Ferro Pigments
+    metadata_record_status: active
+    zoominfo_company_id: null
+    canonical_name: ''
+    hq_revenue_range: ''
+    employee_range: ''
+    primary_industry: ''
+    industries: []
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Ferro Pigments
+    industry_relevance_terms: []
+    industry_unmapped: false
+    zoominfo_metadata_status: missing
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Fiberon:
+    target_key: Fiberon
+    metadata_record_status: active
+    zoominfo_company_id: 5000041008
+    canonical_name: Fiberon
+    hq_revenue_range: '259047'
+    employee_range: '650'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Building Materials
+    hq_country: United States
+    hq_state: North Carolina
+    company_identity_terms:
+    - Fiberon
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Formosa Plastics:
+    target_key: Formosa Plastics
+    metadata_record_status: active
+    zoominfo_company_id: 30950806
+    canonical_name: Formosa Plastics Group
+    hq_revenue_range: '71262070'
+    employee_range: '107826'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Photographic & Optical Equipment
+    hq_country: Taiwan
+    hq_state: 內湖區
+    company_identity_terms:
+    - Formosa Plastics Group
+    - Formosa Plastics
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Freudenberg:
+    target_key: Freudenberg
+    metadata_record_status: active
+    zoominfo_company_id: 111232767
+    canonical_name: Freudenberg Sealing Technologies
+    hq_revenue_range: '2857844'
+    employee_range: '15000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Tires & Rubber
+    - Automotive Parts
+    hq_country: Germany
+    hq_state: Baden-Wuerttemberg
+    company_identity_terms:
+    - Freudenberg Sealing Technologies
+    - Freudenberg
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Fuyao Automotive Glass:
+    target_key: Fuyao Automotive Glass
+    metadata_record_status: active
+    zoominfo_company_id: 110167534
+    canonical_name: Fuyao Group
+    hq_revenue_range: '5167187'
+    employee_range: '37910'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Glass & Clay
+    - Automotive Parts
+    hq_country: China
+    hq_state: Fujian
+    company_identity_terms:
+    - Fuyao Group
+    - Fuyao Automotive Glass
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  GAF Roofing:
+    target_key: GAF Roofing
+    metadata_record_status: active
+    zoominfo_company_id: 354985978
+    canonical_name: GAF Roofing
+    hq_revenue_range: '3122'
+    employee_range: '9'
+    primary_industry: Construction
+    industries:
+    - Construction
+    - Commercial & Residential Construction
+    hq_country: United States
+    hq_state: ''
+    company_identity_terms:
+    - GAF Roofing
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Galata Chemicals:
+    target_key: Galata Chemicals
+    metadata_record_status: active
+    zoominfo_company_id: 347807331
+    canonical_name: Galata Chemicals
+    hq_revenue_range: '100000'
+    employee_range: '137'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Galata Chemicals
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Grafe Advanced Polymers:
+    target_key: Grafe Advanced Polymers
+    metadata_record_status: active
+    zoominfo_company_id: 347431641
+    canonical_name: Grafe
+    hq_revenue_range: '7111'
+    employee_range: '283'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Chemicals & Related Products
+    hq_country: Germany
+    hq_state: Thuringia
+    company_identity_terms:
+    - Grafe
+    - Grafe Advanced Polymers
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Heucotech:
+    target_key: Heucotech
+    metadata_record_status: active
+    zoominfo_company_id: null
+    canonical_name: ''
+    hq_revenue_range: ''
+    employee_range: ''
+    primary_industry: ''
+    industries: []
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Heucotech
+    industry_relevance_terms: []
+    industry_unmapped: false
+    zoominfo_metadata_status: missing
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Homeland Vinyl:
+    target_key: Homeland Vinyl
+    metadata_record_status: active
+    zoominfo_company_id: 53298876
+    canonical_name: Homeland Vinyl Products
+    hq_revenue_range: '87065'
+    employee_range: '635'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Building Materials
+    hq_country: United States
+    hq_state: Alabama
+    company_identity_terms:
+    - Homeland Vinyl Products
+    - Homeland Vinyl
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Honeywell:
+    target_key: Honeywell
+    metadata_record_status: active
+    zoominfo_company_id: 18071933
+    canonical_name: Honeywell
+    hq_revenue_range: '37660001'
+    employee_range: '101000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Aerospace & Defense
+    - Computer Equipment & Peripherals
+    - Industrial Machinery & Equipment
+    - Test & Measurement Equipment
+    hq_country: United States
+    hq_state: North Carolina
+    company_identity_terms:
+    - Honeywell
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Huntsman Corporation:
+    target_key: Huntsman Corporation
+    metadata_record_status: active
+    zoominfo_company_id: 46353663
+    canonical_name: Huntsman
+    hq_revenue_range: '5693001'
+    employee_range: '6000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Huntsman
+    - Huntsman Corporation
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Indorama Ventures:
+    target_key: Indorama Ventures
+    metadata_record_status: active
+    zoominfo_company_id: 44615354
+    canonical_name: Indorama Ventures
+    hq_revenue_range: '13634291'
+    employee_range: '25847'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Textiles & Apparel
+    hq_country: Thailand
+    hq_state: Bangkok
+    company_identity_terms:
+    - Indorama Ventures
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Inoac Automotive:
+    target_key: Inoac Automotive
+    metadata_record_status: active
+    zoominfo_company_id: 1310813389
+    canonical_name: Inoac Automotive
+    hq_revenue_range: '10699'
+    employee_range: '45'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: Thailand
+    hq_state: Chonburi
+    company_identity_terms:
+    - Inoac Automotive
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Integrated Fiber Solutions:
+    target_key: Integrated Fiber Solutions
+    metadata_record_status: active
+    zoominfo_company_id: 1302202973
+    canonical_name: Integrated Fiber Solutions (IFS
+    hq_revenue_range: '3098'
+    employee_range: '20'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Integrated Fiber Solutions (IFS
+    - Integrated Fiber Solutions
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Interspersal:
+    target_key: Interspersal
+    metadata_record_status: active
+    zoominfo_company_id: 19726671
+    canonical_name: Intersperse
+    hq_revenue_range: '3824'
+    employee_range: '22'
+    primary_industry: Software
+    industries:
+    - Software
+    - Business Services
+    - Custom Software & IT Services
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Intersperse
+    - Interspersal
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Kimberly-Clark:
+    target_key: Kimberly-Clark
+    metadata_record_status: active
+    zoominfo_company_id: 80970479
+    canonical_name: Kimberly-Clark
+    hq_revenue_range: '16556000'
+    employee_range: '36000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Pulp & Paper
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Kimberly-Clark
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Kinderhook Industries:
+    target_key: Kinderhook Industries
+    metadata_record_status: active
+    zoominfo_company_id: 1291280544
+    canonical_name: Kinderhook Industries
+    hq_revenue_range: '30216'
+    employee_range: '41'
+    primary_industry: Finance
+    industries:
+    - Finance
+    - Venture Capital & Private Equity
+    hq_country: United States
+    hq_state: New York
+    company_identity_terms:
+    - Kinderhook Industries
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Koch Industries:
+    target_key: Koch Industries
+    metadata_record_status: active
+    zoominfo_company_id: 138102457
+    canonical_name: Koch Industries
+    hq_revenue_range: '125000000'
+    employee_range: '120000'
+    primary_industry: Holding Companies & Conglomerates
+    industries:
+    - Holding Companies & Conglomerates
+    - Manufacturing
+    - Chemicals & Related Products
+    - Electronics
+    - Glass & Clay
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Kansas
+    company_identity_terms:
+    - Koch Industries
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Kraiburg TPE:
+    target_key: Kraiburg TPE
+    metadata_record_status: active
+    zoominfo_company_id: 66537649
+    canonical_name: KRAIBURG TPE
+    hq_revenue_range: '320338'
+    employee_range: '680'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: Germany
+    hq_state: Bavaria
+    company_identity_terms:
+    - KRAIBURG TPE
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Kronos Worldwide:
+    target_key: Kronos Worldwide
+    metadata_record_status: active
+    zoominfo_company_id: 72387019
+    canonical_name: Kronos
+    hq_revenue_range: '1879400'
+    employee_range: '2263'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Kronos
+    - Kronos Worldwide
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Kuraray:
+    target_key: Kuraray
+    metadata_record_status: active
+    zoominfo_company_id: 68372029
+    canonical_name: Kuraray
+    hq_revenue_range: '5311133'
+    employee_range: '11941'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Textiles & Apparel
+    hq_country: Japan
+    hq_state: Tokyo
+    company_identity_terms:
+    - Kuraray
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Lanxess:
+    target_key: Lanxess
+    metadata_record_status: active
+    zoominfo_company_id: 61460318
+    canonical_name: Lanxess
+    hq_revenue_range: '6532744'
+    employee_range: '11709'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: Germany
+    hq_state: North Rhine-Westphalia
+    company_identity_terms:
+    - Lanxess
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Lexmark:
+    target_key: Lexmark
+    metadata_record_status: active
+    zoominfo_company_id: 564553451
+    canonical_name: Lexmark
+    hq_revenue_range: '3614044'
+    employee_range: '14000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Computer Equipment & Peripherals
+    - Photographic & Optical Equipment
+    hq_country: United States
+    hq_state: Kentucky
+    company_identity_terms:
+    - Lexmark
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Liochem:
+    target_key: Liochem
+    metadata_record_status: active
+    zoominfo_company_id: 71322777
+    canonical_name: LioChem
+    hq_revenue_range: '22380'
+    employee_range: '106'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - LioChem
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Lubrizol:
+    target_key: Lubrizol
+    metadata_record_status: active
+    zoominfo_company_id: 23216831
+    canonical_name: Lubrizol
+    hq_revenue_range: '6400000'
+    employee_range: '8800'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - Lubrizol
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Magna International:
+    target_key: Magna International
+    metadata_record_status: active
+    zoominfo_company_id: 31164078
+    canonical_name: Magna International
+    hq_revenue_range: '42010000'
+    employee_range: '156000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    - Motor Vehicles
+    hq_country: Canada
+    hq_state: Ontario
+    company_identity_terms:
+    - Magna International
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mannington Mills:
+    target_key: Mannington Mills
+    metadata_record_status: active
+    zoominfo_company_id: 23675315
+    canonical_name: Mannington
+    hq_revenue_range: '543142'
+    employee_range: '2000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Household Goods
+    - Building Materials
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Mannington
+    - Mannington Mills
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Marglen Industries:
+    target_key: Marglen Industries
+    metadata_record_status: active
+    zoominfo_company_id: 373790974
+    canonical_name: Marglen Industries
+    hq_revenue_range: '27472'
+    employee_range: '117'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Plastic, Packaging & Containers
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Marglen Industries
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Marquis Industries:
+    target_key: Marquis Industries
+    metadata_record_status: active
+    zoominfo_company_id: 152388418
+    canonical_name: Marquis Industries
+    hq_revenue_range: '81799'
+    employee_range: '270'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Household Goods
+    - Building Materials
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Marquis Industries
+    industry_relevance_terms:
+    - building materials
+    - construction
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mayco Industries:
+    target_key: Mayco Industries
+    metadata_record_status: active
+    zoominfo_company_id: 75482707
+    canonical_name: Mayco Industries
+    hq_revenue_range: '35810'
+    employee_range: '135'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Industrial Machinery & Equipment
+    - Aerospace & Defense
+    - Building Materials
+    hq_country: United States
+    hq_state: Alabama
+    company_identity_terms:
+    - Mayco Industries
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Milliken:
+    target_key: Milliken
+    metadata_record_status: active
+    zoominfo_company_id: 25067815
+    canonical_name: Milliken
+    hq_revenue_range: '3800000'
+    employee_range: '8000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Textiles & Apparel
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: South Carolina
+    company_identity_terms:
+    - Milliken
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mitchell Plastics:
+    target_key: Mitchell Plastics
+    metadata_record_status: active
+    zoominfo_company_id: 45827147
+    canonical_name: Mitchell Plastics
+    hq_revenue_range: '651870'
+    employee_range: '650'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: Canada
+    hq_state: Ontario
+    company_identity_terms:
+    - Mitchell Plastics
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mitsubishi Chemical:
+    target_key: Mitsubishi Chemical
+    metadata_record_status: active
+    zoominfo_company_id: 150438451
+    canonical_name: Mitsubishi Chemical Group
+    hq_revenue_range: '30780503'
+    employee_range: '66358'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Holding Companies & Conglomerates
+    hq_country: Japan
+    hq_state: Tokyo
+    company_identity_terms:
+    - Mitsubishi Chemical Group
+    - Mitsubishi Chemical
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mitsui Plastics:
+    target_key: Mitsui Plastics
+    metadata_record_status: active
+    zoominfo_company_id: 1128530104
+    canonical_name: Mitsui Plastics
+    hq_revenue_range: '13582'
+    employee_range: '23'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Chemicals & Related Products
+    - Retail
+    - Office Products Retail & Distribution
+    hq_country: United States
+    hq_state: New York
+    company_identity_terms:
+    - Mitsui Plastics
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Mohawk Industries:
+    target_key: Mohawk Industries
+    metadata_record_status: active
+    zoominfo_company_id: 185385707
+    canonical_name: Mohawk Industries, Inc
+    hq_revenue_range: '10988301'
+    employee_range: '40500'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Household Goods
+    - Building Materials
+    - Retail
+    - Furniture
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Mohawk Industries, Inc
+    - Mohawk Industries
+    - Mohawk Industries,
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Motus Integrated:
+    target_key: Motus Integrated
+    metadata_record_status: active
+    zoominfo_company_id: 359431247
+    canonical_name: Motus Integrated Technologies
+    hq_revenue_range: '418050'
+    employee_range: '2850'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Motus Integrated Technologies
+    - Motus Integrated
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  NYX Inc:
+    target_key: NYX Inc
+    metadata_record_status: active
+    zoominfo_company_id: 75171612
+    canonical_name: NYX
+    hq_revenue_range: '998452'
+    employee_range: '4000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - NYX
+    - NYX Inc
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Nexeo Solutions:
+    target_key: Nexeo Solutions
+    metadata_record_status: active
+    zoominfo_company_id: null
+    canonical_name: ''
+    hq_revenue_range: ''
+    employee_range: ''
+    primary_industry: ''
+    industries: []
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Nexeo Solutions
+    industry_relevance_terms: []
+    industry_unmapped: false
+    zoominfo_metadata_status: missing
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Nycoa:
+    target_key: Nycoa
+    metadata_record_status: active
+    zoominfo_company_id: 78152427
+    canonical_name: Nylon Corporation of America
+    hq_revenue_range: '25717'
+    employee_range: '69'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New Hampshire
+    company_identity_terms:
+    - Nylon Corporation of America
+    - Nycoa
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Omya:
+    target_key: Omya
+    metadata_record_status: active
+    zoominfo_company_id: 71960258
+    canonical_name: Omya
+    hq_revenue_range: '4239759'
+    employee_range: '9000'
+    primary_industry: Minerals & Mining
+    industries:
+    - Minerals & Mining
+    - Manufacturing
+    - Building Materials
+    - Chemicals & Related Products
+    hq_country: Switzerland
+    hq_state: Aargau
+    company_identity_terms:
+    - Omya
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Orion Engineered Carbons:
+    target_key: Orion Engineered Carbons
+    metadata_record_status: active
+    zoominfo_company_id: 1342224318
+    canonical_name: Orion Engineered Carbons
+    hq_revenue_range: '3635'
+    employee_range: '14'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    hq_country: Germany
+    hq_state: Hessen
+    company_identity_terms:
+    - Orion Engineered Carbons
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Oxy Vinyls:
+    target_key: Oxy Vinyls
+    metadata_record_status: active
+    zoominfo_company_id: 77726835
+    canonical_name: OxyVinyls
+    hq_revenue_range: '28873'
+    employee_range: '353'
+    primary_industry: Law Firms & Legal Services
+    industries:
+    - Law Firms & Legal Services
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - OxyVinyls
+    - Oxy Vinyls
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Penn Color:
+    target_key: Penn Color
+    metadata_record_status: active
+    zoominfo_company_id: 29999928
+    canonical_name: Penn Color
+    hq_revenue_range: '351657'
+    employee_range: '750'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Pennsylvania
+    company_identity_terms:
+    - Penn Color
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Performance Plastics:
+    target_key: Performance Plastics
+    metadata_record_status: active
+    zoominfo_company_id: 1323043980
+    canonical_name: Jilin Zhongyan High Performance Engineering Plastics Co., Ltd.
+    hq_revenue_range: '74855'
+    employee_range: '114'
+    primary_industry: Business Services
+    industries:
+    - Business Services
+    - HR & Staffing
+    hq_country: China
+    hq_state: Jilin Province
+    company_identity_terms:
+    - Jilin Zhongyan High Performance Engineering Plastics Co., Ltd.
+    - Performance Plastics
+    - Jilin Zhongyan High Performance Engineering Plastics Co.,
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Pilkington:
+    target_key: Pilkington
+    metadata_record_status: active
+    zoominfo_company_id: 47547522
+    canonical_name: Pilkington
+    hq_revenue_range: '27171'
+    employee_range: '159'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Glass & Clay
+    - Building Materials
+    hq_country: United Kingdom
+    hq_state: Lancashire
+    company_identity_terms:
+    - Pilkington
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Plast-O-Foam:
+    target_key: Plast-O-Foam
+    metadata_record_status: active
+    zoominfo_company_id: 1108464433
+    canonical_name: Plast-O-Foam
+    hq_revenue_range: '10267'
+    employee_range: '53'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Plast-O-Foam
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
   Plastipak:
@@ -64,7 +1942,104 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: verified
     zoominfo_metadata_confidence: high
-    zoominfo_metadata_last_refreshed: '2026-06-15'
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Ply Gem:
+    target_key: Ply Gem
+    metadata_record_status: active
+    zoominfo_company_id: 71124290
+    canonical_name: Ply Gem Residential Solutions
+    hq_revenue_range: '5974560'
+    employee_range: '22000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    - Building Materials
+    hq_country: United States
+    hq_state: North Carolina
+    company_identity_terms:
+    - Ply Gem Residential Solutions
+    - Ply Gem
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Polymax:
+    target_key: Polymax
+    metadata_record_status: active
+    zoominfo_company_id: 223363439
+    canonical_name: Polymax Precision Industry
+    hq_revenue_range: '56019'
+    employee_range: '285'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Household Goods
+    hq_country: China
+    hq_state: Beijing
+    company_identity_terms:
+    - Polymax Precision Industry
+    - Polymax
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Polymer Process Development:
+    target_key: Polymer Process Development
+    metadata_record_status: active
+    zoominfo_company_id: 93897589
+    canonical_name: Polymer Process Development
+    hq_revenue_range: '7480'
+    employee_range: '136'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    - Construction
+    - Architecture, Engineering & Design
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Polymer Process Development
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Primex Color Compounding:
+    target_key: Primex Color Compounding
+    metadata_record_status: active
+    zoominfo_company_id: 403107998
+    canonical_name: Primex Color , Compounding & Additives
+    hq_revenue_range: '20954'
+    employee_range: '73'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Primex Color , Compounding & Additives
+    - Primex Color Compounding
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
   RTP Company:
@@ -88,7 +2063,7 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: verified
     zoominfo_metadata_confidence: high
-    zoominfo_metadata_last_refreshed: '2026-06-15'
+    zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases:
     - RTP Co
     - RTP Company
@@ -101,6 +2076,34 @@ targets:
     - Research Triangle Park
     - RTP Global
     - Rain Tree Photonics
+  Radici Group:
+    target_key: Radici Group
+    metadata_record_status: active
+    zoominfo_company_id: 42255740
+    canonical_name: RadiciGroup Companies
+    hq_revenue_range: '692023'
+    employee_range: '1469'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Textiles & Apparel
+    - Tires & Rubber
+    hq_country: Italy
+    hq_state: Lombardy
+    company_identity_terms:
+    - RadiciGroup Companies
+    - Radici Group
+    - Radici
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
   SABIC:
     target_key: SABIC
     metadata_record_status: active
@@ -120,6 +2123,428 @@ targets:
     industry_unmapped: true
     zoominfo_metadata_status: verified
     zoominfo_metadata_confidence: high
-    zoominfo_metadata_last_refreshed: '2026-06-15'
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Saint-Gobain Glass:
+    target_key: Saint-Gobain Glass
+    metadata_record_status: active
+    zoominfo_company_id: 230752507
+    canonical_name: Saint-Gobain
+    hq_revenue_range: '53541444'
+    employee_range: '162000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Glass & Clay
+    - Building Materials
+    hq_country: France
+    hq_state: Ile-de-France
+    company_identity_terms:
+    - Saint-Gobain
+    - Saint-Gobain Glass
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Shaw Industries:
+    target_key: Shaw Industries
+    metadata_record_status: active
+    zoominfo_company_id: 559691802
+    canonical_name: Shaw Contract
+    hq_revenue_range: '302886'
+    employee_range: '760'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Household Goods
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Shaw Contract
+    - Shaw Industries
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: needs_review
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Shepherd Color:
+    target_key: Shepherd Color
+    metadata_record_status: active
+    zoominfo_company_id: 108315013
+    canonical_name: The Shepherd Color
+    hq_revenue_range: '119519'
+    employee_range: '380'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Ohio
+    company_identity_terms:
+    - The Shepherd Color
+    - Shepherd Color
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Shintech:
+    target_key: Shintech
+    metadata_record_status: active
+    zoominfo_company_id: 146604266
+    canonical_name: Shintech
+    hq_revenue_range: '164886'
+    employee_range: '610'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Texas
+    company_identity_terms:
+    - Shintech
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Standridge Color:
+    target_key: Standridge Color
+    metadata_record_status: active
+    zoominfo_company_id: 113705241
+    canonical_name: Standridge Color
+    hq_revenue_range: '162969'
+    employee_range: '349'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Standridge Color
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Summit Polymers:
+    target_key: Summit Polymers
+    metadata_record_status: active
+    zoominfo_company_id: 101679778
+    canonical_name: SUMMIT POLYMERS
+    hq_revenue_range: '888302'
+    employee_range: '2479'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - SUMMIT POLYMERS
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Sun Chemical:
+    target_key: Sun Chemical
+    metadata_record_status: active
+    zoominfo_company_id: 101695688
+    canonical_name: Sun Chemical
+    hq_revenue_range: '7000000'
+    employee_range: '21000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: New Jersey
+    company_identity_terms:
+    - Sun Chemical
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Techmer PM:
+    target_key: Techmer PM
+    metadata_record_status: active
+    zoominfo_company_id: 37699817
+    canonical_name: Techmer PM
+    hq_revenue_range: '316326'
+    employee_range: '600'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Tennessee
+    company_identity_terms:
+    - Techmer PM
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Teknor Apex:
+    target_key: Teknor Apex
+    metadata_record_status: active
+    zoominfo_company_id: 73040436
+    canonical_name: Teknor Apex
+    hq_revenue_range: '749741'
+    employee_range: '1881'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: Rhode Island
+    company_identity_terms:
+    - Teknor Apex
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Tokai Rika:
+    target_key: Tokai Rika
+    metadata_record_status: active
+    zoominfo_company_id: 38421820
+    canonical_name: Tokai Rika
+    hq_revenue_range: '4301210'
+    employee_range: '20247'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    hq_country: Japan
+    hq_state: Aichi
+    company_identity_terms:
+    - Tokai Rika
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Trinseo:
+    target_key: Trinseo
+    metadata_record_status: active
+    zoominfo_company_id: 368916064
+    canonical_name: Trinseo
+    hq_revenue_range: '3133800'
+    employee_range: '2950'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    - Tires & Rubber
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: Pennsylvania
+    company_identity_terms:
+    - Trinseo
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  TruNorth Composites:
+    target_key: TruNorth Composites
+    metadata_record_status: active
+    zoominfo_company_id: 1207763488
+    canonical_name: Trunorth Composites
+    hq_revenue_range: '4447'
+    employee_range: '18'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Building Materials
+    hq_country: ''
+    hq_state: ''
+    company_identity_terms:
+    - Trunorth Composites
+    industry_relevance_terms:
+    - building materials
+    - construction
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Uniform Color:
+    target_key: Uniform Color
+    metadata_record_status: active
+    zoominfo_company_id: 81592562
+    canonical_name: Uniform Color Company
+    hq_revenue_range: '235543'
+    employee_range: '306'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United States
+    hq_state: Michigan
+    company_identity_terms:
+    - Uniform Color Company
+    - Uniform Color
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Univar Solutions:
+    target_key: Univar Solutions
+    metadata_record_status: active
+    zoominfo_company_id: 145440833
+    canonical_name: Univar Solutions
+    hq_revenue_range: '10500000'
+    employee_range: '10000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Tires & Rubber
+    - Retail
+    - Office Products Retail & Distribution
+    hq_country: United States
+    hq_state: Illinois
+    company_identity_terms:
+    - Univar Solutions
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Universal Fiber:
+    target_key: Universal Fiber
+    metadata_record_status: active
+    zoominfo_company_id: 122060815
+    canonical_name: Universal Fibers
+    hq_revenue_range: '88162'
+    employee_range: '984'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Textiles & Apparel
+    hq_country: United States
+    hq_state: Virginia
+    company_identity_terms:
+    - Universal Fibers
+    - Universal Fiber
+    industry_relevance_terms:
+    - fibers
+    - textiles
+    industry_unmapped: false
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Venator Materials:
+    target_key: Venator Materials
+    metadata_record_status: active
+    zoominfo_company_id: 402977450
+    canonical_name: Venator
+    hq_revenue_range: '1271928'
+    employee_range: '2700'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Chemicals & Related Products
+    hq_country: United Kingdom
+    hq_state: North Yorkshire
+    company_identity_terms:
+    - Venator
+    - Venator Materials
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Wilbert:
+    target_key: Wilbert
+    metadata_record_status: active
+    zoominfo_company_id: 157843522
+    canonical_name: Wilbert Plastic Services
+    hq_revenue_range: '227220'
+    employee_range: '750'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Plastic, Packaging & Containers
+    hq_country: United States
+    hq_state: North Carolina
+    company_identity_terms:
+    - Wilbert Plastic Services
+    - Wilbert
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: approved
+    zoominfo_metadata_confidence: low
+    zoominfo_metadata_last_refreshed: '2026-07-01'
+    manual_aliases: []
+    exclude_terms: []
+  Yanfeng Global:
+    target_key: Yanfeng Global
+    metadata_record_status: active
+    zoominfo_company_id: 475055848
+    canonical_name: Yanfeng Technology
+    hq_revenue_range: '18000000'
+    employee_range: '57000'
+    primary_industry: Manufacturing
+    industries:
+    - Manufacturing
+    - Automotive Parts
+    - Business Services
+    - Research & Development
+    - Aerospace & Defense
+    hq_country: United States
+    hq_state: Georgia
+    company_identity_terms:
+    - Yanfeng Technology
+    - Yanfeng Global
+    industry_relevance_terms: []
+    industry_unmapped: true
+    zoominfo_metadata_status: verified
+    zoominfo_metadata_confidence: high
+    zoominfo_metadata_last_refreshed: '2026-07-01'
     manual_aliases: []
     exclude_terms: []
