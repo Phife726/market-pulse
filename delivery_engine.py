@@ -370,6 +370,24 @@ def fetch_macro_summary() -> dict | None:
         run_mode=_run_mode(),
         min_date=min_run_date,
     )
+    if summary is None and _is_test_mode():
+        # Delivery-only test runs (run_ingestion=false) have no test-mode macro
+        # row — ingestion is what writes it. Fall back to the production row
+        # READ-ONLY so the QA re-render still carries the executive summary,
+        # condition badge, and citation sources. Production accounting is never
+        # touched: the delivery write-back keys on run_mode='test', which
+        # matches no row and is a silent no-op UPDATE. Production mode never
+        # falls back — it must not read test rows.
+        summary = _repo().fetch_latest_summary(
+            run_mode="production",
+            min_date=min_run_date,
+        )
+        if summary is not None:
+            logger.info(
+                "No test-mode macro summary — falling back to the production "
+                "row (run_date %s) for the QA re-render.",
+                summary.get("run_date"),
+            )
     if summary is None:
         logger.warning("No macro summary found for run_date >= %s.", min_run_date)
     return summary
