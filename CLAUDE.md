@@ -29,7 +29,7 @@ pytest tests/test_pipeline.py::test_name
 Two GitHub Actions workflows exist:
 
 - `.github/workflows/market_pulse.yml` — production schedule, runs ingestion then delivery Monday–Friday at 10:00 UTC; also dispatchable manually.
-- `.github/workflows/market_pulse_test.yml` — manually-dispatched sandbox run. Sets `MARKET_PULSE_RUN_MODE=test`, routes mail to the `TEST_RECIPIENT_EMAILS` secret (Jason-only QA pool), and exposes `run_ingestion` / `send_email` input flags so you can re-render against existing rows without re-billing APIs.
+- `.github/workflows/market_pulse_test.yml` — manually-dispatched sandbox run. Sets `MARKET_PULSE_RUN_MODE=test`, routes mail to the `TEST_RECIPIENT_EMAILS` secret (Jason-only QA pool), and exposes `run_ingestion` / `send_email` input flags so you can re-render against existing rows without re-billing APIs. With `run_ingestion=false` no same-day test-mode macro-summary row exists (ingestion writes it), so `fetch_macro_summary` uses the **production** row read-only whenever it is strictly newer than the test candidate (recency ties keep the test row — the date-rollover grace) — the QA email keeps the executive summary and citations, and the test write-back stays a no-op on production accounting. The fallback is one-directional: production never reads test rows.
 
 `delivery_engine_old.py` is a legacy snapshot — do not edit it; the active delivery code is `delivery_engine.py`.
 

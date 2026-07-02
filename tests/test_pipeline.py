@@ -1826,6 +1826,99 @@ def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
     assert result["executive_summary"] == "Test summary"
 
 
+def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch):
+    """A delivery-only test run (run_ingestion=false) has no test-mode macro
+    row — it must fall back to the production row read-only, so the QA
+    re-render carries the executive summary and citation sources."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+        "executive_sources": [{"id": 1, "headline": "H", "url": "https://s/1",
+                               "domain": "s.com", "segment": "Packaging", "score": 9}],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["run_mode"] == "production"
+    assert result["executive_sources"]
+
+
+def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_row(monkeypatch):
+    """A test row from YESTERDAY (run_ingestion=true QA run the day before)
+    must not shadow TODAY's production row — the re-render would pair today's
+    articles with stale executive bullets/citations."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date, timedelta as _td
+    today = date.today().isoformat()
+    yesterday = (date.today() - _td(days=1)).isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "test",
+        "executive_summary": "Stale test summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Fresh prod summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Fresh prod summary"
+
+
+def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatch):
+    """Recency ties prefer the test row — covers the date-rollover grace
+    (test ingestion writes at 23:59, delivery reads at 00:01: both candidate
+    rows carry yesterday's run_date and the minutes-old test row must win)."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date, timedelta as _td
+    yesterday = (date.today() - _td(days=1)).isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "test",
+        "executive_summary": "Rollover test summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Rollover test summary"
+
+
+def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
+    """The fallback is one-directional: production delivery with only a test
+    row available must return None, not leak QA data into production mail."""
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "executive_summary": "Test summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    assert fetch_macro_summary() is None
+
+
 def test_run_mode_helper(monkeypatch):
     """_run_mode() returns 'test' when env=test; 'production' otherwise; case-insensitive."""
     from delivery_engine import _run_mode
@@ -2383,6 +2476,52 @@ def test_delivery_execute_pipeline_wires_prepare_render_and_env(monkeypatch):
     # ...and its write-back landed on today's daily_summaries row.
     stored = fake.get_delivery_state(run_date=today, run_mode="test")
     assert stored is not None and stored["surfaced_count"] == 2
+
+
+def test_delivery_only_test_run_renders_exec_summary_without_touching_prod_row(monkeypatch):
+    """The run_ingestion=false QA scenario: only a PRODUCTION macro row exists
+    (test-mode ingestion never ran). The test-mode delivery must still render
+    the executive summary + sources from it, and its write-back must be a
+    silent no-op on the production row."""
+    import copy
+    import delivery_engine
+
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    fake, today = _seed_delivery_repo("production")   # production row only — no test row
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "dominant_condition": "Supply Volatility",
+        "executive_bullets": [
+            {"label": "Market pressure",    "body": "A.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action",  "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": [{"id": 1, "headline": "Resin prices climb",
+                               "url": "https://s/1", "domain": "s.com",
+                               "segment": "Packaging", "score": 9}],
+        "suppression_breakdown": {"duplicate_url": 3}, "suppression_samples": [],
+    })
+    prod_row_before = copy.deepcopy(fake.get_delivery_state(run_date=today, run_mode="production"))
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    sent: dict = {}
+    monkeypatch.setattr("delivery_engine.send_email",
+                        lambda html: sent.__setitem__("html", html))
+
+    with patch("delivery_engine._llm", return_value=FakeLLM(returns={})), \
+         patch("delivery_engine._load_mp_config",
+               return_value={"reporting": {"visible_impact_threshold": 6}}):
+        delivery_engine.execute_pipeline()
+
+    html = sent["html"]
+    assert "Executive Summary" in html
+    assert "Market pressure" in html
+    assert "Resin prices climb" in html                 # cited source in the footer
+    assert "[TEST]" in html and "TEST RUN" in html      # still marked as QA output
+    # Production accounting untouched: write-back keyed run_mode='test' matched
+    # no row (silent no-op), and no test row was created.
+    assert fake.get_delivery_state(run_date=today, run_mode="production") == prod_row_before
+    assert fake.get_delivery_state(run_date=today, run_mode="test") is None
 
 
 def test_delivery_execute_pipeline_production_env_ships_unmarked_html(monkeypatch):
