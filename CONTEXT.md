@@ -27,6 +27,11 @@ two adapters (one production, one in-memory for tests):
 Tests inject the in-memory adapter at the consumer module, e.g.
 `monkeypatch.setattr("ingestion_engine._llm", lambda: FakeLLM(returns=...))`.
 
+A fourth seam is data-shaped rather than Protocol-shaped: the **report model**
+(see Domain terms) — a plain frozen value between report assembly and rendering.
+It has no adapters; behaviour on either side of it is swapped by composing the
+pure functions differently, not by injection.
+
 ## Domain terms
 
 - **Insight** — the structured JSON the LLM returns per article: `headline`,
@@ -49,5 +54,32 @@ Tests inject the in-memory adapter at the consumer module, e.g.
   `executive_bullets`) written to `daily_summaries`.
 - **Commercial Segment Watch** — the single rendered email zone, grouped by
   `commercial_segment`.
+- **Report model** (`report.py`, `ReportModel`) — the assembled daily report as
+  plain frozen data: `variant` (`daily` / `no_news`), the final capped segment
+  groups, `surfaced_count` / `screened_count`, the delivery-side suppression
+  ledger (including the derived `below_impact_threshold` and `weak_relevance`
+  counts), the raw macro-summary row, and the thematic synthesis paragraphs.
+  Produced by `assemble_report` (pure decision pipeline: delivery suppression →
+  visibility filter → segment grouping → per-segment cap → total cap →
+  weak-relevance accounting). Consumed by the pure renderer
+  (`delivery_engine.render_report`) and the `daily_summaries` write-back.
+  `delivery_engine.prepare_report(rows, macro_summary)` runs assembly itself
+  (there is no model-in/model-out effectful call), then performs the run's two
+  side effects — write-back + thematic synthesis — exactly once, after
+  assembly and before rendering; both are skipped for `no_news`. Rendering a
+  model whose synthesis is empty **is** the bullets-only fallback.
 - **Relevance gate** — the ZoomInfo false-positive suppression rule
   (`relevance_gate.py`), applied to ZoomInfo candidates during ingestion.
+- **Prompt spec** (`prompts.py`, `PromptSpec` / `MacroPrompt`) — a fully
+  assembled structured-LLM call as plain frozen data (`system`, `user`,
+  `temperature`, `context`; `spec.kwargs()` splats into the LLM seam).
+  `prompts.py` is the pure module owning every prompt the pipeline assembles —
+  text assembly only: callers keep validation, the LLM seam keeps transport.
+  It owns the single `ENGLISH_OUTPUT_RULE` and the macro vocabulary
+  (`VALID_MACRO_CONDITIONS`, `EXEC_BULLET_LABELS`, the citation cap), which
+  the macro validators import — the prompt's promises and the validator's
+  checks are one definition. `MacroPrompt.source_pack` is the digest's
+  citation index: digest `[n]` markers and pack ids come from one enumeration,
+  so the citation contract holds by construction. `system_fingerprint`
+  identifies the prompt wording in logs; `scripts/show_prompts.py` dumps the
+  assembled prompts for offline rewording/diffing.

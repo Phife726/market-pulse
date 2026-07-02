@@ -12,6 +12,14 @@ from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
 import insight
+import prompts
+# The macro validators enforce exactly what the macro prompt promises — one
+# definition, imported from the module that renders it into the prompt text.
+from prompts import (
+    VALID_MACRO_CONDITIONS as _VALID_MACRO_CONDITIONS,
+    EXEC_BULLET_LABELS as _EXEC_BULLET_LABELS,
+    MAX_EXECUTIVE_BULLET_CITATIONS,
+)
 import zoominfo_client
 import relevance_gate
 
@@ -34,17 +42,6 @@ _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MP_CONFIG: Optional[dict] = None
 
-_FALLBACK_COMMERCIAL_SEGMENT_LIST = (
-    "Healthcare | Fibers | Transportation - Automotive | "
-    "Transportation - Non-Automotive | Transportation - Aerospace | "
-    "Industrial | Packaging | Engineered Resins | Enterprise / Cross-Segment"
-)
-
-_FALLBACK_SIGNAL_TYPE_LIST = (
-    "Competitive | Customer | Regulatory | Sustainability | "
-    "Supply Chain | Technology | Macro | Other"
-)
-
 
 def _load_mp_config() -> dict:
     """Load market_pulse_config.yaml once; return cached result on repeat calls."""
@@ -58,54 +55,6 @@ def _load_mp_config() -> dict:
             _MP_CONFIG = {}
     return _MP_CONFIG
 
-
-def _build_commercial_segment_rule(config: dict) -> str:
-    """Return RULE 4 text with commercial segment labels and descriptions from config."""
-    segments = config.get("commercial_segments") or {}
-    if not segments:
-        block = _FALLBACK_COMMERCIAL_SEGMENT_LIST
-    else:
-        lines = []
-        for seg in segments.values():
-            if not isinstance(seg, dict):
-                continue
-            label = seg.get("label", "")
-            desc = (seg.get("description") or "").strip().replace("\n", " ")
-            if label:
-                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
-        block = "\n".join(lines) if lines else _FALLBACK_COMMERCIAL_SEGMENT_LIST
-
-    return f"""RULE 4 — COMMERCIAL SEGMENT:
-Assign the single best-fit commercial segment for the affected end-market:
-
-{block}
-
-Choose "Enterprise / Cross-Segment" only when the article spans multiple segments
-or addresses Americhem-wide topics with no single end-market dominating."""
-
-
-def _build_signal_type_rule(config: dict) -> str:
-    """Return RULE 5 text with signal type labels and descriptions from config."""
-    signals = config.get("signal_types") or {}
-    if not signals:
-        block = _FALLBACK_SIGNAL_TYPE_LIST
-    else:
-        lines = []
-        for sig in signals.values():
-            if not isinstance(sig, dict):
-                continue
-            label = sig.get("label", "")
-            desc = (sig.get("description") or "").strip().replace("\n", " ")
-            if label:
-                lines.append(f"  {label}: {desc}" if desc else f"  {label}")
-        block = "\n".join(lines) if lines else _FALLBACK_SIGNAL_TYPE_LIST
-
-    return f"""RULE 5 — SIGNAL TYPE:
-Assign the single kind of signal this article represents:
-
-{block}
-
-Prefer a named type over "Other" whenever possible."""
 
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "source set 238658",
@@ -538,192 +487,15 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     return markdown
 
 
-# Cross-reference: an identical-body constant lives in delivery_engine.py.
-# Both prompts are gated in CI by tests that assert the same anchor substrings;
-# if you reword this, reword the delivery_engine.py copy in lockstep.
-_ENGLISH_OUTPUT_RULE = (
-    "All human-readable generated strings must be written in clear business English, "
-    "regardless of the source article's language. Translate non-English source "
-    "content into English. Preserve proper nouns — company names, product names, "
-    "brand names, source publications, locations, URLs, and quoted legal or product "
-    "identifiers — in their original form when translation would reduce precision. "
-    "Enum/taxonomy fields must use the configured English labels exactly."
-)
-
-_SYSTEM_PROMPT_BASE = """You are an expert market intelligence analyst for AmI (Americhem Intelligence),
-a global manufacturer of custom color masterbatch, functional additives, and engineered compounds
-serving automotive, healthcare, packaging, wire and cable, and industrial markets.
-
-Your job is to analyze news articles and extract structured intelligence. You MUST enforce all
-eight rules below before generating any output.
-
-RULE 0 — OUTPUT LANGUAGE:
-{english_output_rule}
-
-RULE 1 — ENTITY DISAMBIGUATION:
-Before scoring, verify that the named entity in this article is the correct one.
-- If the article mentions "Dow" verify it refers to Dow Chemical / Dow Inc., not the Dow Jones index.
-- If the article mentions "Magna" verify it refers to Magna International, not the Magna Carta.
-- If the article mentions "Celanese" verify it is the chemical company, not an unrelated brand.
-- If the entity is a false match (wrong Dow, wrong Magna, unrelated brand), output ONLY this JSON:
-  {"americhem_impact": "DISCARD"}
-
-RULE 2 — SENTIMENT TAG (directional tone only — NOT importance):
-Assign exactly one tag based on the direction of impact for Americhem:
-- "Negative": adverse direction — threatens customers, suppliers, demand, margin, operations, or compliance
-- "Neutral": informational, mixed, or weakly directional signal
-- "Positive": favorable direction — demand growth, margin benefit, competitive advantage, supply opportunity
-
-IMPORTANT: sentiment_tag is direction only. A barely-relevant article can be Negative.
-A neutral article can have a high impact score. Do NOT conflate tone with importance.
-
-Also assign sentiment_score (1–10, kept for compatibility) using the same directional logic:
-1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
-
-RULE 3 — AMERICHEM IMPACT SCORE (relevance and materiality, 1–10):
-Score how relevant and materially important this article is to Americhem's business,
-independent of sentiment direction.
-
-1–2: Barely related. Almost no connection to Americhem's markets or supply chain.
-3–4: Indirect exposure only. Weak or speculative connection.
-5–6: Moderately relevant. Affects an Americhem segment or supply chain with some certainty.
-7–8: Clearly relevant. Direct effect on Americhem's customers, suppliers, costs, or demand.
-9–10: High-priority strategic signal. Americhem should act or monitor closely.
-
-Score by weighting these factors:
-- Segment fit (30%): directly affects a configured segment below
-- Americhem exposure (25%): named customers, end-markets, suppliers, competitors, or geographies
-- Business materiality (20%): demand volume, margin, capacity, regulatory risk, or supply risk
-- Timeliness/novelty (15%): recent, emerging, disruptive event
-- Actionability (10%): Sales or GMM team can take a concrete step
-
-{rule4}
-
-{rule5}
-
-RULE 6 — RIGOROUS IMPACT STATEMENT:
-Always write a specific So-What for Americhem even for routine items.
-Identify which business unit or cost line could be affected and in what direction.
-If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
-Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
-Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
-
-RULE 7 — DOMAIN RELEVANCE FIREWALL:
-Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
-absolutely zero connection to plastics, polymers, chemicals, materials, manufacturing,
-composites, packaging, or supply chain dynamics.
-Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
-financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 5.
-
-If the article passes all rules, extract data into this strict JSON schema.
-Output ONLY the JSON object — no preamble, no markdown, no explanation.
-
-{
-  "headline": "<concise factual summary, max 12 words>",
-  "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
-  "article_summary": "<2-3 sentences, max 50 words. What happened, who is involved, key numbers. Factual only — no Americhem framing.>",
-  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 5. Never generic.>",
-  "sentiment_score": <integer 1-10 per Rule 2 directional scale, kept for compatibility>,
-  "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
-  "americhem_impact_score": <integer 1-10 per Rule 3>,
-  "impact_rationale": "<max 15 words explaining why this impact score was assigned>",
-  "commercial_segment": "<exact label from RULE 4>",
-  "signal_type": "<exact label from RULE 5>",
-  "sentiment_rationale": "<max 10 words explaining exactly why this sentiment was assigned>",
-  "recommended_action": "<one of: No action | Monitor | Flag to procurement | Share with sales | Escalate to leadership>",
-  "source_url": "<MUST EXACTLY MATCH the URL provided in the user prompt>",
-  "entities_mentioned": ["<companies, chemicals, or regions mentioned>"]
-}"""
-
-
-def _build_system_prompt(config: dict) -> str:
-    """Assemble the full system prompt, injecting commercial segment and signal type taxonomies."""
-    rule4 = _build_commercial_segment_rule(config)
-    rule5 = _build_signal_type_rule(config)
-    return (
-        _SYSTEM_PROMPT_BASE
-        .replace("{english_output_rule}", _ENGLISH_OUTPUT_RULE)
-        .replace("{rule4}", rule4)
-        .replace("{rule5}", rule5)
-    )
-
-_VALID_MACRO_CONDITIONS: frozenset[str] = frozenset({
-    "Competitive Pressure", "Supply Volatility", "Demand Expansion",
-    "Demand Softness", "Regulatory Pressure", "Sustainability Pull",
-    "Commercial Opportunity", "Mixed / Watch", "Low Signal",
-})
-
-_EXEC_BULLET_LABELS: tuple[str, ...] = (
-    "Market pressure", "Supply chain watch", "Commercial action",
-)
-
-MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
-MAX_EXECUTIVE_BULLET_CITATIONS = 3
-
-
-def _source_domain(url: str) -> str:
-    """Registrable host minus a leading 'www.'; '' when unparseable/empty.
-
-    Uses urlparse().hostname so any :port is stripped and the host is lowercased.
-    """
-    try:
-        host = urlparse(url or "").hostname or ""
-    except (ValueError, TypeError):
-        return ""
-    return host[4:] if host.startswith("www.") else host
-
-
-def _rank_macro_articles(articles: list[dict]) -> list[dict]:
-    """Deterministic, capped ordering of citable articles.
-
-    Sort key: materiality desc, headline asc, url_hash asc. created_at is NOT
-    used — the in-memory stored-articles buffer does not carry it — but the key
-    is still fully deterministic, so the same article set always ranks the same.
-    """
-    ordered = sorted(
-        articles,
-        key=lambda a: (
-            -insight.effective_impact(a),
-            a.get("headline", "") or "",
-            a.get("url_hash", "") or "",
-        ),
-    )
-    return ordered[:MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES]
-
-
-def _build_macro_source_pack(ranked_articles: list[dict]) -> list[dict]:
-    """Number the already-ranked articles 1..N as the citable source pack.
-
-    Pass the output of _rank_macro_articles. Each entry:
-    {id, headline, url, domain, segment, score}.
-    """
-    pack: list[dict] = []
-    for i, a in enumerate(ranked_articles, start=1):
-        url = a.get("source_url", "") or ""
-        pack.append({
-            "id": i,
-            "headline": a.get("headline", "") or "",
-            "url": url,
-            "domain": _source_domain(url),
-            "segment": insight.commercial_segment(a),
-            "score": insight.effective_impact(a),
-        })
-    return pack
-
-
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
-    user_prompt = (
-        f"Trigger entity: {trigger_entity}\nCategory: {category}\n"
-        f"Source URL: {source_url}\n\nArticle text:\n{article_text}"
+    spec = prompts.insight_prompt(
+        _load_mp_config(),
+        article_text=article_text,
+        source_url=source_url,
+        trigger_entity=trigger_entity,
+        category=category,
     )
-    system_prompt = _build_system_prompt(_load_mp_config())
-    raw = _llm().complete_json(
-        system=system_prompt,
-        user=user_prompt,
-        temperature=0.2,
-        context=f"entity '{trigger_entity}'",
-    )
+    raw = _llm().complete_json(**spec.kwargs())
     if raw is None:
         return None
     if insight.is_discard(raw):
@@ -826,55 +598,11 @@ def generate_macro_summary(
         logger.warning("No articles to summarize — skipping macro summary generation.")
         return False
 
-    ranked = _rank_macro_articles(articles)
-    source_pack = _build_macro_source_pack(ranked)
+    mp = prompts.macro_prompt(articles)
+    source_pack = list(mp.source_pack)
     valid_source_ids = frozenset(s["id"] for s in source_pack)
 
-    article_digest = "\n".join(
-        f"[{i}] [{a.get('category', '').upper()}] {a.get('headline', '')} "
-        f"(Impact {insight.effective_impact(a)}/10): "
-        f"{a.get('americhem_impact', '')}"
-        for i, a in enumerate(ranked, start=1)
-    )
-
-    macro_conditions_text = ", ".join(sorted(_VALID_MACRO_CONDITIONS))
-    label_a, label_b, label_c = _EXEC_BULLET_LABELS
-
-    system_prompt = (
-        f"OUTPUT LANGUAGE:\n{_ENGLISH_OUTPUT_RULE}\n\n"
-        "You are a senior Americhem commercial intelligence analyst writing the morning brief\n"
-        "for GMMs and Sales leaders. Output ONLY a JSON object with two keys.\n\n"
-        "1. dominant_condition — pick exactly one value from this list that best describes\n"
-        "   today's overall commercial weather across the digest:\n"
-        f"     {macro_conditions_text}\n\n"
-        "2. executive_bullets — exactly three objects, in this order, with these exact labels:\n"
-        f'     {{"label": "{label_a}",    "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
-        f'     {{"label": "{label_b}", "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n'
-        f'     {{"label": "{label_c}",  "body": "<one sentence, <=30 words>", "citation_source_ids": [<source numbers>]}}\n\n'
-        '   Each body must reference specific named entities or segments from the digest.\n'
-        '   citation_source_ids: the bracketed [n] source numbers from the digest that\n'
-        f'   directly support that body. Cite 1 to {MAX_EXECUTIVE_BULLET_CITATIONS} of the most relevant\n'
-        '   sources, most relevant first. Use ONLY source numbers that appear in the digest.\n'
-        '   If a bullet is not supported by any specific source, use an empty list [].\n'
-        '   Do NOT hedge ("may", "could", "potentially") without a specific data point.\n'
-        '   Do NOT write generic statements ("monitor closely", "remain vigilant").\n\n'
-        '   Low-signal special case:\n'
-        '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
-        '   literal string "No action required." with citation_source_ids []. The other two\n'
-        '   bullets MUST describe the absence of meaningful signal.'
-    )
-
-    user_prompt = (
-        f"Today's market intelligence digest for Americhem ({len(articles)} articles):\n\n"
-        f"{article_digest}\n\nOutput ONLY the JSON object."
-    )
-
-    parsed = _llm().complete_json(
-        system=system_prompt,
-        user=user_prompt,
-        temperature=0.3,
-        context="macro summary",
-    )
+    parsed = _llm().complete_json(**mp.kwargs())
     if parsed is None:
         logger.error("Macro summary generation failed — no usable LLM response.")
         return False
