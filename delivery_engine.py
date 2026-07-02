@@ -13,13 +13,12 @@ import yaml
 from suppression_ledger import SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
 from llm import _llm
-from insight import (
-    effective_impact as _effective_impact,
-    commercial_segment as _commercial_segment_of,
-    signal_type as _signal_type_of,
-)
+import prompts
 import scoring
-from scoring import Scoring, tier as _alert_tier
+from scoring import tier as _alert_tier
+# Report assembly lives in report.py (the pure decision pipeline); tests
+# exercise its internals via `report` directly.
+from report import ReportModel, assemble_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,17 +71,8 @@ def _load_mp_config() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Task 10: Commercial segment grouping + new section renderer
+# Task 10: Commercial Segment Watch renderers
 # ---------------------------------------------------------------------------
-
-def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
-    """Bucket items by commercial_segment; rows without one default to Enterprise / Cross-Segment."""
-    from collections import defaultdict
-    buckets: dict[str, list[dict]] = defaultdict(list)
-    for item in items:
-        buckets[_commercial_segment_of(item)].append(item)
-    return dict(buckets)
-
 
 def _render_meta_strip(item: dict) -> str:
     """Return the inline meta strip HTML span: 'Impact: X/10 · Tag · Signal: Y · [CRITICAL]'."""
@@ -224,128 +214,6 @@ def _render_segment_watch_section(
 
 
 # ---------------------------------------------------------------------------
-# Delivery suppression guardrail (Task 9)
-# ---------------------------------------------------------------------------
-
-from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
-
-def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
-    """Case-insensitive substring match: True if any pattern appears in haystack."""
-    h = (haystack or "").lower()
-    return any(p.lower() in h for p in patterns or [])
-
-
-def _contains_any_term(text: str, terms: list[str]) -> bool:
-    """True if any of `terms` appears in `text` (case-insensitive substring)."""
-    t = (text or "").lower()
-    return any(term.lower() in t for term in terms or [])
-
-
-def _apply_delivery_suppression(
-    rows: list[dict],
-    config: dict,
-) -> tuple[list[dict], SuppressionLedger]:
-    """Run the deterministic seven-rule guardrail over fetched rows.
-
-    Returns (kept_rows, ledger). First matching rule wins; each suppressed
-    row is counted once and contributes at most one sample (deduped).
-    """
-    sup_cfg = config.get("delivery_suppression") or {}
-    ledger = SuppressionLedger.for_delivery()
-    kept: list[dict] = []
-    kept_headlines: list[str] = []
-
-    threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
-    enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
-    override_action = sup_cfg.get("job_posting_override_action", "Escalate to leadership")
-
-    product_patterns   = sup_cfg.get("url_patterns_product_listing", [])
-    job_patterns       = sup_cfg.get("url_patterns_job_posting", [])
-    market_patterns    = sup_cfg.get("title_patterns_generic_market_report", [])
-    color_terms        = sup_cfg.get("color_terms", [])
-    plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
-
-    for row in rows:
-        url = row.get("source_url", "") or ""
-        headline = row.get("headline", "") or ""
-        americhem_impact = row.get("americhem_impact", "") or ""
-        entities = row.get("entities_mentioned") or []
-        entities_text = " ".join(str(e) for e in entities)
-        action = row.get("recommended_action", "")
-
-        # Rule 1: Enterprise / Cross-Segment with low impact
-        if sup_cfg.get("enable_enterprise_low_impact", True):
-            segment = _commercial_segment_of(row)
-            score = int(row.get("americhem_impact_score") or 0)
-            if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
-                ledger = ledger.record(
-                    "enterprise_cross_segment_low_impact",
-                    url=url,
-                    title=headline,
-                )
-                continue
-
-        # Rule 2: Product listing URL
-        if sup_cfg.get("enable_product_listing", True) and _matches_any_pattern(url, product_patterns):
-            ledger = ledger.record("product_listing", url=url, title=headline)
-            continue
-
-        # Rule 3: Job posting URL (unless escalated)
-        if sup_cfg.get("enable_job_posting", True) and _matches_any_pattern(url, job_patterns):
-            if action != override_action:
-                ledger = ledger.record("job_posting", url=url, title=headline)
-                continue
-
-        # Rule 4: Generic market report title with empty entities
-        if sup_cfg.get("enable_generic_market_report", True):
-            if _matches_any_pattern(headline, market_patterns) and not entities:
-                ledger = ledger.record("generic_market_report", url=url, title=headline)
-                continue
-
-        # Rule 5: Unrelated color result
-        if sup_cfg.get("enable_unrelated_color_result", True):
-            if _contains_any_term(headline, color_terms):
-                # Check headline and entities only — not americhem_impact, which may
-                # contain negating language like "No plastics relevance." that would
-                # cause a false substring match on "plastic".
-                relevance_haystack = f"{headline} {entities_text}"
-                if not _contains_any_term(relevance_haystack, plastics_terms):
-                    ledger = ledger.record("unrelated_color_result", url=url, title=headline)
-                    continue
-
-        # Rule 6: Exact duplicate headline (case-insensitive)
-        if sup_cfg.get("enable_duplicate_headline", True):
-            if headline and any(h.lower() == headline.lower() for h in kept_headlines):
-                ledger = ledger.record("duplicate_headline", url=url, title=headline)
-                continue
-
-        # Rule 7: Semantic duplicate headline
-        # Lowercase before comparison — rapidfuzz 3.x no longer auto-lowercases,
-        # so case differences in proper nouns would otherwise deflate the score.
-        if sup_cfg.get("enable_semantic_duplicate_headline", True) and kept_headlines and headline:
-            hl_lower = headline.lower()
-            scores = [_token_sort_ratio(hl_lower, h.lower()) for h in kept_headlines]
-            if scores and max(scores) >= threshold:
-                ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
-                continue
-
-        kept.append(row)
-        if headline:
-            kept_headlines.append(headline)
-
-    return kept, ledger
-
-
-def _config_int(cfg: dict, key: str, default: int) -> int:
-    """Read an int from a config sub-dict, coercing strings and warning on bad values."""
-    try:
-        return int(cfg.get(key, default))
-    except (TypeError, ValueError):
-        logger.warning("Invalid config value for reporting.%s; using %d", key, default)
-        return default
-
-
-# ---------------------------------------------------------------------------
 # Run-mode detection
 # ---------------------------------------------------------------------------
 
@@ -367,7 +235,14 @@ def _is_test_mode() -> bool:
 
 def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     """Render the QA suppression summary block. Caller is responsible for gating
-    on test mode; this function does not check MARKET_PULSE_RUN_MODE itself."""
+    on test mode; this function does not check MARKET_PULSE_RUN_MODE itself.
+
+    Deliberate staleness: the fields come from the macro-summary row fetched at
+    the START of the run — the pre-write-back state — so on the day's first run
+    this block shows ingestion-only counts and a stale/None surfaced count.
+    Showing this run's post-merge accounting would require re-fetching the row
+    after prepare_report's write-back; the email subtitle's surfaced count
+    (model.surfaced_count) is the authoritative same-run number."""
     if not macro_summary:
         return ""
 
@@ -532,19 +407,6 @@ def _update_delivery_summary_counts(
 # 2. Thematic synthesis
 # ---------------------------------------------------------------------------
 
-# Cross-reference: an identical-body constant lives in ingestion_engine.py.
-# Both prompts are gated in CI by tests that assert the same anchor substrings;
-# if you reword this, reword the ingestion_engine.py copy in lockstep.
-_ENGLISH_OUTPUT_RULE = (
-    "All human-readable generated strings must be written in clear business English, "
-    "regardless of the source article's language. Translate non-English source "
-    "content into English. Preserve proper nouns — company names, product names, "
-    "brand names, source publications, locations, URLs, and quoted legal or product "
-    "identifiers — in their original form when translation would reduce precision. "
-    "Enum/taxonomy fields must use the configured English labels exactly."
-)
-
-
 def synthesize_thematic_paragraphs(
     groups: dict[str, list[dict]],
 ) -> dict[str, str]:
@@ -560,39 +422,7 @@ def synthesize_thematic_paragraphs(
     if not groups:
         return {}
 
-    lines: list[str] = []
-    for category, articles in groups.items():
-        lines.append(f"CATEGORY: {category}")
-        for art in articles:
-            impact_score = _effective_impact(art)
-            tag = art.get("sentiment_tag") or ""
-            entities = art.get("entities_mentioned") or []
-            entity = entities[0] if entities else (art.get("commercial_segment") or art.get("category") or "Unknown")
-            americhem_impact = art.get("americhem_impact", "")
-            tag_suffix = f" | {tag}" if tag else ""
-            lines.append(f"- [{entity} | impact:{impact_score}/10{tag_suffix}] {americhem_impact}")
-        lines.append("")
-
-    grouped_text = "\n".join(lines).strip()
-
-    system_prompt = (
-        f"OUTPUT LANGUAGE:\n{_ENGLISH_OUTPUT_RULE}\n\n"
-        "You are a market intelligence analyst for Americhem, a specialty plastics compounder.\n\n"
-        "For each CATEGORY block below, write exactly one synthesis paragraph (2–3 sentences).\n"
-        "The paragraph must:\n"
-        "- Identify the shared trend or structural driver across the listed signals\n"
-        "- Explicitly state the implication for Americhem's supply chain, demand pipeline, or margin\n"
-        "- Be written for a senior executive who will act on it — no hedging, no filler\n\n"
-        "Return valid JSON with category names as keys and synthesis paragraphs as values.\n"
-        "Use the exact category names provided. Do not invent categories.\n"
-        "Only include categories that appear in the input."
-    )
-
-    result = _llm().complete_json(
-        system=system_prompt,
-        user=grouped_text,
-        context="thematic synthesis",
-    )
+    result = _llm().complete_json(**prompts.thematic_prompt(groups).kwargs())
     if result is None:
         logger.error("Thematic synthesis failed — falling back to bullets-only.")
         return {}
@@ -835,89 +665,67 @@ _SENTIMENT_TAG_COLORS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# 3. Main email generator
+# 3. Report preparation (the run's single effectful step) + pure renderer
 # ---------------------------------------------------------------------------
 
-def generate_html_email(
-    data: list[dict],
-    macro_summary: dict | None = None,
+def prepare_report(
+    rows: list[dict],
+    macro_summary: dict | None,
+    *,
+    config: dict | None = None,
+) -> ReportModel:
+    """Assemble the report model and perform the run's two side effects —
+    the daily_summaries write-back (repo seam, same-day-retry merge) and
+    thematic synthesis (LLM seam) — exactly once, in that order.
+
+    Both effects are skipped for the no_news variant: that path never wrote
+    back, and there is nothing to synthesize. config=None loads
+    market_pulse_config.yaml; tests pass a dict. The returned model is ready
+    for render_report."""
+    cfg = config if config is not None else _load_mp_config()
+    model = assemble_report(rows, macro_summary, cfg)
+    if model.variant == "daily":
+        _update_delivery_summary_counts(
+            surfaced_count=model.surfaced_count,
+            ledger=model.ledger,
+        )
+        synthesis = synthesize_thematic_paragraphs(model.synthesis_candidates())
+        model = model.with_synthesis(synthesis)
+    return model
+
+
+def render_report(
+    model: ReportModel,
+    *,
+    today_str: str,
+    test_mode: bool = False,
 ) -> str:
-    config = _load_mp_config()
-    reporting_cfg          = config.get("reporting", {})
-    max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
-    max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
-    scorer = Scoring.from_config(config)
+    """Render the report model to the final email HTML.
 
-    # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, delivery_ledger = _apply_delivery_suppression(data, config)
+    Pure: same (model, today_str, test_mode) -> same bytes. The clock and the
+    MARKET_PULSE_RUN_MODE resolution belong to the caller. A model whose
+    synthesis is empty renders bullets-only — that IS the fallback, so tests
+    may render an unprepared model directly. test_mode=True adds the [TEST]
+    title prefix, the amber banner row, and the QA suppression summary."""
+    title_prefix = "[TEST] " if test_mode else ""
+    test_banner_row = _TEST_BANNER_ROW if test_mode else ""
 
-    # 2. Visibility filter.
-    visible_pool = [r for r in kept if scorer.is_visible(r)]
-    below_threshold_count = len(kept) - len(visible_pool)
+    if model.variant == "no_news":
+        return _render_no_news_email(
+            today_str=today_str,
+            title_prefix=title_prefix,
+            test_banner_row=test_banner_row,
+        )
 
-    # 3. Group by commercial segment.
-    groups_full = _group_by_commercial_segment(visible_pool)
+    macro_summary = model.macro_summary
 
-    # 4. Per-segment cap (highest-impact articles first within each group).
-    groups = {
-        seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
-        for seg, arts in groups_full.items()
-    }
-
-    # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
-    total = sum(len(arts) for arts in groups.values())
-    if total > max_total_visible:
-        all_visible = sorted(
-            [(seg, a) for seg, arts in groups.items() for a in arts],
-            key=lambda kv: _effective_impact(kv[1]),
-            reverse=True,
-        )[:max_total_visible]
-        selected_hashes = {a.get("url_hash") for _, a in all_visible}
-        groups = {seg: [a for a in arts if a.get("url_hash") in selected_hashes]
-                  for seg, arts in groups.items()}
-        groups = {seg: arts for seg, arts in groups.items() if arts}
-
-    # 6. Compute weak_relevance: rows in `kept` with effective impact 4-5 that
-    # didn't make it into any final group (the old Peripheral pool, now hidden).
-    final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
-    weak_relevance_count = sum(
-        1 for r in kept
-        if scorer.is_weak_relevance(r)
-        and r.get("url_hash") not in final_hashes
-    )
-
-    # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
-    surfaced_count = sum(len(arts) for arts in groups.values())
-
-    # 8. Write delivery-side counts + surfaced_count back to today's row.
-    delivery_ledger = (delivery_ledger
-                       .record_count("below_impact_threshold", below_threshold_count)
-                       .record_count("weak_relevance", weak_relevance_count))
-    _update_delivery_summary_counts(
-        surfaced_count=surfaced_count,
-        ledger=delivery_ledger,
-    )
-
-    # 9. Thematic synthesis paragraphs (existing helper, now keyed off the new groups).
-    multi_article_groups = {seg: arts for seg, arts in groups.items() if len(arts) >= 2}
-    synthesis = synthesize_thematic_paragraphs(multi_article_groups)
-
-    # 10. Build the HTML body.
-    sections_html = _render_segment_watch_section(groups, synthesis)
-
-    # Executive summary block (rendered via the existing helper, which Task 12 will
-    # upgrade to consume executive_bullets).
+    sections_html = _render_segment_watch_section(model.groups, model.synthesis)
     exec_html = _render_exec_summary(macro_summary)
 
     # Cited-source list, rendered at the very bottom of the email (below the
     # segment-watch content) rather than under the executive summary block.
     sources_html = _render_sources_section(macro_summary)
 
-    # Header counts. Null-safe handling is finalized in Task 13.
-    today_str = datetime.now().strftime("%A, %B %d, %Y")
-    screened = (macro_summary or {}).get("screened_count")
-    if screened is None:
-        screened = len(data)
     dominant_condition = (macro_summary or {}).get("dominant_condition") or (
         macro_summary or {}
     ).get("macro_sentiment") or ""
@@ -932,15 +740,11 @@ def generate_html_email(
             f'{dominant_condition}</span>'
         )
 
-    _test_mode = _is_test_mode()
-    title_prefix = "[TEST] " if _test_mode else ""
-    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
-
-    qa_html = _render_qa_debug_section(macro_summary) if _test_mode else ""
+    qa_html = _render_qa_debug_section(macro_summary) if test_mode else ""
 
     subtitle = (
         f"{today_str} &nbsp;&middot;&nbsp; "
-        f"{surfaced_count} surfaced signals from {screened} screened items"
+        f"{model.surfaced_count} surfaced signals from {model.screened_count} screened items"
     )
 
     return f"""<!DOCTYPE html>
@@ -1025,14 +829,15 @@ def generate_html_email(
 
 
 # ---------------------------------------------------------------------------
-# 4. No-news fallback
+# 4. No-news fallback (render_report dispatches here on the no_news variant)
 # ---------------------------------------------------------------------------
 
-def _generate_no_news_email() -> str:
-    today_str = datetime.now().strftime("%A, %B %d, %Y")
-    _test_mode = _is_test_mode()
-    title_prefix = "[TEST] " if _test_mode else ""
-    test_banner_row = _TEST_BANNER_ROW if _test_mode else ""
+def _render_no_news_email(
+    *,
+    today_str: str,
+    title_prefix: str,
+    test_banner_row: str,
+) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>Americhem Market-Pulse</title></head>
 <body style="margin:0;padding:0;background-color:#F3F4F6;font-family:Arial,sans-serif;">
@@ -1159,19 +964,21 @@ def execute_pipeline() -> None:
 
     if not data:
         logger.warning("No intelligence records for today — sending no-news notification.")
-        html = _generate_no_news_email()
-        send_email(html)
-        return
+    else:
+        critical_count  = sum(1 for r in data if _alert_tier(r) == "CRITICAL")
+        strategic_count = sum(1 for r in data if _alert_tier(r) == "STRATEGIC")
+        routine_count   = sum(1 for r in data if _alert_tier(r) == "ROUTINE")
+        logger.info(
+            "Rendering email — critical: %d | strategic: %d | routine: %d",
+            critical_count, strategic_count, routine_count,
+        )
 
-    critical_count  = sum(1 for r in data if _alert_tier(r) == "CRITICAL")
-    strategic_count = sum(1 for r in data if _alert_tier(r) == "STRATEGIC")
-    routine_count   = sum(1 for r in data if _alert_tier(r) == "ROUTINE")
-    logger.info(
-        "Rendering email — critical: %d | strategic: %d | routine: %d",
-        critical_count, strategic_count, routine_count,
+    model = prepare_report(data, macro_summary)
+    html = render_report(
+        model,
+        today_str=datetime.now().strftime("%A, %B %d, %Y"),
+        test_mode=_is_test_mode(),
     )
-
-    html = generate_html_email(data, macro_summary)
     send_email(html)
 
 

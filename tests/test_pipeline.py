@@ -342,9 +342,13 @@ def test_generate_macro_summary_uses_macro_temperature():
 from delivery_engine import (
     _render_card,
     synthesize_thematic_paragraphs,
-    generate_html_email,
-    _config_int,
+    assemble_report,
+    prepare_report,
+    render_report,
 )
+from report import _config_int
+
+_TODAY_STR = "Thursday, July 02, 2026"
 
 
 def test_render_card_omits_article_summary():
@@ -773,13 +777,12 @@ def test_synthesize_thematic_paragraphs_graceful_degradation():
 
 
 # ---------------------------------------------------------------------------
-# Task 7 — generate_html_email integration
+# Task 7 — report assembly + rendering integration
 # ---------------------------------------------------------------------------
 
-def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
-    """Legacy sentiment_score<=3 rows appear in Commercial Segment Watch with a
-    CRITICAL badge in the meta strip. The old Critical Disruptions section is gone."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+def test_report_legacy_critical_old_sections_gone():
+    """Legacy sentiment_score<=3 rows fall below the visible threshold (6) via the
+    sentiment_score fallback, and the pre-redesign section labels never render."""
     data = [
         {"url_hash": "c0", "sentiment_score": 2, "category": "suppliers",
          "headline": "Legacy critical headline about plant fire",
@@ -787,26 +790,22 @@ def test_generate_html_email_legacy_critical_appears_with_badge(monkeypatch):
          "entities_mentioned": ["BASF"], "source_url": "https://x/0",
          "commercial_segment": "Enterprise / Cross-Segment"},
     ]
-    fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._repo", lambda: fake_repo), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(data)
     # Note: this legacy row has no americhem_impact_score, so the visibility filter
     # uses sentiment_score=2 -> effective_impact <= 3, which is BELOW the visible
     # threshold (6). So the row will not surface in the segment watch under the
     # current threshold filter. What we DO assert: the old section labels are gone
     # and Peripheral Signals is hidden in production. The CRITICAL badge behaviour
     # is unit-tested directly via test_render_segment_watch_section_critical_badge_for_legacy_low_score.
+    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR)
     assert "PERIPHERAL SIGNALS" not in html
     assert "CRITICAL DISRUPTIONS" not in html
     assert "THEMATIC INTELLIGENCE" not in html
 
 
-def test_generate_html_email_routes_two_plus_to_segment_watch(monkeypatch):
+def test_report_routes_two_plus_to_segment_watch():
     """Two articles in the same commercial_segment produce a Commercial Segment
     Watch block with a synthesis paragraph."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     data = [
         {"url_hash": "a", "commercial_segment": "Healthcare",
          "americhem_impact_score": 7, "sentiment_tag": "Positive",
@@ -819,34 +818,31 @@ def test_generate_html_email_routes_two_plus_to_segment_watch(monkeypatch):
          "americhem_impact": "Effect.", "source_url": "https://x/b",
          "entities_mentioned": ["Techmer"]},
     ]
-    mock_synth = _make_synthesis_mock({"Healthcare": "Synthesis paragraph here."})
-    fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._llm", return_value=mock_synth), \
-         patch("delivery_engine._repo", lambda: fake_repo), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(data)
+    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    assert model.synthesis_candidates() == {"Healthcare": model.groups["Healthcare"]}
+    html = render_report(
+        model.with_synthesis({"Healthcare": "Synthesis paragraph here."}),
+        today_str=_TODAY_STR,
+    )
     assert "COMMERCIAL SEGMENT WATCH" in html
     assert "Healthcare" in html
     assert "Synthesis paragraph here." in html
     assert "THEMATIC INTELLIGENCE" not in html
 
 
-def test_generate_html_email_single_low_relevance_hidden_in_production(monkeypatch):
+def test_report_single_low_relevance_hidden_in_production():
     """An ungrouped impact-5 article must be HIDDEN in production
     (no Peripheral Signals section anymore)."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     data = [{"url_hash": "x", "commercial_segment": "Packaging",
              "americhem_impact_score": 5, "sentiment_tag": "Neutral",
              "signal_type": "Customer",
              "headline": "Low relevance packaging signal",
              "americhem_impact": ".", "source_url": "https://x/p",
              "entities_mentioned": ["Acme"]}]
-    fake_repo = InMemoryIntelligenceRepo()
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._repo", lambda: fake_repo), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(data)
+    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    assert model.groups == {}
+    assert model.ledger.breakdown["weak_relevance"] == 1
+    html = render_report(model, today_str=_TODAY_STR)
     assert "Low relevance packaging signal" not in html
     assert "PERIPHERAL SIGNALS" not in html
 
@@ -1016,7 +1012,7 @@ def test_impact_score_defaults_on_bad_value(bad_value):
 
 
 # ---------------------------------------------------------------------------
-# Threshold filtering in generate_html_email()
+# Threshold filtering in assemble_report()
 # ---------------------------------------------------------------------------
 
 def _make_new_article(
@@ -1042,23 +1038,28 @@ def _make_new_article(
     }
 
 
-def test_generate_html_email_filters_below_impact_threshold(monkeypatch):
-    """Articles with americhem_impact_score below the threshold must not appear in the email."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    low_impact = _make_new_article("low", americhem_impact_score=3, headline="Low Impact Headline")
-    high_impact = _make_new_article("high", americhem_impact_score=8, headline="High Impact Headline")
+def test_assemble_report_filters_below_impact_threshold():
+    """Articles with americhem_impact_score below the threshold must not appear in the report.
+    Use a non-Enterprise segment so the Enterprise-low-impact suppression rule
+    doesn't claim the row first — this exercises the visibility filter itself."""
+    low_impact = _make_new_article("low", americhem_impact_score=3, headline="Low Impact Headline",
+                                   commercial_segment="Packaging")
+    high_impact = _make_new_article("high", americhem_impact_score=8, headline="High Impact Headline",
+                                    commercial_segment="Packaging")
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email([low_impact, high_impact])
+    model = assemble_report([low_impact, high_impact],
+                            config={"reporting": {"visible_impact_threshold": 6}})
 
+    kept = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert kept == {"high"}
+    assert model.ledger.breakdown["below_impact_threshold"] == 1
+    html = render_report(model, today_str=_TODAY_STR)
     assert "High Impact Headline" in html
     assert "Low Impact Headline" not in html
 
 
-def test_generate_html_email_groups_by_commercial_segment(monkeypatch):
+def test_assemble_report_groups_by_commercial_segment():
     """Two new-style articles with the same commercial_segment are grouped under that label."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     # Use genuinely distinct headlines so delivery suppression doesn't flag them
     # as semantic duplicates (token_sort_ratio threshold is 88).
     art_a = _make_new_article("a", 8, commercial_segment="Healthcare",
@@ -1066,11 +1067,14 @@ def test_generate_html_email_groups_by_commercial_segment(monkeypatch):
     art_b = _make_new_article("b", 7, commercial_segment="Healthcare",
                               headline="FDA clears new medical-grade compound for implantable devices")
 
-    mock_client = _make_synthesis_mock({"Healthcare": "Healthcare synthesis paragraph."})
-    with patch("delivery_engine._llm", return_value=mock_client), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email([art_a, art_b])
+    model = assemble_report([art_a, art_b],
+                            config={"reporting": {"visible_impact_threshold": 6}})
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["a", "b"]
 
+    html = render_report(
+        model.with_synthesis({"Healthcare": "Healthcare synthesis paragraph."}),
+        today_str=_TODAY_STR,
+    )
     assert "HEALTHCARE" in html.upper()
     assert "Healthcare synthesis paragraph." in html
 
@@ -1126,9 +1130,8 @@ def test_render_card_falls_back_to_sentiment_score_for_old_rows():
 # Article cap enforcement
 # ===========================================================================
 
-def test_generate_html_email_per_segment_cap(monkeypatch):
-    """No more than max_per_segment articles from the same segment appear in the email."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+def test_assemble_report_per_segment_cap():
+    """No more than max_per_segment articles from the same segment survive assembly."""
     # 5 Healthcare articles with genuinely distinct headlines (avoids semantic-duplicate
     # suppression which fires at token_sort_ratio >= 88).
     _hc_headlines = [
@@ -1153,22 +1156,15 @@ def test_generate_html_email_per_segment_cap(monkeypatch):
             "max_total_visible_articles": 12,
         }
     }
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value=config):
-        html = generate_html_email(articles)
+    model = assemble_report(articles, config=config)
 
-    # Top 3 by impact score (h0=10, h1=9, h2=8) must appear
-    assert _hc_headlines[0] in html
-    assert _hc_headlines[1] in html
-    assert _hc_headlines[2] in html
-    # h3 (impact 7) and h4 (impact 6) must be excluded
-    assert _hc_headlines[3] not in html
-    assert _hc_headlines[4] not in html
+    # Top 3 by impact score (h0=10, h1=9, h2=8) survive; h3 (7) and h4 (6) are capped.
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["h0", "h1", "h2"]
+    assert model.surfaced_count == 3
 
 
-def test_generate_html_email_total_articles_cap(monkeypatch):
+def test_assemble_report_total_articles_cap():
     """Total visible articles must not exceed max_total_visible_articles."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     # 7 segments × 2 articles = 14 articles, all impact=8
     segments = [
         "Healthcare", "Fibers", "Packaging", "Industrial",
@@ -1191,17 +1187,14 @@ def test_generate_html_email_total_articles_cap(monkeypatch):
             "max_total_visible_articles": 10,
         }
     }
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value=config):
-        html = generate_html_email(articles)
+    model = assemble_report(articles, config=config)
 
-    visible_count = sum(1 for art in articles if art["headline"] in html)
-    assert visible_count <= 10
+    assert model.surfaced_count <= 10
+    assert sum(len(arts) for arts in model.groups.values()) == model.surfaced_count
 
 
-def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
-    """Articles dropped by the per-segment cap must not reappear in thin entries or peripheral."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
+def test_report_capped_articles_do_not_reappear():
+    """Articles dropped by the per-segment cap must not reappear anywhere in the email."""
     # 4 Healthcare articles, impacts 10, 9, 8, 7 — max_per_segment=3 drops impact-7
     articles = [
         _make_new_article(
@@ -1218,9 +1211,7 @@ def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
             "max_total_visible_articles": 12,
         }
     }
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value=config):
-        html = generate_html_email(articles)
+    html = render_report(assemble_report(articles, config=config), today_str=_TODAY_STR)
 
     # h3 (impact=7) was in the group but capped — must not reappear anywhere
     assert "HC Headline 3" not in html
@@ -1230,10 +1221,9 @@ def test_generate_html_email_capped_articles_do_not_reappear(monkeypatch):
 # Negative moderate-impact: impact score drives filtering, not sentiment tone
 # ===========================================================================
 
-def test_generate_html_email_excludes_negative_low_impact_new_style(monkeypatch):
+def test_assemble_report_excludes_negative_low_impact_new_style():
     """A Negative-sentiment article with low americhem_impact_score must be excluded.
     Filtering is by impact score, not tone — this validates the invariant."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     neg_low = _make_new_article(
         "neg_low", americhem_impact_score=4,
         sentiment_tag="Negative",
@@ -1244,27 +1234,26 @@ def test_generate_html_email_excludes_negative_low_impact_new_style(monkeypatch)
         sentiment_tag="Positive",
         headline="Positive High Impact Headline",
     )
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email([neg_low, pos_high])
+    model = assemble_report([neg_low, pos_high],
+                            config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR)
 
     assert "Positive High Impact Headline" in html
     assert "Negative Low Impact Headline" not in html
 
 
-def test_generate_html_email_shows_negative_high_impact(monkeypatch):
+def test_report_shows_negative_high_impact():
     """A Negative-sentiment article with high americhem_impact_score MUST appear.
     A high-impact supply disruption (Negative) is more important than a positive routine signal."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     neg_high = _make_new_article(
         "neg_high", americhem_impact_score=9,
         sentiment_tag="Negative",
         commercial_segment="Raw Materials / Supply Chain",
         headline="Negative High Impact Supply Disruption",
     )
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email([neg_high])
+    model = assemble_report([neg_high],
+                            config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR)
 
     assert "Negative High Impact Supply Disruption" in html
     assert "Negative" in html
@@ -1290,24 +1279,24 @@ def test_config_int_coerces_string_to_int():
 # ---------------------------------------------------------------------------
 
 def test_commercial_segment_of_returns_commercial_segment():
-    from delivery_engine import _commercial_segment_of
+    from insight import commercial_segment as _commercial_segment_of
     assert _commercial_segment_of({"commercial_segment": "Healthcare"}) == "Healthcare"
 
 
 def test_commercial_segment_of_strips_whitespace():
-    from delivery_engine import _commercial_segment_of
+    from insight import commercial_segment as _commercial_segment_of
     assert _commercial_segment_of({"commercial_segment": " Packaging "}) == "Packaging"
 
 
 def test_commercial_segment_of_ignores_legacy_strategic_segment():
     """The legacy strategic_segment fallback was removed — rows with only that
     field must route to the default Enterprise / Cross-Segment bucket."""
-    from delivery_engine import _commercial_segment_of
+    from insight import commercial_segment as _commercial_segment_of
     assert _commercial_segment_of({"strategic_segment": "Healthcare"}) == "Enterprise / Cross-Segment"
 
 
 def test_commercial_segment_of_defaults_when_missing():
-    from delivery_engine import _commercial_segment_of
+    from insight import commercial_segment as _commercial_segment_of
     assert _commercial_segment_of({}) == "Enterprise / Cross-Segment"
     assert _commercial_segment_of({"commercial_segment": None}) == "Enterprise / Cross-Segment"
     assert _commercial_segment_of({"commercial_segment": ""}) == "Enterprise / Cross-Segment"
@@ -1316,17 +1305,17 @@ def test_commercial_segment_of_defaults_when_missing():
 def test_commercial_segment_of_defaults_for_whitespace_only():
     """A whitespace-only commercial_segment must default to Enterprise / Cross-Segment,
     not produce a blank segment bucket."""
-    from delivery_engine import _commercial_segment_of
+    from insight import commercial_segment as _commercial_segment_of
     assert _commercial_segment_of({"commercial_segment": "   "}) == "Enterprise / Cross-Segment"
 
 
 def test_signal_type_of_prefers_new_field():
-    from delivery_engine import _signal_type_of
+    from insight import signal_type as _signal_type_of
     assert _signal_type_of({"signal_type": "Regulatory"}) == "Regulatory"
 
 
 def test_signal_type_of_falls_back_to_other():
-    from delivery_engine import _signal_type_of
+    from insight import signal_type as _signal_type_of
     assert _signal_type_of({}) == "Other"
     assert _signal_type_of({"signal_type": None}) == "Other"
     assert _signal_type_of({"signal_type": ""}) == "Other"
@@ -1407,38 +1396,33 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
     assert captured["payload"]["to"] == ["jphifer@americhem.com"]
 
 
-def test_generate_html_email_test_mode_prefixes_header(monkeypatch):
-    """In test mode, generate_html_email() must include [TEST] in the title and
+def test_render_report_test_mode_prefixes_header():
+    """With test_mode=True, render_report() must include [TEST] in the title and
     a visible TEST RUN banner in the rendered HTML."""
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    data = [_make_new_article("h", 8, headline="Some Headline")]
-    with patch("delivery_engine._llm", return_value=FakeLLM()):
-        html = generate_html_email(data)
+    model = assemble_report([_make_new_article("h", 8, headline="Some Headline")])
+    html = render_report(model, today_str=_TODAY_STR, test_mode=True)
     assert "[TEST]" in html
     assert "TEST RUN" in html
     assert "Jason-only QA output" in html
 
 
-def test_generate_html_email_production_mode_unchanged(monkeypatch):
-    """When MARKET_PULSE_RUN_MODE is unset, the rendered HTML must contain
+def test_render_report_production_mode_unchanged():
+    """With test_mode=False (the default), the rendered HTML must contain
     no [TEST] markers or TEST RUN banner."""
-    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    data = [_make_new_article("h", 8, headline="Some Headline")]
-    with patch("delivery_engine._llm", return_value=FakeLLM()):
-        html = generate_html_email(data)
+    model = assemble_report([_make_new_article("h", 8, headline="Some Headline")])
+    html = render_report(model, today_str=_TODAY_STR)
     assert "[TEST]" not in html
     assert "TEST RUN" not in html
 
 
-def test_no_news_email_test_mode_marks_header(monkeypatch):
-    """The no-news fallback HTML must carry [TEST] and the TEST RUN banner in test mode."""
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
-    from delivery_engine import _generate_no_news_email
-    html = _generate_no_news_email()
+def test_no_news_email_test_mode_marks_header():
+    """The no-news variant HTML must carry [TEST] and the TEST RUN banner in test mode."""
+    model = assemble_report([])
+    assert model.variant == "no_news"
+    html = render_report(model, today_str=_TODAY_STR, test_mode=True)
     assert "[TEST]" in html
     assert "TEST RUN" in html
+    assert "No significant market events" in html
 
 
 def _make_openai_mock_with_new_fields(**overrides) -> FakeLLM:
@@ -1515,69 +1499,6 @@ def test_synthesize_insight_drops_strategic_segment_field():
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
     assert "strategic_segment" not in result
-
-
-def test_build_commercial_segment_rule_injects_labels_and_descriptions():
-    """_build_commercial_segment_rule must include all 9 labels and their full
-    descriptions from config."""
-    from ingestion_engine import _build_commercial_segment_rule
-    cfg = {
-        "commercial_segments": {
-            "healthcare": {"label": "Healthcare", "description": "Med devices."},
-            "fibers": {"label": "Fibers", "description": "Synthetic fiber chains."},
-        }
-    }
-    rule_text = _build_commercial_segment_rule(cfg)
-    assert "RULE 4 — COMMERCIAL SEGMENT" in rule_text
-    assert "Healthcare" in rule_text
-    assert "Med devices." in rule_text
-    assert "Fibers" in rule_text
-    assert "Synthetic fiber chains." in rule_text
-
-
-def test_build_signal_type_rule_injects_labels_and_descriptions():
-    """_build_signal_type_rule must include all 8 labels and descriptions."""
-    from ingestion_engine import _build_signal_type_rule
-    cfg = {
-        "signal_types": {
-            "competitive": {"label": "Competitive", "description": "Comp moves."},
-            "regulatory": {"label": "Regulatory", "description": "Gov actions."},
-        }
-    }
-    rule_text = _build_signal_type_rule(cfg)
-    assert "RULE 5 — SIGNAL TYPE" in rule_text
-    assert "Competitive" in rule_text
-    assert "Comp moves." in rule_text
-    assert "Regulatory" in rule_text
-    assert "Gov actions." in rule_text
-
-
-def test_system_prompt_includes_both_segment_and_signal_rules():
-    """The assembled system prompt must contain both new rules with their
-    descriptions, not just the labels."""
-    from ingestion_engine import _build_system_prompt
-    cfg = {
-        "commercial_segments": {
-            "engineered_resins": {
-                "label": "Engineered Resins",
-                "description": "High-performance compounds.",
-            },
-        },
-        "signal_types": {
-            "supply_chain": {
-                "label": "Supply Chain",
-                "description": "Resin pricing, force majeure.",
-            },
-        },
-    }
-    prompt = _build_system_prompt(cfg)
-    assert "RULE 4 — COMMERCIAL SEGMENT" in prompt
-    assert "RULE 5 — SIGNAL TYPE" in prompt
-    assert "Engineered Resins" in prompt
-    assert "High-performance compounds." in prompt
-    assert "Supply Chain" in prompt
-    assert "Resin pricing, force majeure." in prompt
-    assert "eight rules" in prompt
 
 
 def test_config_has_commercial_segments_and_signal_types():
@@ -1963,7 +1884,7 @@ def _row(**overrides) -> dict:
 
 
 def test_apply_delivery_suppression_drops_enterprise_low_impact():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=5)]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
@@ -1972,7 +1893,7 @@ def test_apply_delivery_suppression_drops_enterprise_low_impact():
 
 
 def test_apply_delivery_suppression_keeps_enterprise_high_impact():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(commercial_segment="Enterprise / Cross-Segment", americhem_impact_score=8)]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
@@ -1980,7 +1901,7 @@ def test_apply_delivery_suppression_keeps_enterprise_high_impact():
 
 
 def test_apply_delivery_suppression_drops_product_listing():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(source_url="https://example.com/product/widget")]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
@@ -1988,7 +1909,7 @@ def test_apply_delivery_suppression_drops_product_listing():
 
 
 def test_apply_delivery_suppression_drops_job_posting():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/12345")]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
@@ -1997,7 +1918,7 @@ def test_apply_delivery_suppression_drops_job_posting():
 
 def test_apply_delivery_suppression_job_posting_escalate_override():
     """A job-posting URL with recommended_action='Escalate to leadership' is kept."""
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(source_url="https://www.linkedin.com/jobs/ceo-move",
                  recommended_action="Escalate to leadership")]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
@@ -2006,7 +1927,7 @@ def test_apply_delivery_suppression_job_posting_escalate_override():
 
 
 def test_apply_delivery_suppression_drops_generic_market_report_no_entities():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market Size 2026-2032",
                  entities_mentioned=[])]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
@@ -2015,7 +1936,7 @@ def test_apply_delivery_suppression_drops_generic_market_report_no_entities():
 
 
 def test_apply_delivery_suppression_keeps_generic_market_report_with_entities():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(headline="Global Polypropylene Market 2026 Report",
                  entities_mentioned=["Avient"])]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
@@ -2024,7 +1945,7 @@ def test_apply_delivery_suppression_keeps_generic_market_report_with_entities():
 
 
 def test_apply_delivery_suppression_drops_unrelated_color_result():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(headline="What extension cord colors mean",
                  americhem_impact="No plastics relevance.",
                  entities_mentioned=["DIY Network"])]
@@ -2034,7 +1955,7 @@ def test_apply_delivery_suppression_drops_unrelated_color_result():
 
 
 def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(headline="New masterbatch colors for automotive interiors",
                  americhem_impact="Drives masterbatch demand.",
                  entities_mentioned=["BASF"])]
@@ -2044,7 +1965,7 @@ def test_apply_delivery_suppression_keeps_color_result_with_plastics_term():
 
 
 def test_apply_delivery_suppression_drops_exact_duplicate_headline():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(url_hash="a", headline="Plant fire halts production"),
             _row(url_hash="b", headline="Plant fire halts production")]
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
@@ -2054,7 +1975,7 @@ def test_apply_delivery_suppression_drops_exact_duplicate_headline():
 
 
 def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [
         _row(url_hash="a", headline="Plant fire halts production at BASF site"),
         _row(url_hash="b", headline="BASF plant fire halts production at site"),
@@ -2067,7 +1988,7 @@ def test_apply_delivery_suppression_drops_semantic_duplicate_headline():
 def test_apply_delivery_suppression_first_match_wins():
     """A row matching both product_listing and generic_market_report is counted once,
     under product_listing (which is checked first in the rule order)."""
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [_row(source_url="https://amazon.com/product/123",
                  headline="Plastic Market Report 2026",
                  entities_mentioned=[])]
@@ -2077,7 +1998,7 @@ def test_apply_delivery_suppression_first_match_wins():
 
 
 def test_apply_delivery_suppression_disabled_rule_allows_through():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     cfg = _supp_config(enable_product_listing=False)
     rows = [_row(source_url="https://example.com/product/widget")]
     kept, ledger = _apply_delivery_suppression(rows, cfg)
@@ -2086,7 +2007,7 @@ def test_apply_delivery_suppression_disabled_rule_allows_through():
 
 
 def test_apply_delivery_suppression_samples_capped_at_10():
-    from delivery_engine import _apply_delivery_suppression
+    from report import _apply_delivery_suppression
     rows = [
         _row(url_hash=f"h{i}", source_url=f"https://amazon.com/product/{i}",
              headline=f"Product {i}")
@@ -2103,7 +2024,7 @@ def test_apply_delivery_suppression_samples_capped_at_10():
 # ---------------------------------------------------------------------------
 
 def test_group_by_commercial_segment_keys_off_new_field():
-    from delivery_engine import _group_by_commercial_segment
+    from report import _group_by_commercial_segment
     rows = [
         {"url_hash": "a", "commercial_segment": "Healthcare",
          "americhem_impact_score": 8, "headline": "A"},
@@ -2118,7 +2039,7 @@ def test_group_by_commercial_segment_keys_off_new_field():
 
 
 def test_group_by_commercial_segment_defaults_when_field_missing():
-    from delivery_engine import _group_by_commercial_segment
+    from report import _group_by_commercial_segment
     rows = [
         {"url_hash": "a", "americhem_impact_score": 8, "headline": "A"},
         {"url_hash": "b", "commercial_segment": "Packaging",
@@ -2208,15 +2129,14 @@ def test_render_segment_watch_section_renders_synthesis_paragraph():
 
 
 # ---------------------------------------------------------------------------
-# Task 11: generate_html_email() pipeline integration tests
+# Task 11: report pipeline integration tests
 # ---------------------------------------------------------------------------
 
-def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
-    """surfaced_count must reflect the final visible-card list AFTER per-segment caps."""
+def test_prepare_report_surfaced_count_is_post_cap(monkeypatch):
+    """The written-back surfaced_count must reflect the final visible-card list AFTER per-segment caps."""
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     from datetime import date
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     rows = [
         {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
@@ -2243,21 +2163,19 @@ def test_generate_html_email_surfaced_count_is_post_cap(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value=config):
-        generate_html_email(rows)
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
+        prepare_report(rows, None, config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     assert stored is not None, "Expected an update() call to daily_summaries"
     assert stored["surfaced_count"] == 2
 
 
-def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch):
+def test_prepare_report_writes_delivery_suppression_counts_back(monkeypatch):
     """Delivery must write below_impact_threshold into suppression_breakdown via update()."""
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     from datetime import date
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     rows = [
         {"url_hash": "low", "commercial_segment": "Healthcare",
@@ -2287,9 +2205,8 @@ def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value=config):
-        generate_html_email(rows)
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
+        prepare_report(rows, None, config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     breakdown = stored["suppression_breakdown"]
@@ -2297,12 +2214,11 @@ def test_generate_html_email_writes_delivery_suppression_counts_back(monkeypatch
     assert stored["surfaced_count"] == 1
 
 
-def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatch):
+def test_prepare_report_update_filtered_by_run_date_and_run_mode(monkeypatch):
     """The update() call must be filtered by run_date AND run_mode."""
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     from datetime import date
 
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
     rows = [{
         "url_hash": "a", "commercial_segment": "Healthcare",
@@ -2330,9 +2246,8 @@ def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatc
     fake.update_delivery_counts = spy_update
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        generate_html_email(rows)
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
+        prepare_report(rows, None, config={"reporting": {"visible_impact_threshold": 6}})
 
     assert update_calls, f"Expected update_delivery_counts call. calls={update_calls}"
     keys = set()
@@ -2342,6 +2257,154 @@ def test_generate_html_email_update_filtered_by_run_date_and_run_mode(monkeypatc
     assert "run_mode" in keys, f"calls: {update_calls}"
     rm_values = [c["run_mode"] for c in update_calls]
     assert any(v == "test" for v in rm_values), f"Expected run_mode='test' in {rm_values}"
+
+
+def test_prepare_report_synthesis_sees_only_final_capped_groups(monkeypatch):
+    """Thematic synthesis must receive ONLY the final capped groups with 2+
+    articles — capped-out rows and single-article segments never reach the LLM."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    hc_headlines = [
+        "Hospital network merger squeezes specialty polymer volumes",
+        "FDA clears new implantable-grade compound for cardiac devices",
+        "Aging population drives record demand for medical-grade resins",
+    ]
+    rows = [
+        {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
+         "americhem_impact_score": 9 - i, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": hc_headlines[i],
+         "americhem_impact": f"Healthcare impact {i}.",
+         "source_url": f"https://x/h{i}", "entities_mentioned": ["Acme"]}
+        for i in range(3)
+    ] + [
+        {"url_hash": "p0", "commercial_segment": "Packaging",
+         "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": "Single packaging signal",
+         "americhem_impact": "Packaging impact.",
+         "source_url": "https://x/p0", "entities_mentioned": ["Acme"]},
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": 2,
+            "max_total_visible_articles": 12,
+        }
+    }
+    fake_llm = FakeLLM(returns={"Healthcare": "Healthcare synthesis."})
+    monkeypatch.setattr("delivery_engine._repo", lambda: InMemoryIntelligenceRepo())
+
+    with patch("delivery_engine._llm", return_value=fake_llm):
+        model = prepare_report(rows, None, config=config)
+
+    assert len(fake_llm.calls) == 1
+    user = fake_llm.calls[-1]["user"]
+    assert "CATEGORY: Healthcare" in user
+    assert "Healthcare impact 0." in user and "Healthcare impact 1." in user
+    assert "Healthcare impact 2." not in user      # capped out by max_per_segment=2
+    assert "CATEGORY: Packaging" not in user       # single-article group, no synthesis
+    assert model.synthesis == {"Healthcare": "Healthcare synthesis."}
+
+
+def test_prepare_report_no_news_skips_write_back_and_llm(monkeypatch):
+    """The no_news variant performs neither side effect: no daily_summaries
+    write-back and no LLM call (the no-news path never wrote back)."""
+    repo_touched: list[bool] = []
+
+    def spy_repo():
+        repo_touched.append(True)
+        from daily_intelligence_repo import InMemoryIntelligenceRepo
+        return InMemoryIntelligenceRepo()
+
+    monkeypatch.setattr("delivery_engine._repo", spy_repo)
+    fake_llm = FakeLLM()
+
+    with patch("delivery_engine._llm", return_value=fake_llm):
+        model = prepare_report([], None, config={})
+
+    assert model.variant == "no_news"
+    assert repo_touched == []
+    assert fake_llm.calls == []
+
+
+def _seed_delivery_repo(run_mode: str):
+    """InMemory repo with two visible Healthcare rows and today's summary row."""
+    from datetime import date
+    fake = InMemoryIntelligenceRepo()
+    headlines = [
+        "Hospital network merger squeezes specialty polymer volumes",
+        "FDA clears new implantable-grade compound for cardiac devices",
+    ]
+    for i, headline in enumerate(headlines):
+        fake.upsert_insight({
+            "url_hash": f"wire{i}", "headline": headline,
+            "americhem_impact_score": 8, "sentiment_tag": "Neutral",
+            "signal_type": "Customer", "commercial_segment": "Healthcare",
+            "americhem_impact": "Wiring effect.", "source_url": f"https://x/wire{i}",
+            "entities_mentioned": ["Acme"],
+        })
+    today = date.today().isoformat()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": run_mode,
+        "executive_summary": "x", "macro_sentiment": "x",
+        "suppression_breakdown": {}, "suppression_samples": [],
+    })
+    return fake, today
+
+
+def test_delivery_execute_pipeline_wires_prepare_render_and_env(monkeypatch):
+    """End-to-end wiring of delivery's entrypoint: fetch → prepare_report
+    (write-back + synthesis, exactly once) → render_report with test_mode
+    resolved from MARKET_PULSE_RUN_MODE → send_email. Pins the composition
+    itself: swapping prepare_report for assemble_report (write-back silently
+    lost) or dropping the env→test_mode wiring must fail this test."""
+    import delivery_engine
+
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    fake, today = _seed_delivery_repo("test")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    sent: dict = {}
+    monkeypatch.setattr("delivery_engine.send_email",
+                        lambda html: sent.__setitem__("html", html))
+
+    fake_llm = FakeLLM(returns={"Healthcare": "Wired synthesis paragraph."})
+    with patch("delivery_engine._llm", return_value=fake_llm), \
+         patch("delivery_engine._load_mp_config",
+               return_value={"reporting": {"visible_impact_threshold": 6}}):
+        delivery_engine.execute_pipeline()
+
+    html = sent["html"]
+    # env → render wiring: MARKET_PULSE_RUN_MODE=test marks the HTML body.
+    assert "[TEST]" in html
+    assert "TEST RUN" in html
+    # prepare_report ran: its synthesis reached the rendered email...
+    assert "Wired synthesis paragraph." in html
+    # ...and its write-back landed on today's daily_summaries row.
+    stored = fake.get_delivery_state(run_date=today, run_mode="test")
+    assert stored is not None and stored["surfaced_count"] == 2
+
+
+def test_delivery_execute_pipeline_production_env_ships_unmarked_html(monkeypatch):
+    """The inverse wiring check: with MARKET_PULSE_RUN_MODE unset, the sent
+    HTML carries no test markers (a hardcoded test_mode=True must fail here)."""
+    import delivery_engine
+
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    fake, _today = _seed_delivery_repo("production")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    sent: dict = {}
+    monkeypatch.setattr("delivery_engine.send_email",
+                        lambda html: sent.__setitem__("html", html))
+
+    with patch("delivery_engine._llm", return_value=FakeLLM()), \
+         patch("delivery_engine._load_mp_config",
+               return_value={"reporting": {"visible_impact_threshold": 6}}):
+        delivery_engine.execute_pipeline()
+
+    assert "[TEST]" not in sent["html"]
+    assert "TEST RUN" not in sent["html"]
 
 
 def test_render_executive_bullets_renders_three_labeled_bullets():
@@ -2400,9 +2463,8 @@ def test_render_exec_summary_no_summary_returns_empty():
 # Task 13 — Null-safe header fallbacks (screened_count, dominant_condition)
 # ===========================================================================
 
-def test_header_falls_back_to_len_data_when_screened_null(monkeypatch):
+def test_header_falls_back_to_len_data_when_screened_null():
     """When screened_count is NULL, header uses len(data)."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     rows = [
         {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
          "americhem_impact_score": 8, "sentiment_tag": "Neutral",
@@ -2418,17 +2480,15 @@ def test_header_falls_back_to_len_data_when_screened_null(monkeypatch):
     ], "dominant_condition": "Competitive Pressure",
        "screened_count": None, "surfaced_count": None}
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(rows, macro_summary=macro)
+    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR)
 
     assert "from 7 screened items" in html
     assert "from None screened items" not in html
 
 
-def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
+def test_header_omits_dominant_condition_clause_when_null():
     """When dominant_condition is NULL, the badge clause is omitted (no literal 'None')."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
     rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
              "americhem_impact_score": 8, "sentiment_tag": "Neutral",
              "signal_type": "Customer", "headline": "Some Distinct Headline",
@@ -2438,9 +2498,8 @@ def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
              "dominant_condition": None, "macro_sentiment": None,
              "screened_count": 5, "surfaced_count": 1}
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(rows, macro_summary=macro)
+    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR)
 
     # The literal string 'None' must not appear anywhere as a rendered value.
     assert ">None<" not in html
@@ -2451,9 +2510,7 @@ def test_header_omits_dominant_condition_clause_when_null(monkeypatch):
 # Task 14 — QA suppression-summary section
 # ===========================================================================
 
-def test_qa_debug_section_appears_in_test_mode(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+def test_qa_debug_section_appears_in_test_mode():
     rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
              "americhem_impact_score": 8, "sentiment_tag": "Neutral",
              "signal_type": "Customer", "headline": "Some Distinct QA Headline",
@@ -2482,9 +2539,8 @@ def test_qa_debug_section_appears_in_test_mode(monkeypatch):
         ],
     }
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(rows, macro_summary=macro)
+    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR, test_mode=True)
 
     assert "QA" in html
     assert "Suppression Summary" in html
@@ -2495,9 +2551,7 @@ def test_qa_debug_section_appears_in_test_mode(monkeypatch):
     assert "Best extension cord colors" in html
 
 
-def test_qa_debug_section_absent_in_production(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test_key")
-    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+def test_qa_debug_section_absent_in_production():
     rows = [{"url_hash": "a", "commercial_segment": "Healthcare",
              "americhem_impact_score": 8, "sentiment_tag": "Neutral",
              "signal_type": "Customer", "headline": "Production Distinct Headline",
@@ -2518,9 +2572,8 @@ def test_qa_debug_section_absent_in_production(monkeypatch):
                                  "title": "Pretty plastic tote"}],
     }
 
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config", return_value={"reporting": {"visible_impact_threshold": 6}}):
-        html = generate_html_email(rows, macro_summary=macro)
+    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR, test_mode=False)
 
     assert "Suppression Summary" not in html
     assert "Pretty plastic tote" not in html
@@ -2726,73 +2779,6 @@ def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
 # 7. English-output rule — prompt-contract tests
 # ---------------------------------------------------------------------------
 
-_ENGLISH_ANCHORS = ("business English", "regardless of the source article")
-
-
-def _assert_english_anchors_present(prompt_text: str) -> None:
-    for anchor in _ENGLISH_ANCHORS:
-        assert anchor in prompt_text, (
-            f"Expected English-output anchor {anchor!r} in prompt, but it was missing.\n"
-            f"Prompt:\n{prompt_text}"
-        )
-
-
-def test_ingestion_system_prompt_contains_english_rule():
-    """RULE 0 — OUTPUT LANGUAGE must be present in the assembled ingestion prompt."""
-    from ingestion_engine import _build_system_prompt, _load_mp_config
-
-    prompt = _build_system_prompt(_load_mp_config())
-    _assert_english_anchors_present(prompt)
-
-
-def test_macro_summary_system_prompt_contains_english_rule():
-    """The macro-summary system prompt must include the English-output directive."""
-    from ingestion_engine import generate_macro_summary
-
-    fake = FakeLLM(returns={
-        "dominant_condition": "Mixed / Watch",
-        "executive_bullets": [
-            {"label": "Market pressure", "body": "Stub bullet body."},
-            {"label": "Supply chain watch", "body": "Stub bullet body."},
-            {"label": "Commercial action", "body": "Stub bullet body."},
-        ],
-    })
-
-    from daily_intelligence_repo import InMemoryIntelligenceRepo
-    fake_repo = InMemoryIntelligenceRepo()
-
-    with patch("ingestion_engine._llm", return_value=fake), \
-         patch("ingestion_engine._repo", lambda: fake_repo):
-        generate_macro_summary(
-            [
-                {
-                    "category": "competitors",
-                    "headline": "Stub headline",
-                    "sentiment_score": 5,
-                    "americhem_impact": "Stub impact.",
-                }
-            ]
-        )
-
-    _assert_english_anchors_present(fake.calls[-1]["system"])
-
-
-def test_thematic_synthesis_system_prompt_contains_english_rule():
-    """The thematic-synthesis system prompt must include the English-output directive."""
-    fake = FakeLLM(returns={"Healthcare": "Stub paragraph."})
-
-    stub_article = {
-        "headline": "Stub headline",
-        "sentiment_tag": "Neutral",
-        "americhem_impact": "Stub impact.",
-        "entities_mentioned": ["Stub Co."],
-        "americhem_impact_score": 7,
-    }
-
-    with patch("delivery_engine._llm", return_value=fake):
-        synthesize_thematic_paragraphs({"Healthcare": [stub_article, stub_article]})
-
-    _assert_english_anchors_present(fake.calls[-1]["system"])
 
 
 def test_synthesize_insight_non_english_body_keeps_english_directive():
@@ -2813,11 +2799,50 @@ def test_synthesize_insight_non_english_body_keeps_english_directive():
     assert result is not None
     system_message = fake.calls[-1]["system"]
     user_message = fake.calls[-1]["user"]
-    _assert_english_anchors_present(system_message)
+    from prompts import ENGLISH_OUTPUT_RULE
+    assert ENGLISH_OUTPUT_RULE in system_message
     assert chinese_body in user_message, (
         "Source-language article body should be forwarded verbatim to the LLM; "
         "no client-side translation should occur."
     )
+
+
+def test_generate_macro_summary_ships_prompts_module_text_across_seam():
+    """Seam-crossing check: the system/user text generate_macro_summary sends
+    through the LLM seam is exactly what prompts.macro_prompt assembles — an
+    engine-side prompt override cannot pass unnoticed."""
+    import prompts
+    from ingestion_engine import generate_macro_summary
+    from daily_intelligence_repo import InMemoryIntelligenceRepo as _Repo
+
+    articles = [{"category": "competitors", "headline": "Stub headline",
+                 "sentiment_score": 5, "americhem_impact": "Stub impact."}]
+    fake = FakeLLM(returns=None)
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: _Repo()):
+        generate_macro_summary(articles)
+
+    mp = prompts.macro_prompt(articles)
+    assert fake.calls[-1]["system"] == mp.system
+    assert fake.calls[-1]["user"] == mp.user
+
+
+def test_synthesize_thematic_ships_prompts_module_text_across_seam():
+    """Seam-crossing check: the thematic system/user text crossing the LLM seam
+    is exactly what prompts.thematic_prompt assembles."""
+    import prompts
+
+    groups = {"Healthcare": [
+        _make_article("a", 8, "competitors"),
+        _make_article("b", 7, "competitors"),
+    ]}
+    fake = FakeLLM(returns=None)
+    with patch("delivery_engine._llm", return_value=fake):
+        synthesize_thematic_paragraphs(groups)
+
+    spec = prompts.thematic_prompt(groups)
+    assert fake.calls[-1]["system"] == spec.system
+    assert fake.calls[-1]["user"] == spec.user
 
 
 # ---------------------------------------------------------------------------
@@ -3102,7 +3127,8 @@ def test_update_delivery_summary_counts_writes_when_no_prior_row(monkeypatch):
 
 def test_effective_impact_falls_back_when_americhem_impact_score_is_malformed():
     """Bad americhem_impact_score → fall back to sentiment_score."""
-    from delivery_engine import _effective_impact, _alert_tier
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
     row = {"americhem_impact_score": "bad", "sentiment_score": 8}
     assert _effective_impact(row) == 8
     assert _alert_tier(row) == "STRATEGIC"
@@ -3110,7 +3136,8 @@ def test_effective_impact_falls_back_when_americhem_impact_score_is_malformed():
 
 def test_effective_impact_uses_default_when_both_scores_malformed():
     """Bad in both fields → default to 5 (routine), do not raise."""
-    from delivery_engine import _effective_impact, _alert_tier
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
     row = {"americhem_impact_score": "bad", "sentiment_score": "also bad"}
     assert _effective_impact(row) == 5
     assert _alert_tier(row) == "ROUTINE"
@@ -3118,86 +3145,11 @@ def test_effective_impact_uses_default_when_both_scores_malformed():
 
 def test_effective_impact_uses_default_when_both_scores_missing():
     """Missing scores → default to 5 (unchanged behavior)."""
-    from delivery_engine import _effective_impact, _alert_tier
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
     row = {"headline": "test"}
     assert _effective_impact(row) == 5
     assert _alert_tier(row) == "ROUTINE"
-
-
-# ---------------------------------------------------------------------------
-# Source-pack builder (ingestion)
-# ---------------------------------------------------------------------------
-
-from ingestion_engine import (
-    _build_macro_source_pack,
-    _rank_macro_articles,
-    MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES,
-)
-
-
-def _article(headline, *, score=5, url="https://example.com/a", url_hash="h", segment="Healthcare"):
-    return {
-        "headline": headline,
-        "americhem_impact_score": score,
-        "source_url": url,
-        "url_hash": url_hash,
-        "commercial_segment": segment,
-    }
-
-
-def test_source_pack_orders_by_materiality_then_headline_then_hash():
-    articles = [
-        _article("Bravo", score=5, url_hash="h2"),
-        _article("Alpha", score=9, url_hash="h1"),
-        _article("Charlie", score=5, url_hash="h0"),
-    ]
-    pack = _build_macro_source_pack(_rank_macro_articles(articles))
-    # Materiality 9 first; remaining two (score 5) tie-break by headline asc.
-    assert [s["headline"] for s in pack] == ["Alpha", "Bravo", "Charlie"]
-    assert [s["id"] for s in pack] == [1, 2, 3]
-
-
-def test_source_pack_is_deterministic_for_same_set():
-    articles = [_article(f"H{i}", score=i % 4, url_hash=f"h{i}") for i in range(10)]
-    a = _build_macro_source_pack(_rank_macro_articles(list(articles)))
-    b = _build_macro_source_pack(_rank_macro_articles(list(reversed(articles))))
-    assert [(s["id"], s["headline"]) for s in a] == [(s["id"], s["headline"]) for s in b]
-
-
-def test_source_pack_caps_at_max():
-    articles = [_article(f"H{i:02d}", score=5, url_hash=f"h{i:02d}") for i in range(60)]
-    pack = _build_macro_source_pack(_rank_macro_articles(articles))
-    assert len(pack) == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
-    assert pack[-1]["id"] == MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
-
-
-def test_source_pack_entry_shape_and_domain():
-    pack = _build_macro_source_pack(_rank_macro_articles(
-        [_article("Alpha", url="https://www.Reuters.com/x", segment="Auto")]
-    ))
-    s = pack[0]
-    assert s == {
-        "id": 1,
-        "headline": "Alpha",
-        "url": "https://www.Reuters.com/x",
-        "domain": "reuters.com",
-        "segment": "Auto",
-        "score": 5,
-    }
-
-
-# ---------------------------------------------------------------------------
-# _source_domain — port-stripping, www-stripping, lowercasing
-# ---------------------------------------------------------------------------
-
-from ingestion_engine import _source_domain
-
-
-def test_source_domain_strips_port_and_www_and_lowercases():
-    assert _source_domain("https://www.Reuters.com:443/x") == "reuters.com"
-    assert _source_domain("http://Example.com:8080/a?b=1") == "example.com"
-    assert _source_domain("") == ""
-    assert _source_domain(None) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -3522,8 +3474,7 @@ def test_sources_section_numbering_matches_inline_markers():
     assert sources_html.index("Resin prices climb") < sources_html.index("Freight rates spike")
 
 
-def test_generate_html_email_places_sources_at_bottom(monkeypatch):
-    fake_repo = InMemoryIntelligenceRepo()
+def test_report_places_sources_at_bottom():
     macro = _macro_with_citations()
     data = [{
         "headline": "Packaging market update",  # distinct from the source headline
@@ -3534,9 +3485,7 @@ def test_generate_html_email_places_sources_at_bottom(monkeypatch):
         "commercial_segment": "Packaging",
         "signal_type": "Pricing",
     }]
-    with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._repo", lambda: fake_repo):
-        html = generate_html_email(data, macro)
+    html = render_report(assemble_report(data, macro), today_str=_TODAY_STR)
 
     # The cited-source headline now appears only in the bottom Sources section
     # (it was removed from the executive summary block), exactly once.
