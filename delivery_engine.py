@@ -370,24 +370,32 @@ def fetch_macro_summary() -> dict | None:
         run_mode=_run_mode(),
         min_date=min_run_date,
     )
-    if summary is None and _is_test_mode():
-        # Delivery-only test runs (run_ingestion=false) have no test-mode macro
-        # row — ingestion is what writes it. Fall back to the production row
-        # READ-ONLY so the QA re-render still carries the executive summary,
-        # condition badge, and citation sources. Production accounting is never
-        # touched: the delivery write-back keys on run_mode='test', which
-        # matches no row and is a silent no-op UPDATE. Production mode never
-        # falls back — it must not read test rows.
-        summary = _repo().fetch_latest_summary(
+    if _is_test_mode():
+        # Delivery-only test runs (run_ingestion=false) have no same-day
+        # test-mode macro row — ingestion is what writes it — and a leftover
+        # test row from yesterday's QA run would be stale against today's
+        # articles. Use the production row READ-ONLY whenever it is strictly
+        # NEWER than the test candidate (or the test candidate is absent);
+        # recency ties keep the test row, which preserves the date-rollover
+        # grace the >= yesterday window exists for. Production accounting is
+        # never touched: the delivery write-back keys on run_mode='test',
+        # which matches no row and is a silent no-op UPDATE. Production mode
+        # never falls back — it must not read test rows.
+        production_row = _repo().fetch_latest_summary(
             run_mode="production",
             min_date=min_run_date,
         )
-        if summary is not None:
+        if production_row is not None and (
+            summary is None
+            or str(production_row.get("run_date") or "")
+            > str(summary.get("run_date") or "")
+        ):
             logger.info(
-                "No test-mode macro summary — falling back to the production "
-                "row (run_date %s) for the QA re-render.",
-                summary.get("run_date"),
+                "No same-day test-mode macro summary — using the newer "
+                "production row (run_date %s) for the QA re-render.",
+                production_row.get("run_date"),
             )
+            summary = production_row
     if summary is None:
         logger.warning("No macro summary found for run_date >= %s.", min_run_date)
     return summary

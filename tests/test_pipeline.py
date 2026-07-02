@@ -1850,6 +1850,57 @@ def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch)
     assert result["executive_sources"]
 
 
+def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_row(monkeypatch):
+    """A test row from YESTERDAY (run_ingestion=true QA run the day before)
+    must not shadow TODAY's production row — the re-render would pair today's
+    articles with stale executive bullets/citations."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date, timedelta as _td
+    today = date.today().isoformat()
+    yesterday = (date.today() - _td(days=1)).isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "test",
+        "executive_summary": "Stale test summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Fresh prod summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Fresh prod summary"
+
+
+def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatch):
+    """Recency ties prefer the test row — covers the date-rollover grace
+    (test ingestion writes at 23:59, delivery reads at 00:01: both candidate
+    rows carry yesterday's run_date and the minutes-old test row must win)."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date, timedelta as _td
+    yesterday = (date.today() - _td(days=1)).isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "test",
+        "executive_summary": "Rollover test summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Rollover test summary"
+
+
 def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
     """The fallback is one-directional: production delivery with only a test
     row available must return None, not leak QA data into production mail."""
