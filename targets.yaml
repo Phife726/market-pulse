@@ -401,15 +401,93 @@ suppliers:
 
 # ── CONCEPT MODE GROUPS ───────────────────────────────────────
 
+masterbatch_additives_innovation:
+  search_mode: concept
+  active: true
+  include_any:
+    - "new functional additive"
+    - "functional additive launch"
+    - "polymer additive innovation"
+    - "new additive masterbatch"
+    - "additive masterbatch launch"
+    - "new color masterbatch"
+    - "color masterbatch launch"
+    - "single pigment dispersion launch"
+    - "new UV stabilizer"
+    - "new antimicrobial additive"
+    - "new flame retardant additive"
+    - "new antistatic additive"
+    - "new lubricant additive"
+    - "new softening additive"
+    - "PFAS-free polymer additive"
+    - "recycling compatibilizer"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - "CAGR"
+
+# The regional groups below improve English-language international discovery.
+# They do not enforce Serper geography or language. Full locale-aware
+# discovery is deferred to a separate architecture change.
+europe_polymer_signals:
+  search_mode: concept
+  active: true
+  include_any:
+    - "European masterbatch"
+    - "Europe polymer additives"
+    - "European plastics compounding"
+    - "Europe healthcare plastics"
+    - "European packaging polymers"
+    - "European automotive plastics"
+    - "European synthetic fibers"
+    - "EU plastics regulation"
+    - "Nordic polymer industry"
+    - "DACH plastics industry"
+  include_all: []
+  exclude_any:
+    - patents
+    - tenders
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - "CAGR"
+
+asia_pacific_polymer_signals:
+  search_mode: concept
+  active: true
+  include_any:
+    - "Asia Pacific masterbatch"
+    - "China polymer additives"
+    - "China plastics compounding"
+    - "India masterbatch"
+    - "India synthetic fibers"
+    - "Japan polymer additives"
+    - "South Korea engineered plastics"
+    - "Southeast Asia plastics manufacturing"
+    - "APAC automotive plastics"
+    - "Asia medical plastics"
+  include_all: []
+  exclude_any:
+    - patents
+    - tenders
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - "CAGR"
+
 industry:
   search_mode: concept
   active: true
   include_any:
-    - "plastics industry"
-    - "chemical industry"
-    - "floriculture consumer goods"
-    - compounding
-    - extrusion
+    - "masterbatch industry"
+    - "polymer additives"
+    - "thermoplastic compounding"
+    - "specialty polymer compounds"
+    - "plastics extrusion"
+    - "polymer manufacturing"
   include_all: []
   exclude_any:
     - tenders
@@ -444,6 +522,11 @@ healthcare:
     - "sterilizable plastics"
     - "autoclavable plastics"
     - "clean compounding"
+    - "medical device polymer"
+    - "medical plastics innovation"
+    - "medical grade masterbatch"
+    - "sterilization resistant polymer"
+    - "antimicrobial medical polymer"
   include_all: []
   exclude_any:
     - patents
@@ -453,7 +536,13 @@ transportation:
   search_mode: concept
   active: true
   include_any:
-    - "automotive industry"
+    - "automotive plastics"
+    - "automotive polymer materials"
+    - "automotive interior materials"
+    - "vehicle lightweighting polymers"
+    - "EV flame retardant plastics"
+    - "aerospace polymer materials"
+    - "off-highway polymer materials"
   include_all: []
   exclude_any: []
 
@@ -463,11 +552,13 @@ building_construction:
   search_mode: concept
   active: true
   include_any:
-    - "building materials"
-    - "construction industry"
-    - "building products"
-    - "commercial construction"
-    - "residential construction"
+    - "building products plastics"
+    - "construction polymer materials"
+    - "composite decking"
+    - "PVC building products"
+    - "weatherable polymer"
+    - "roofing polymer additives"
+    - "low heat build-up color"
   include_all: []
   exclude_any: []
 
@@ -477,20 +568,31 @@ fibers:
   include_any:
     - "synthetic fiber"
     - "performance fiber"
-    - polyester
-    - polyethylene
-    - polypropylene
-    - nylon
-    - acrylic
-  include_all:
-    - textiles
+    - "fiber masterbatch"
+    - "solution dyed fiber"
+    - "nonwoven additive"
+    - "nonwoven innovation"
+    - "hygiene nonwovens"
+    - "carpet fiber"
+    - "synthetic turf fiber"
+    - "textile polymer additive"
+    - "polyester fiber"
+    - "nylon fiber"
+  include_all: []
   exclude_any: []
 
 packaging:
   search_mode: concept
   active: true
   include_any:
-    - "packaging manufacturing"
+    - "plastic packaging innovation"
+    - "packaging masterbatch"
+    - "packaging polymer additive"
+    - "barrier additive packaging"
+    - "recyclable flexible packaging"
+    - "recycled content packaging"
+    - "food contact polymer"
+    - "packaging EPR"
   include_all: []
   exclude_any:
     - "Pizza Hut"
@@ -499,7 +601,13 @@ electronics:
   search_mode: concept
   active: true
   include_any:
-    - "electronics industry"
+    - "electronics polymer materials"
+    - "flame retardant plastics electronics"
+    - "antistatic polymer"
+    - "ESD polymer compound"
+    - "thermal management polymer"
+    - "electrically conductive polymer"
+    - "electronic housing compound"
   include_all: []
   exclude_any:
     - "video game industry"
