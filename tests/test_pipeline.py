@@ -3655,3 +3655,117 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
     assert "Sources" not in html_out
     assert "<a" not in html_out
     assert "Unused" not in html_out   # uncited source never leaks into output
+
+
+# ---------------------------------------------------------------------------
+# targets.yaml configuration contract (reads the real control file)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path
+
+import yaml as _yaml
+
+_TARGETS_PATH = _Path(__file__).resolve().parents[1] / "targets.yaml"
+
+_NEW_CONCEPT_GROUPS = [
+    "masterbatch_additives_innovation",
+    "europe_polymer_signals",
+    "asia_pacific_polymer_signals",
+]
+
+# Baseline recorded before the search-coverage expansion: 107 active entity
+# targets across competitors/customers/suppliers, 10 active concept groups.
+_BASELINE_ACTIVE_ENTITY_TARGETS = 107
+_BASELINE_ACTIVE_CONCEPT_TARGETS = 10
+
+
+def _load_real_config() -> dict:
+    with open(_TARGETS_PATH, "r") as fh:
+        return _yaml.safe_load(fh)
+
+
+def _load_real_targets() -> list[dict]:
+    return load_targets(str(_TARGETS_PATH))
+
+
+def _concept_targets(targets: list[dict]) -> list[dict]:
+    return [t for t in targets if "zoominfo_news" not in t]
+
+
+def test_targets_yaml_parses_and_discovery_settings_locked():
+    """Discovery tuning must not drift as part of coverage changes."""
+    config = _load_real_config()
+    assert config["discovery"]["results_per_entity"] == 2
+    assert config["discovery"]["lookback_hours"] == 24
+    assert config["discovery"]["min_article_length"] == 500
+
+
+def test_targets_yaml_new_concept_groups_exist_and_are_active():
+    config = _load_real_config()
+    for group in _NEW_CONCEPT_GROUPS:
+        assert group in config, f"missing concept group: {group}"
+        assert config[group]["search_mode"] == "concept"
+        assert config[group]["active"] is True
+
+
+def test_targets_yaml_entity_groups_precede_new_concept_groups():
+    """All entity-mode groups must appear before the three new concept groups."""
+    config = _load_real_config()
+    keys = [k for k in config if k != "discovery"]
+    entity_idx = [
+        i for i, k in enumerate(keys)
+        if config[k].get("search_mode", "entity") == "entity"
+    ]
+    new_idx = [keys.index(g) for g in _NEW_CONCEPT_GROUPS]
+    assert max(entity_idx) < min(new_idx)
+
+
+def test_targets_yaml_floriculture_term_absent():
+    raw = _TARGETS_PATH.read_text()
+    assert "floriculture consumer goods" not in raw
+
+
+def test_targets_yaml_fibers_no_mandatory_textiles():
+    """fibers must not force every result to contain 'textiles'."""
+    config = _load_real_config()
+    assert config["fibers"]["include_all"] == []
+
+
+def test_targets_yaml_innovation_query_contents():
+    targets = {t["name"]: t for t in _load_real_targets()}
+    query = targets["masterbatch_additives_innovation"]["query"]
+    assert '"new functional additive"' in query
+    assert '"new additive masterbatch"' in query
+    assert '"new color masterbatch"' in query
+    assert '-"market report"' in query
+
+
+def test_targets_yaml_regional_queries_have_geographic_anchors():
+    targets = {t["name"]: t for t in _load_real_targets()}
+    europe = targets["europe_polymer_signals"]["query"]
+    assert '"European masterbatch"' in europe
+    assert '"EU plastics regulation"' in europe
+    apac = targets["asia_pacific_polymer_signals"]["query"]
+    assert '"China polymer additives"' in apac
+    assert '"India masterbatch"' in apac
+    assert '"Asia Pacific masterbatch"' in apac
+
+
+def test_targets_yaml_active_concept_targets_grew_by_exactly_three():
+    concepts = _concept_targets(_load_real_targets())
+    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3
+
+
+def test_targets_yaml_entity_targets_unchanged():
+    """Coverage expansion must not touch entity monitoring."""
+    targets = _load_real_targets()
+    entities = [t for t in targets if "zoominfo_news" in t]
+    assert len(entities) == _BASELINE_ACTIVE_ENTITY_TARGETS
+
+
+def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
+    config = _load_real_config()
+    targets = {t["name"]: t for t in _load_real_targets()}
+    for group in _NEW_CONCEPT_GROUPS:
+        assert "zoominfo_company_id" not in config[group]
+        assert "zoominfo_company_id" not in targets[group]
