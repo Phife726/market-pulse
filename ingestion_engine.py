@@ -17,8 +17,10 @@ import prompts
 # definition, imported from the module that renders it into the prompt text.
 from prompts import (
     VALID_MACRO_CONDITIONS as _VALID_MACRO_CONDITIONS,
+    VALID_MACRO_DIRECTIONS as _VALID_MACRO_DIRECTIONS,
     EXEC_BULLET_LABELS as _EXEC_BULLET_LABELS,
     MAX_EXECUTIVE_BULLET_CITATIONS,
+    MAX_MACRO_OUTLOOK_SIGNALS,
 )
 import zoominfo_client
 import relevance_gate
@@ -576,6 +578,61 @@ def _validate_executive_bullets(raw, valid_source_ids: frozenset[int] = frozense
     return cleaned
 
 
+def _validate_macro_outlook(raw, valid_source_ids: frozenset[int]) -> Optional[dict]:
+    """Validate the structured macro_outlook. Returns a cleaned
+    {current_condition, signals:[...]} dict, or None (delivery renders no
+    section) when the shape is invalid or no material signal survives.
+
+    A signal survives only when every field is well-formed AND it cites at
+    least one valid source id — the deterministic materiality gate that makes
+    'source-grounded, no fabricated implications' a structural guarantee. The
+    enums (VALID_MACRO_DIRECTIONS, insight.VALID_COMMERCIAL_SEGMENTS) are the
+    same definitions the prompt promises."""
+    if not isinstance(raw, dict):
+        return None
+    current = raw.get("current_condition")
+    if not isinstance(current, str) or not current.strip():
+        return None
+    signals_raw = raw.get("signals")
+    if not isinstance(signals_raw, list):
+        return None
+
+    cleaned: list[dict] = []
+    for sig in signals_raw:
+        if not isinstance(sig, dict):
+            continue
+        indicator = sig.get("indicator")
+        if not isinstance(indicator, str) or not indicator.strip():
+            continue
+        if sig.get("direction") not in _VALID_MACRO_DIRECTIONS:
+            continue
+        implication = sig.get("americhem_implication")
+        if not isinstance(implication, str) or not implication.strip():
+            continue
+        segments_raw = sig.get("affected_segments")
+        if not isinstance(segments_raw, list):
+            continue
+        segments = [s for s in segments_raw if s in insight.VALID_COMMERCIAL_SEGMENTS]
+        if not segments:
+            continue
+        citations = _clean_citation_ids(sig.get("citation_source_ids"), valid_source_ids)
+        if not citations:  # materiality gate — an uncitable signal is dropped
+            continue
+        cleaned.append({
+            "indicator": indicator.strip(),
+            "direction": sig["direction"],
+            "americhem_implication": implication.strip(),
+            "affected_segments": segments,
+            "citation_source_ids": citations,
+        })
+        if len(cleaned) >= MAX_MACRO_OUTLOOK_SIGNALS:
+            break
+
+    if not cleaned:
+        return None
+    return {"current_condition": current.strip(), "signals": cleaned}
+
+
 def generate_macro_summary(
     articles: list[dict],
     *,
@@ -625,11 +682,19 @@ def generate_macro_summary(
             "citation_source_ids": [],
         }
 
-    # executive_sources: pack entries cited by at least one surviving bullet.
+    # Validate the structured macro outlook (None -> delivery renders no section).
+    macro_outlook = _validate_macro_outlook(parsed.get("macro_outlook"), valid_source_ids)
+
+    # executive_sources: pack entries cited by at least one surviving bullet OR
+    # macro-outlook signal — the union, so every rendered citation id (in either
+    # section) resolves against one shared numbering space.
     cited_ids: set[int] = set()
     if bullets is not None:
         for b in bullets:
             cited_ids.update(b["citation_source_ids"])
+    if macro_outlook is not None:
+        for sig in macro_outlook["signals"]:
+            cited_ids.update(sig["citation_source_ids"])
     executive_sources = [s for s in source_pack if s["id"] in cited_ids]
 
     # Legacy executive_summary string for backward compat.
@@ -644,6 +709,7 @@ def generate_macro_summary(
         "run_mode": _run_mode(),
         "dominant_condition": cond,
         "executive_bullets": bullets,
+        "macro_outlook": macro_outlook,
         "executive_sources": executive_sources,
         "executive_summary": executive_summary,
         "macro_sentiment": cond,

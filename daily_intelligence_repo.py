@@ -119,6 +119,7 @@ class SupabaseIntelligenceRepo:
                 .select(
                     "run_date, run_mode, executive_summary, macro_sentiment, "
                     "dominant_condition, executive_bullets, executive_sources, "
+                    "macro_outlook, "
                     "screened_count, surfaced_count, suppression_breakdown, "
                     "suppression_samples"
                 )

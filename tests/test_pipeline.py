@@ -661,6 +661,161 @@ def test_generate_macro_summary_empty_articles():
     assert result is False
 
 
+# ---------------------------------------------------------------------------
+# Macro-outlook validation + persistence (PR 2, Task 9)
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import _validate_macro_outlook
+
+_MACRO_VALID_IDS = frozenset({1, 2, 3})
+
+
+def _macro_signal(**over) -> dict:
+    sig = {
+        "indicator": "Manufacturing PMI",
+        "direction": "Declining",
+        "americhem_implication": "Downside risk for industrial resin demand.",
+        "affected_segments": ["Industrial"],
+        "citation_source_ids": [1],
+    }
+    sig.update(over)
+    return sig
+
+
+def _macro_outlook(**over) -> dict:
+    out = {"current_condition": "Manufacturing demand mixed.", "signals": [_macro_signal()]}
+    out.update(over)
+    return out
+
+
+def test_validate_macro_outlook_accepts_material_signal():
+    result = _validate_macro_outlook(_macro_outlook(), _MACRO_VALID_IDS)
+    assert result is not None
+    assert result["current_condition"] == "Manufacturing demand mixed."
+    assert len(result["signals"]) == 1
+    assert result["signals"][0]["direction"] == "Declining"
+    assert result["signals"][0]["affected_segments"] == ["Industrial"]
+    assert result["signals"][0]["citation_source_ids"] == [1]
+
+
+def test_validate_macro_outlook_empty_signals_is_none():
+    assert _validate_macro_outlook(_macro_outlook(signals=[]), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_non_dict_is_none():
+    assert _validate_macro_outlook(None, _MACRO_VALID_IDS) is None
+    assert _validate_macro_outlook("nope", _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_blank_current_condition_is_none():
+    assert _validate_macro_outlook(_macro_outlook(current_condition="  "), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_drops_signal_without_citation():
+    """Materiality gate: an uncitable signal is dropped; a lone uncitable signal
+    yields no section."""
+    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_drops_signal_with_only_invalid_citations():
+    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[99])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_invalid_direction():
+    out = _macro_outlook(signals=[_macro_signal(direction="Sideways")])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_invalid_segment():
+    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Building & Construction"])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_blank_fields():
+    assert _validate_macro_outlook(
+        _macro_outlook(signals=[_macro_signal(indicator="  ")]), _MACRO_VALID_IDS) is None
+    assert _validate_macro_outlook(
+        _macro_outlook(signals=[_macro_signal(americhem_implication="")]), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_keeps_only_valid_signals():
+    """A mix of valid + invalid signals keeps only the valid ones."""
+    out = _macro_outlook(signals=[
+        _macro_signal(indicator="Manufacturing PMI"),
+        _macro_signal(direction="Sideways"),                       # bad direction
+        _macro_signal(indicator="Construction starts", citation_source_ids=[2]),
+    ])
+    result = _validate_macro_outlook(out, _MACRO_VALID_IDS)
+    assert [s["indicator"] for s in result["signals"]] == ["Manufacturing PMI", "Construction starts"]
+
+
+def _macro_articles() -> list[dict]:
+    return [
+        {"category": "macro_manufacturing", "headline": "Manufacturing PMI slips into contraction",
+         "americhem_impact_score": 9, "americhem_impact": "Industrial demand softening.",
+         "signal_type": "Macro", "url_hash": "m1", "source_url": "https://x/1"},
+        {"category": "macro_construction", "headline": "Housing starts fall for third month",
+         "americhem_impact_score": 8, "americhem_impact": "Building products demand risk.",
+         "signal_type": "Macro", "url_hash": "m2", "source_url": "https://x/2"},
+        {"category": "competitors", "headline": "Competitor opens new compounding line",
+         "americhem_impact_score": 7, "americhem_impact": "Capacity pressure.",
+         "signal_type": "Competitive", "url_hash": "c1", "source_url": "https://x/3"},
+    ]
+
+
+def test_generate_macro_summary_persists_macro_outlook_and_union_sources():
+    """generate_macro_summary validates + persists macro_outlook and packs
+    executive_sources as the UNION of bullet-cited and signal-cited sources."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Demand Softness",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {
+            "current_condition": "Industrial and construction demand both softening.",
+            "signals": [
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in Building & Construction-adjacent volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [2]},
+            ],
+        },
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+
+    assert result is True
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is not None
+    assert [s["indicator"] for s in stored["macro_outlook"]["signals"]] == ["Housing starts"]
+    # executive_sources is the union of bullet-cited (1) and signal-cited (2).
+    assert {s["id"] for s in stored["executive_sources"]} == {1, 2}
+
+
+def test_generate_macro_summary_persists_none_when_no_material_signal():
+    """When macro_outlook has no material signal, None is persisted (no section)."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Steady.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Steady.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {"current_condition": "Quiet.", "signals": []},
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        generate_macro_summary(_macro_articles())
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is None
+
+
 
 # ---------------------------------------------------------------------------
 # 16. _render_card() — article_summary must not appear in rendered HTML
