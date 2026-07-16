@@ -830,9 +830,10 @@ def test_report_routes_two_plus_to_segment_watch():
     assert "THEMATIC INTELLIGENCE" not in html
 
 
-def test_report_single_low_relevance_hidden_in_production():
-    """An ungrouped impact-5 article must be HIDDEN in production
-    (no Peripheral Signals section anymore)."""
+def test_report_single_low_relevance_not_a_visible_card():
+    """An impact-5 article is never a visible card (no Peripheral Signals
+    section), but IS surfaced in the optional-discovery appendix — so it is
+    not counted as weak_relevance."""
     data = [{"url_hash": "x", "commercial_segment": "Packaging",
              "americhem_impact_score": 5, "sentiment_tag": "Neutral",
              "signal_type": "Customer",
@@ -841,9 +842,9 @@ def test_report_single_low_relevance_hidden_in_production():
              "entities_mentioned": ["Acme"]}]
     model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
     assert model.groups == {}
-    assert model.ledger.breakdown["weak_relevance"] == 1
+    assert [a["url_hash"] for a in model.additional_articles] == ["x"]
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
     html = render_report(model, today_str=_TODAY_STR)
-    assert "Low relevance packaging signal" not in html
     assert "PERIPHERAL SIGNALS" not in html
 
 
@@ -1376,6 +1377,63 @@ def test_appendix_deterministic_recency_then_headline_then_hash():
     # newer (dated) and older (dated) lead by recency desc; undated tie last,
     # ordered by headline (Anchor < Betamax).
     assert _appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
+
+
+_APPENDIX_ACCT_HEADLINES = [
+    "Recycled content mandate reshapes flexible film sourcing",
+    "Feedstock naphtha spread widens across Gulf Coast crackers",
+    "Nonwoven wipes producer books capacity through winter",
+    "Colorant supplier flags titanium dioxide allocation risk",
+    "Automotive interior program shifts to bio-based softeners",
+    "Carpet tile demand rebounds on office refurbishment cycle",
+    "Barrier resin qualification opens new pouch applications",
+    "Compounder adds twin-screw line for engineered grades",
+    "Pigment dispersion lead times ease after port backlog clears",
+    "Agricultural mulch film season starts with firmer pricing",
+    "Wire jacketing compound tightens on copper build-out",
+    "Medical tubing extruder wins implantable device contract",
+]
+
+
+def test_appendix_displayed_rows_not_counted_weak_relevance():
+    """A score-5 row shown in the appendix is not counted as weak_relevance."""
+    row = _make_new_article("shown", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging note shown in appendix")
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["shown"]
+    # record_count is a no-op at 0, so the key is simply absent.
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+
+
+def test_appendix_capped_out_rows_counted_weak_relevance():
+    """Eligible score-5 rows pushed out by the appendix cap are counted as
+    weak_relevance (in neither the main groups nor the appendix)."""
+    rows = [
+        _make_new_article(f"w{i}", 5, commercial_segment="Packaging", headline=h)
+        for i, h in enumerate(_APPENDIX_ACCT_HEADLINES)  # 12 rows
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
+    model = assemble_report(rows, config=config)
+    assert len(model.additional_articles) == 10
+    assert model.ledger.breakdown["weak_relevance"] == 2
+
+
+def test_below_impact_threshold_unchanged_by_appendix():
+    """below_impact_threshold still counts every suppression-surviving row below
+    the visible threshold, including rows the appendix now displays."""
+    rows = [
+        _make_new_article("s5", 5, commercial_segment="Packaging",
+                          headline="Five-band signal that lands in the appendix"),
+        _make_new_article("s4", 4, commercial_segment="Packaging",
+                          headline="Four-band signal that also lands in appendix"),
+        _make_new_article("s3", 3, commercial_segment="Packaging",
+                          headline="Three-band signal below the supporting floor"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+    # All three are below the visible threshold (6) and survive suppression.
+    assert model.ledger.breakdown["below_impact_threshold"] == 3
+    # Two of them are surfaced in the appendix — that overlap is intentional.
+    assert len(model.additional_articles) == 2
 
 
 # ---------------------------------------------------------------------------

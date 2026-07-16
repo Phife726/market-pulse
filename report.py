@@ -326,23 +326,28 @@ def assemble_report(
                   for seg, arts in groups.items()}
         groups = {seg: arts for seg, arts in groups.items() if arts}
 
-    # 6. weak_relevance: rows in `kept` with effective impact 4-5 that didn't
-    # make it into any final group (the old Peripheral pool, now hidden).
     final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
-    weak_relevance_count = sum(
-        1 for r in kept
-        if scorer.is_weak_relevance(r)
-        and r.get("url_hash") not in final_hashes
-    )
 
-    # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
-    surfaced_count = sum(len(arts) for arts in groups.values())
-
-    # 8. Optional-discovery appendix: suppression survivors in the weak-relevance
+    # 6. Optional-discovery appendix: suppression survivors in the weak-relevance
     #    band not shown as cards. Does NOT alter surfaced_count.
     additional_articles = _select_additional_articles(
         kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
     )
+
+    # 7. weak_relevance: weak-relevance (4-5) rows shown NOWHERE — neither a
+    #    visible card nor the appendix (e.g. pushed out by the appendix cap).
+    #    (below_impact_threshold above is deliberately broader: it counts every
+    #    suppression-surviving below-visible row, including ones the appendix
+    #    now displays — it describes the visible-card decision, not end hiding.)
+    shown_hashes = final_hashes | {a.get("url_hash") for a in additional_articles}
+    weak_relevance_count = sum(
+        1 for r in kept
+        if scorer.is_weak_relevance(r)
+        and r.get("url_hash") not in shown_hashes
+    )
+
+    # 8. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
+    surfaced_count = sum(len(arts) for arts in groups.values())
 
     ledger = (ledger
               .record_count("below_impact_threshold", below_threshold_count)
