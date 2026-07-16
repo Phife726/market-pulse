@@ -71,6 +71,30 @@ def _load_mp_config() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Shared section header
+# ---------------------------------------------------------------------------
+
+def _section_header_row(title: str, *, title_color: str, rule_color: str) -> str:
+    """A section-header table row: the uppercase title spans the full content
+    width with a hairline underline beneath it.
+
+    Full-width by design — the old layout put the title in a `white-space:nowrap`
+    cell beside a `width:100%` rule cell, so on a reflowing/narrow mail client
+    the title column was squeezed and long titles ("Additional Articles to
+    Explore", "Macroeconomic Outlook") wrapped to 3+ lines. Spanning the full
+    width, the title fits on one line normally and wraps to at most two on very
+    narrow screens, with the rule always beneath it."""
+    return (
+        f'<tr>'
+        f'<td style="padding-bottom:8px;border-bottom:1px solid {rule_color};'
+        f'font-size:11px;font-weight:700;letter-spacing:1.5px;'
+        f'text-transform:uppercase;color:{title_color};'
+        f'font-family:Arial,sans-serif;">{title}</td>'
+        f'</tr>'
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task 10: Commercial Segment Watch renderers
 # ---------------------------------------------------------------------------
 
@@ -192,21 +216,7 @@ def _render_segment_watch_section(
       <tr>
         <td style="padding:24px 32px 4px 32px;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="padding-bottom:10px;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                                text-transform:uppercase;color:{_BRAND_NAVY};
-                                font-family:Arial,sans-serif;white-space:nowrap;
-                                padding-right:12px;">
-                      COMMERCIAL SEGMENT WATCH
-                    </td>
-                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            {_section_header_row("COMMERCIAL SEGMENT WATCH", title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)}
             {blocks_html}
           </table>
         </td>
@@ -297,21 +307,7 @@ def _render_additional_articles_section(items: list[dict]) -> str:
       <tr>
         <td style="padding:24px 32px 4px 32px;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="padding-bottom:10px;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                                text-transform:uppercase;color:#5a6678;
-                                font-family:Arial,sans-serif;white-space:nowrap;
-                                padding-right:12px;">
-                      Additional Articles to Explore
-                    </td>
-                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            {_section_header_row("Additional Articles to Explore", title_color="#5a6678", rule_color="#E5E7EB")}
             <tr>
               <td>
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>
@@ -400,21 +396,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
       <tr>
         <td style="padding:24px 32px 4px 32px;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="padding-bottom:10px;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                                text-transform:uppercase;color:#9CA3AF;
-                                font-family:Arial,sans-serif;white-space:nowrap;
-                                padding-right:12px;">
-                      QA &middot; Suppression Summary
-                    </td>
-                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            {_section_header_row("QA &middot; Suppression Summary", title_color="#9CA3AF", rule_color="#E5E7EB")}
             <tr>
               <td>
                 <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
@@ -774,21 +756,7 @@ def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dic
       <tr>
         <td style="padding:24px 32px 4px 32px;">
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            <tr>
-              <td style="padding-bottom:10px;">
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                  <tr>
-                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
-                                text-transform:uppercase;color:{_BRAND_NAVY};
-                                font-family:Arial,sans-serif;white-space:nowrap;
-                                padding-right:12px;">
-                      MACROECONOMIC OUTLOOK
-                    </td>
-                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            {_section_header_row("MACROECONOMIC OUTLOOK", title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)}
             <tr>
               <td>
                 <p style="margin:0 0 8px 0;font-size:13px;color:#1a2a45;
