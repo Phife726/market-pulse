@@ -1244,6 +1244,140 @@ def test_max_additional_articles_default_is_ten():
     assert _max_additional_articles({"max_additional_articles": 5}) == 5
 
 
+_APPENDIX_CFG = {"reporting": {"visible_impact_threshold": 6}}
+
+
+def _appendix_hashes(model) -> list[str]:
+    return [a["url_hash"] for a in model.additional_articles]
+
+
+def test_appendix_selects_scores_4_and_5_excludes_3_and_6():
+    """Scores 4 and 5 populate the appendix; 3 is below the band; 6 stays a
+    visible card and never duplicates into the appendix."""
+    rows = [
+        _make_new_article("s6", 6, commercial_segment="Packaging",
+                          headline="Visible card at the six threshold holds firm"),
+        _make_new_article("s5", 5, commercial_segment="Packaging",
+                          headline="Near-threshold five signal worth optional reading"),
+        _make_new_article("s4", 4, commercial_segment="Packaging",
+                          headline="Marginal four signal for the curious reader"),
+        _make_new_article("s3", 3, commercial_segment="Packaging",
+                          headline="Below-band three signal should never appear"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+
+    group_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert "s6" in group_hashes
+    assert _appendix_hashes(model) == ["s5", "s4"]
+    assert "s6" not in _appendix_hashes(model)
+    assert "s3" not in _appendix_hashes(model)
+
+
+def test_appendix_score_5_ranks_before_score_4():
+    """Every score-5 item precedes every score-4 item regardless of insertion
+    order."""
+    rows = [
+        _make_new_article("a4", 4, commercial_segment="Packaging",
+                          headline="Alpha four ranked strictly after every five"),
+        _make_new_article("b5", 5, commercial_segment="Packaging",
+                          headline="Bravo five ranked ahead of any four signal"),
+        _make_new_article("c4", 4, commercial_segment="Industrial",
+                          headline="Charlie four also trails the five band"),
+        _make_new_article("d5", 5, commercial_segment="Industrial",
+                          headline="Delta five leads the near-threshold pack"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+    scores = [a["americhem_impact_score"] for a in model.additional_articles]
+    assert scores == [5, 5, 4, 4]
+
+
+def test_appendix_excludes_blank_headline_or_url():
+    """A weak-relevance row without a usable headline or source URL is excluded."""
+    good = _make_new_article("good", 5, commercial_segment="Packaging",
+                             headline="Usable near-threshold signal with a real link")
+    blank_headline = _make_new_article("bh", 5, commercial_segment="Packaging",
+                                       headline="   ")
+    no_url = _make_new_article("nu", 5, commercial_segment="Packaging",
+                               headline="Weak signal that lost its source url somehow")
+    no_url["source_url"] = ""
+    model = assemble_report([good, blank_headline, no_url], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["good"]
+
+
+def test_appendix_excludes_delivery_suppressed_rows():
+    """A product-listing URL is suppressed before eligibility, so it never
+    reaches the appendix even at a qualifying score."""
+    listing = _make_new_article("list", 5, commercial_segment="Packaging",
+                                headline="Shop our new masterbatch color range online")
+    listing["source_url"] = "https://vendor.com/product/masterbatch-blue"
+    real = _make_new_article("real", 5, commercial_segment="Packaging",
+                             headline="Genuine near-threshold packaging demand note")
+    config = {
+        "reporting": {"visible_impact_threshold": 6},
+        "delivery_suppression": {"url_patterns_product_listing": ["/product/"]},
+    }
+    model = assemble_report([listing, real], config=config)
+    assert _appendix_hashes(model) == ["real"]
+
+
+def test_appendix_never_includes_enterprise_cross_segment_low_impact():
+    """Pinned deliberate consequence: delivery suppression rule 1 drops
+    Enterprise / Cross-Segment rows below enterprise_min_impact (7), so a
+    score-5 cross-segment row can never appear in the appendix."""
+    cross = _make_new_article("cross", 5,
+                              commercial_segment="Enterprise / Cross-Segment",
+                              headline="Cross-segment corporate note below the bar")
+    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+                             headline="Packaging-specific near-threshold signal kept")
+    model = assemble_report([cross, keep], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["keep"]
+
+
+def test_appendix_capped_at_max():
+    """No more than max_additional_articles rows enter the appendix."""
+    headlines = [
+        "Recycled content mandate reshapes flexible film sourcing",
+        "Feedstock naphtha spread widens across Gulf Coast crackers",
+        "Nonwoven wipes producer books capacity through winter",
+        "Colorant supplier flags titanium dioxide allocation risk",
+        "Automotive interior program shifts to bio-based softeners",
+        "Carpet tile demand rebounds on office refurbishment cycle",
+        "Barrier resin qualification opens new pouch applications",
+        "Compounder adds twin-screw line for engineered grades",
+        "Pigment dispersion lead times ease after port backlog clears",
+        "Agricultural mulch film season starts with firmer pricing",
+        "Wire jacketing compound tightens on copper build-out",
+        "Medical tubing extruder wins implantable device contract",
+    ]
+    rows = [
+        _make_new_article(f"x{i}", 5, commercial_segment="Packaging", headline=h)
+        for i, h in enumerate(headlines)
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
+    model = assemble_report(rows, config=config)
+    assert len(model.additional_articles) == 10
+
+
+def test_appendix_deterministic_recency_then_headline_then_hash():
+    """Within a score band, order is recency desc (published_at, else
+    created_at), then normalized headline asc, then url_hash asc."""
+    newer = _make_new_article("z_hash", 5, commercial_segment="Packaging",
+                              headline="Zulu newer signal by publication timestamp")
+    newer["published_at"] = "2026-07-16T09:00:00+00:00"
+    older = _make_new_article("a_hash", 5, commercial_segment="Packaging",
+                              headline="Alpha older signal by publication timestamp")
+    older["published_at"] = "2026-07-15T09:00:00+00:00"
+    # Two undated rows tie on recency -> ordered by normalized headline, then hash.
+    undated_b = _make_new_article("h2", 5, commercial_segment="Packaging",
+                                  headline="Betamax undated near-threshold packaging note")
+    undated_a = _make_new_article("h1", 5, commercial_segment="Packaging",
+                                  headline="Anchor undated near-threshold packaging note")
+    model = assemble_report([undated_b, older, undated_a, newer], config=_APPENDIX_CFG)
+    # newer (dated) and older (dated) lead by recency desc; undated tie last,
+    # ordered by headline (Anchor < Betamax).
+    assert _appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
+
+
 # ---------------------------------------------------------------------------
 # Uncapped-by-default report: caps are optional knobs (null / absent = no cap)
 # ---------------------------------------------------------------------------

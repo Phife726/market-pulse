@@ -203,6 +203,54 @@ def _apply_delivery_suppression(
     return kept, ledger
 
 
+def _is_usable_additional_article(row: dict, scorer: Scoring) -> bool:
+    """True when a row qualifies for the optional-discovery appendix: it is in
+    the weak-relevance band (supporting <= impact < visible — the same band the
+    rest of the report uses) and carries a non-blank headline and source URL.
+
+    Delivery-suppression survival and 'not already a visible card' are enforced
+    by the caller (it selects from `kept` minus the final-group hashes)."""
+    return (
+        scorer.is_weak_relevance(row)
+        and bool((row.get("headline") or "").strip())
+        and bool((row.get("source_url") or "").strip())
+    )
+
+
+def _appendix_recency_token(row: dict) -> str:
+    """Recency sort token: published_at when present, else created_at, else ''.
+    ISO-8601 timestamptz strings sort lexicographically in chronological order,
+    so descending string order is newest-first — no clock read, fully pure."""
+    for key in ("published_at", "created_at"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _select_additional_articles(
+    kept: list[dict],
+    final_hashes: set,
+    scorer: Scoring,
+    cap: int,
+) -> tuple[dict, ...]:
+    """Pick the appendix rows from suppression survivors not shown as cards.
+
+    Deterministic order (applied as stable sorts, least-significant first):
+    url_hash asc -> normalized headline asc -> recency desc -> effective impact
+    desc. So every score-5 precedes every score-4, ties break by recency then
+    headline then hash. Capped at `cap`."""
+    pool = [
+        r for r in kept
+        if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
+    ]
+    pool.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
+                             r.get("url_hash") or ""))
+    pool.sort(key=_appendix_recency_token, reverse=True)
+    pool.sort(key=lambda r: _effective_impact(r), reverse=True)
+    return tuple(pool[:cap])
+
+
 def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
     """Bucket items by commercial_segment; rows without one default to Enterprise / Cross-Segment."""
     from collections import defaultdict
@@ -290,6 +338,12 @@ def assemble_report(
     # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
     surfaced_count = sum(len(arts) for arts in groups.values())
 
+    # 8. Optional-discovery appendix: suppression survivors in the weak-relevance
+    #    band not shown as cards. Does NOT alter surfaced_count.
+    additional_articles = _select_additional_articles(
+        kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
+    )
+
     ledger = (ledger
               .record_count("below_impact_threshold", below_threshold_count)
               .record_count("weak_relevance", weak_relevance_count))
@@ -301,4 +355,5 @@ def assemble_report(
         screened_count=_resolve_screened_count(macro_summary, rows),
         ledger=ledger,
         macro_summary=macro_summary,
+        additional_articles=additional_articles,
     )
