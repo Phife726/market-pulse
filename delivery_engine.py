@@ -214,6 +214,115 @@ def _render_segment_watch_section(
 
 
 # ---------------------------------------------------------------------------
+# Additional Articles to Explore — compact optional-discovery appendix
+# ---------------------------------------------------------------------------
+
+def _appendix_domain(url: str) -> str:
+    """Registrable host minus a leading 'www.'; '' when unparseable/empty."""
+    try:
+        host = urlparse(url or "").hostname or ""
+    except (ValueError, TypeError):
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def _appendix_source_label(item: dict) -> str:
+    """Publisher name when known, else the source domain."""
+    pub = (item.get("source_publication") or "").strip()
+    return pub or _appendix_domain(item.get("source_url") or "")
+
+
+def _appendix_pub_date(item: dict) -> str:
+    """Human date from published_at ONLY (never the scrape timestamp). Empty
+    string when published_at is absent or unparseable."""
+    val = item.get("published_at")
+    if not isinstance(val, str) or not val.strip():
+        return ""
+    s = val.strip()
+    try:
+        dt = datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+    except (ValueError, TypeError):
+        return ""
+    return dt.strftime("%b %d, %Y")
+
+
+def _render_additional_articles_section(items: list[dict]) -> str:
+    """Render the compact 'Additional Articles to Explore' appendix.
+
+    One row per item: linked headline plus a meta line (segment · Impact X/10 ·
+    source · date). Deliberately omits the 'So what' narrative — this is
+    optional reading, visually distinct from surfaced intelligence. All
+    untrusted values are HTML-escaped and hrefs pass through _safe_http_url."""
+    if not items:
+        return ""
+
+    rows_html = ""
+    for item in items:
+        headline = html.escape(item.get("headline", "") or "")
+        segment = html.escape((item.get("commercial_segment") or "").strip())
+        score = item.get("americhem_impact_score")
+        try:
+            score_txt = f"Impact: {int(score)}/10" if score is not None else ""
+        except (TypeError, ValueError):
+            score_txt = ""
+        source = html.escape(_appendix_source_label(item))
+        date = html.escape(_appendix_pub_date(item))
+
+        meta_parts = [p for p in (segment, score_txt, source, date) if p]
+        meta = ' <span style="color:#9CA3AF;">&middot;</span> '.join(meta_parts)
+
+        url = _safe_http_url(item.get("source_url"))
+        if url:
+            safe = html.escape(url, quote=True)
+            headline_html = (
+                f'<a href="{safe}" style="font-size:13px;font-weight:600;'
+                f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
+                f'text-decoration:none;line-height:1.35;">{headline}</a>'
+            )
+        else:
+            headline_html = (
+                f'<span style="font-size:13px;font-weight:600;color:{_BRAND_NAVY};'
+                f'font-family:Arial,sans-serif;line-height:1.35;">{headline}</span>'
+            )
+
+        rows_html += (
+            f'<tr><td style="padding:5px 0 7px 0;">'
+            f'{headline_html}'
+            f'<p style="margin:2px 0 0 0;font-size:11px;color:#6B7280;'
+            f'font-family:Arial,sans-serif;">{meta}</p>'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:#5a6678;
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      Additional Articles to Explore
+                    </td>
+                    <td style="border-bottom:1px solid #E5E7EB;width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+
+# ---------------------------------------------------------------------------
 # Run-mode detection
 # ---------------------------------------------------------------------------
 
@@ -746,6 +855,7 @@ def render_report(
     macro_summary = model.macro_summary
 
     sections_html = _render_segment_watch_section(model.groups, model.synthesis)
+    additional_html = _render_additional_articles_section(list(model.additional_articles))
     exec_html = _render_exec_summary(macro_summary)
 
     # Cited-source list, rendered at the very bottom of the email (below the
@@ -826,6 +936,7 @@ def render_report(
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             {exec_html}
             {sections_html}
+            {additional_html}
             {sources_html}
             {qa_html}
             <tr><td style="height:24px;"></td></tr>

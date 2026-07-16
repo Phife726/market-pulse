@@ -830,9 +830,10 @@ def test_report_routes_two_plus_to_segment_watch():
     assert "THEMATIC INTELLIGENCE" not in html
 
 
-def test_report_single_low_relevance_hidden_in_production():
-    """An ungrouped impact-5 article must be HIDDEN in production
-    (no Peripheral Signals section anymore)."""
+def test_report_single_low_relevance_not_a_visible_card():
+    """An impact-5 article is never a visible card (no Peripheral Signals
+    section), but IS surfaced in the optional-discovery appendix — so it is
+    not counted as weak_relevance."""
     data = [{"url_hash": "x", "commercial_segment": "Packaging",
              "americhem_impact_score": 5, "sentiment_tag": "Neutral",
              "signal_type": "Customer",
@@ -841,9 +842,9 @@ def test_report_single_low_relevance_hidden_in_production():
              "entities_mentioned": ["Acme"]}]
     model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
     assert model.groups == {}
-    assert model.ledger.breakdown["weak_relevance"] == 1
+    assert [a["url_hash"] for a in model.additional_articles] == ["x"]
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
     html = render_report(model, today_str=_TODAY_STR)
-    assert "Low relevance packaging signal" not in html
     assert "PERIPHERAL SIGNALS" not in html
 
 
@@ -1215,6 +1216,450 @@ def test_report_capped_articles_do_not_reappear():
 
     # h3 (impact=7) was in the group but capped — must not reappear anywhere
     assert "HC Headline 3" not in html
+
+
+# ---------------------------------------------------------------------------
+# Additional Articles appendix — model field and cap config (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_report_model_has_additional_articles_tuple():
+    """ReportModel carries an additional_articles tuple; empty on the daily
+    variant until selection lands, and always empty on no_news."""
+    daily = assemble_report(
+        [_make_new_article("a", 8, commercial_segment="Packaging",
+                           headline="Packaging demand firms on brand-owner restocking")],
+        config={"reporting": {"visible_impact_threshold": 6}},
+    )
+    assert isinstance(daily.additional_articles, tuple)
+
+    no_news = assemble_report([], config={"reporting": {"visible_impact_threshold": 6}})
+    assert no_news.variant == "no_news"
+    assert no_news.additional_articles == ()
+
+
+def test_max_additional_articles_default_is_ten():
+    """The appendix cap resolves to 10 by default and honors an override — it is
+    a report-assembly knob, read in report.py (not a scoring threshold)."""
+    from report import _max_additional_articles
+    assert _max_additional_articles({}) == 10
+    assert _max_additional_articles({"max_additional_articles": 5}) == 5
+
+
+_APPENDIX_CFG = {"reporting": {"visible_impact_threshold": 6}}
+
+
+def _appendix_hashes(model) -> list[str]:
+    return [a["url_hash"] for a in model.additional_articles]
+
+
+def test_appendix_selects_scores_4_and_5_excludes_3_and_6():
+    """Scores 4 and 5 populate the appendix; 3 is below the band; 6 stays a
+    visible card and never duplicates into the appendix."""
+    rows = [
+        _make_new_article("s6", 6, commercial_segment="Packaging",
+                          headline="Visible card at the six threshold holds firm"),
+        _make_new_article("s5", 5, commercial_segment="Packaging",
+                          headline="Near-threshold five signal worth optional reading"),
+        _make_new_article("s4", 4, commercial_segment="Packaging",
+                          headline="Marginal four signal for the curious reader"),
+        _make_new_article("s3", 3, commercial_segment="Packaging",
+                          headline="Below-band three signal should never appear"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+
+    group_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert "s6" in group_hashes
+    assert _appendix_hashes(model) == ["s5", "s4"]
+    assert "s6" not in _appendix_hashes(model)
+    assert "s3" not in _appendix_hashes(model)
+
+
+def test_appendix_score_5_ranks_before_score_4():
+    """Every score-5 item precedes every score-4 item regardless of insertion
+    order."""
+    rows = [
+        _make_new_article("a4", 4, commercial_segment="Packaging",
+                          headline="Alpha four ranked strictly after every five"),
+        _make_new_article("b5", 5, commercial_segment="Packaging",
+                          headline="Bravo five ranked ahead of any four signal"),
+        _make_new_article("c4", 4, commercial_segment="Industrial",
+                          headline="Charlie four also trails the five band"),
+        _make_new_article("d5", 5, commercial_segment="Industrial",
+                          headline="Delta five leads the near-threshold pack"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+    scores = [a["americhem_impact_score"] for a in model.additional_articles]
+    assert scores == [5, 5, 4, 4]
+
+
+def test_appendix_excludes_blank_headline_or_url():
+    """A weak-relevance row without a usable headline or source URL is excluded."""
+    good = _make_new_article("good", 5, commercial_segment="Packaging",
+                             headline="Usable near-threshold signal with a real link")
+    blank_headline = _make_new_article("bh", 5, commercial_segment="Packaging",
+                                       headline="   ")
+    no_url = _make_new_article("nu", 5, commercial_segment="Packaging",
+                               headline="Weak signal that lost its source url somehow")
+    no_url["source_url"] = ""
+    model = assemble_report([good, blank_headline, no_url], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["good"]
+
+
+def test_appendix_excludes_delivery_suppressed_rows():
+    """A product-listing URL is suppressed before eligibility, so it never
+    reaches the appendix even at a qualifying score."""
+    listing = _make_new_article("list", 5, commercial_segment="Packaging",
+                                headline="Shop our new masterbatch color range online")
+    listing["source_url"] = "https://vendor.com/product/masterbatch-blue"
+    real = _make_new_article("real", 5, commercial_segment="Packaging",
+                             headline="Genuine near-threshold packaging demand note")
+    config = {
+        "reporting": {"visible_impact_threshold": 6},
+        "delivery_suppression": {"url_patterns_product_listing": ["/product/"]},
+    }
+    model = assemble_report([listing, real], config=config)
+    assert _appendix_hashes(model) == ["real"]
+
+
+def test_appendix_never_includes_enterprise_cross_segment_low_impact():
+    """Pinned deliberate consequence: delivery suppression rule 1 drops
+    Enterprise / Cross-Segment rows below enterprise_min_impact (7), so a
+    score-5 cross-segment row can never appear in the appendix."""
+    cross = _make_new_article("cross", 5,
+                              commercial_segment="Enterprise / Cross-Segment",
+                              headline="Cross-segment corporate note below the bar")
+    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+                             headline="Packaging-specific near-threshold signal kept")
+    model = assemble_report([cross, keep], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["keep"]
+
+
+def test_appendix_capped_at_max():
+    """No more than max_additional_articles rows enter the appendix."""
+    headlines = [
+        "Recycled content mandate reshapes flexible film sourcing",
+        "Feedstock naphtha spread widens across Gulf Coast crackers",
+        "Nonwoven wipes producer books capacity through winter",
+        "Colorant supplier flags titanium dioxide allocation risk",
+        "Automotive interior program shifts to bio-based softeners",
+        "Carpet tile demand rebounds on office refurbishment cycle",
+        "Barrier resin qualification opens new pouch applications",
+        "Compounder adds twin-screw line for engineered grades",
+        "Pigment dispersion lead times ease after port backlog clears",
+        "Agricultural mulch film season starts with firmer pricing",
+        "Wire jacketing compound tightens on copper build-out",
+        "Medical tubing extruder wins implantable device contract",
+    ]
+    rows = [
+        _make_new_article(f"x{i}", 5, commercial_segment="Packaging", headline=h)
+        for i, h in enumerate(headlines)
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
+    model = assemble_report(rows, config=config)
+    assert len(model.additional_articles) == 10
+
+
+def test_appendix_deterministic_recency_then_headline_then_hash():
+    """Within a score band, order is recency desc (published_at, else
+    created_at), then normalized headline asc, then url_hash asc."""
+    newer = _make_new_article("z_hash", 5, commercial_segment="Packaging",
+                              headline="Zulu newer signal by publication timestamp")
+    newer["published_at"] = "2026-07-16T09:00:00+00:00"
+    older = _make_new_article("a_hash", 5, commercial_segment="Packaging",
+                              headline="Alpha older signal by publication timestamp")
+    older["published_at"] = "2026-07-15T09:00:00+00:00"
+    # Two undated rows tie on recency -> ordered by normalized headline, then hash.
+    undated_b = _make_new_article("h2", 5, commercial_segment="Packaging",
+                                  headline="Betamax undated near-threshold packaging note")
+    undated_a = _make_new_article("h1", 5, commercial_segment="Packaging",
+                                  headline="Anchor undated near-threshold packaging note")
+    model = assemble_report([undated_b, older, undated_a, newer], config=_APPENDIX_CFG)
+    # newer (dated) and older (dated) lead by recency desc; undated tie last,
+    # ordered by headline (Anchor < Betamax).
+    assert _appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
+
+
+def test_appendix_recency_ignores_unparseable_published_at():
+    """A non-ISO published_at must not be used for recency: it falls back to
+    created_at, so it can't spuriously outrank a real recent date. (Aligns the
+    selector with the renderer, which already drops unparseable published_at.)"""
+    garbage = _make_new_article("garbage", 5, commercial_segment="Packaging",
+                                headline="Bogus timestamp near-threshold packaging note")
+    garbage["published_at"] = "Yesterday"                       # unparseable
+    garbage["created_at"] = "2026-07-10T00:00:00+00:00"         # real, older
+    real_recent = _make_new_article("recent", 5, commercial_segment="Industrial",
+                                    headline="Genuinely recent near-threshold industrial note")
+    real_recent["published_at"] = "2026-07-15T00:00:00+00:00"   # real, newer
+    model = assemble_report([garbage, real_recent], config=_APPENDIX_CFG)
+    # real_recent (Jul 15) must lead; garbage falls back to created_at (Jul 10).
+    assert _appendix_hashes(model) == ["recent", "garbage"]
+
+
+_APPENDIX_ACCT_HEADLINES = [
+    "Recycled content mandate reshapes flexible film sourcing",
+    "Feedstock naphtha spread widens across Gulf Coast crackers",
+    "Nonwoven wipes producer books capacity through winter",
+    "Colorant supplier flags titanium dioxide allocation risk",
+    "Automotive interior program shifts to bio-based softeners",
+    "Carpet tile demand rebounds on office refurbishment cycle",
+    "Barrier resin qualification opens new pouch applications",
+    "Compounder adds twin-screw line for engineered grades",
+    "Pigment dispersion lead times ease after port backlog clears",
+    "Agricultural mulch film season starts with firmer pricing",
+    "Wire jacketing compound tightens on copper build-out",
+    "Medical tubing extruder wins implantable device contract",
+]
+
+
+def test_appendix_displayed_rows_not_counted_weak_relevance():
+    """A score-5 row shown in the appendix is not counted as weak_relevance."""
+    row = _make_new_article("shown", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging note shown in appendix")
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["shown"]
+    # record_count is a no-op at 0, so the key is simply absent.
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+
+
+def test_appendix_capped_out_rows_counted_weak_relevance():
+    """Eligible score-5 rows pushed out by the appendix cap are counted as
+    weak_relevance (in neither the main groups nor the appendix)."""
+    rows = [
+        _make_new_article(f"w{i}", 5, commercial_segment="Packaging", headline=h)
+        for i, h in enumerate(_APPENDIX_ACCT_HEADLINES)  # 12 rows
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
+    model = assemble_report(rows, config=config)
+    assert len(model.additional_articles) == 10
+    assert model.ledger.breakdown["weak_relevance"] == 2
+
+
+def test_below_impact_threshold_unchanged_by_appendix():
+    """below_impact_threshold still counts every suppression-surviving row below
+    the visible threshold, including rows the appendix now displays."""
+    rows = [
+        _make_new_article("s5", 5, commercial_segment="Packaging",
+                          headline="Five-band signal that lands in the appendix"),
+        _make_new_article("s4", 4, commercial_segment="Packaging",
+                          headline="Four-band signal that also lands in appendix"),
+        _make_new_article("s3", 3, commercial_segment="Packaging",
+                          headline="Three-band signal below the supporting floor"),
+    ]
+    model = assemble_report(rows, config=_APPENDIX_CFG)
+    # All three are below the visible threshold (6) and survive suppression.
+    assert model.ledger.breakdown["below_impact_threshold"] == 3
+    # Two of them are surfaced in the appendix — that overlap is intentional.
+    assert len(model.additional_articles) == 2
+
+
+# ---------------------------------------------------------------------------
+# Additional Articles appendix — rendering (Task 5)
+# ---------------------------------------------------------------------------
+
+_APPENDIX_TITLE = "Additional Articles to Explore"
+
+
+def test_appendix_renders_when_items_present():
+    """The appendix section shows title, linked headline, segment, impact, and
+    source for each row."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging demand firms up")
+    row["source_publication"] = "Plastics News"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE in html
+    assert "Near-threshold packaging demand firms up" in html
+    assert "Packaging" in html
+    assert "Impact: 5/10" in html
+    assert "Plastics News" in html
+    assert 'href="https://news.com/article"' in html
+
+
+def test_appendix_absent_when_empty():
+    """No appendix section renders when there are no additional articles."""
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible high-impact packaging card only")
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert model.additional_articles == ()
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE not in html
+
+
+def test_appendix_shows_date_only_when_published_at():
+    """Publication date renders only from published_at, never a scrape timestamp."""
+    dated = _make_new_article("d", 5, commercial_segment="Packaging",
+                              headline="Dated near-threshold packaging signal here")
+    dated["published_at"] = "2026-07-15T09:00:00+00:00"
+    dated["created_at"] = "2026-07-16T23:59:00+00:00"  # scrape time — must NOT show
+    undated = _make_new_article("u", 5, commercial_segment="Industrial",
+                                headline="Undated near-threshold industrial signal")
+    undated["created_at"] = "2026-07-16T23:59:00+00:00"
+    model = assemble_report([dated, undated], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "Jul 15, 2026" in html          # published_at of the dated row
+    assert "Jul 16, 2026" not in html      # scrape timestamp never displayed
+
+
+def test_appendix_omits_so_what_narrative():
+    """The appendix does not render the americhem_impact 'So what' narrative."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging note for appendix")
+    row["americhem_impact"] = "UNIQUE_SO_WHAT_NARRATIVE_TOKEN"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["a"]
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE in html
+    assert "UNIQUE_SO_WHAT_NARRATIVE_TOKEN" not in html
+
+
+def test_appendix_escapes_untrusted_and_guards_href():
+    """Headline/source are HTML-escaped and a non-http(s) URL is neutralized."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="<script>alert('x')</script> resin note")
+    row["source_url"] = "javascript:alert(1)"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+    assert 'href="javascript:' not in html
+
+
+def test_appendix_renders_below_segment_watch_above_sources():
+    """Section order: Commercial Segment Watch -> Additional Articles -> Sources."""
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging supply disruption card")
+    weak = _make_new_article("w", 5, commercial_segment="Industrial",
+                             headline="Near-threshold industrial reading for appendix")
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pressure body.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Supply body.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Action body.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Source one", "url": "https://s/1", "domain": "s.com"},
+        ],
+    }
+    model = assemble_report([visible, weak], macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    i_watch = html.find("COMMERCIAL SEGMENT WATCH")
+    i_appendix = html.find(_APPENDIX_TITLE)
+    i_sources = html.find(">Sources<")
+    assert i_watch != -1 and i_appendix != -1 and i_sources != -1
+    assert i_watch < i_appendix < i_sources
+
+
+# ---------------------------------------------------------------------------
+# Uncapped-by-default report: caps are optional knobs (null / absent = no cap)
+# ---------------------------------------------------------------------------
+
+_UNCAPPED_HC_HEADLINES = [
+    "Hospital network merger squeezes specialty polymer volumes",
+    "FDA clears new implantable-grade compound for cardiac devices",
+    "Aging population drives record demand for medical-grade resins",
+    "Generic drug expansion pressures premium plastics pricing",
+    "Supply disruption at key resin plant delays surgical kit output",
+]
+
+
+def test_assemble_report_uncapped_per_segment_when_null():
+    """With max_visible_articles_per_segment: null, every visible article in a
+    segment survives — no per-segment drop."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=10 - i,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": None,
+            "max_total_visible_articles": None,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert len(model.groups["Healthcare"]) == 5
+    assert model.surfaced_count == 5
+
+
+def test_assemble_report_uncapped_total_when_null():
+    """With max_total_visible_articles: null, all visible articles across
+    segments survive — no total drop."""
+    # 14 genuinely distinct headlines (semantic-duplicate suppression fires at
+    # token_sort_ratio >= 88, so near-identical headlines would collapse).
+    specs = [
+        ("Healthcare", "Hospital merger reshapes specialty polymer procurement"),
+        ("Healthcare", "FDA clears implantable-grade compound for cardiac devices"),
+        ("Fibers", "Nonwoven hygiene demand lifts polypropylene fiber orders"),
+        ("Fibers", "Carpet mill restart tightens solution-dyed yarn supply"),
+        ("Packaging", "Brand owners accelerate recyclable flexible film pledges"),
+        ("Packaging", "Food-contact resin shortage delays beverage closures"),
+        ("Industrial", "Wire-and-cable buildout drives jacketing compound volumes"),
+        ("Industrial", "Agricultural film season opens with firmer additive pricing"),
+        ("Transportation - Automotive", "EV interior programs shift to flame-retardant grades"),
+        ("Transportation - Automotive", "Tier-one supplier books record under-hood resin demand"),
+        ("Transportation - Aerospace", "Rotorcraft OEM qualifies new flame-rated cabin polymer"),
+        ("Transportation - Aerospace", "Defense procurement lifts high-temperature composite orders"),
+        ("Engineered Resins", "PEEK capacity expansion eases medical-device lead times"),
+        ("Engineered Resins", "Glass-filled nylon pricing climbs on feedstock tightness"),
+    ]
+    articles = [
+        _make_new_article(
+            f"u{i}", americhem_impact_score=8,
+            commercial_segment=seg, headline=headline,
+        )
+        for i, (seg, headline) in enumerate(specs)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": None,
+            "max_total_visible_articles": None,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert model.surfaced_count == 14
+
+
+def test_assemble_report_uncapped_by_default():
+    """Built-in defaults (config=None) impose no caps: all 5 visible articles
+    in one segment survive."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=8,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    model = assemble_report(articles, config=None)
+    assert len(model.groups["Healthcare"]) == 5
+
+
+def test_assemble_report_integer_cap_still_enforced():
+    """An integer cap in config still caps — the knob is retained for rollback."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=10 - i,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": 3,
+            "max_total_visible_articles": 12,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["h0", "h1", "h2"]
+    assert model.surfaced_count == 3
 
 
 # ===========================================================================

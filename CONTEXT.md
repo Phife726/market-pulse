@@ -52,16 +52,26 @@ pure functions differently, not by injection.
   (`Scoring.from_config`, `tier`, `is_legacy_critical`).
 - **Macro summary** — the once-per-run brief (`dominant_condition` +
   `executive_bullets`) written to `daily_summaries`.
-- **Commercial Segment Watch** — the single rendered email zone, grouped by
+- **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
+- **Additional Articles to Explore** — the optional-discovery appendix
+  (`ReportModel.additional_articles`): suppression-surviving weak-relevance
+  (score 4–5) rows that are not visible cards, ranked deterministically and
+  capped at `reporting.max_additional_articles` (default 10). Rendered
+  compactly below Commercial Segment Watch, without the "So what" narrative.
+  Never affects `surfaced_count`. Rows shown here are excluded from the
+  `weak_relevance` count (but still counted in the broader
+  `below_impact_threshold`).
 - **Report model** (`report.py`, `ReportModel`) — the assembled daily report as
-  plain frozen data: `variant` (`daily` / `no_news`), the final capped segment
-  groups, `surfaced_count` / `screened_count`, the delivery-side suppression
+  plain frozen data: `variant` (`daily` / `no_news`), the final segment groups
+  (capped only when configured; caps default to `null` = uncapped),
+  `additional_articles` (the optional-discovery appendix — see below),
+  `surfaced_count` / `screened_count`, the delivery-side suppression
   ledger (including the derived `below_impact_threshold` and `weak_relevance`
   counts), the raw macro-summary row, and the thematic synthesis paragraphs.
   Produced by `assemble_report` (pure decision pipeline: delivery suppression →
-  visibility filter → segment grouping → per-segment cap → total cap →
-  weak-relevance accounting). Consumed by the pure renderer
+  visibility filter → segment grouping → optional per-segment cap → optional
+  total cap → appendix selection → weak-relevance accounting). Consumed by the pure renderer
   (`delivery_engine.render_report`) and the `daily_summaries` write-back.
   `delivery_engine.prepare_report(rows, macro_summary)` runs assembly itself
   (there is no model-in/model-out effectful call), then performs the run's two

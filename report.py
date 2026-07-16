@@ -14,6 +14,7 @@ Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 """
 import logging
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Literal, Optional
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
@@ -35,7 +36,8 @@ class ReportModel:
     Invariants (guaranteed by assemble_report):
     - variant == "no_news" iff the input rows were empty; suppressed-to-empty
       still yields "daily" (full chrome, zero cards, write-back still owed).
-    - groups values are materiality-descending; per-segment and total caps hold.
+    - groups values are materiality-descending; per-segment and total caps hold
+      when configured (a null / absent cap means show every visible article).
     - surfaced_count == sum(len(arts) for arts in groups.values()).
     - ledger is the complete delivery-side accounting, including the derived
       below_impact_threshold and weak_relevance counts — the write-back
@@ -48,6 +50,9 @@ class ReportModel:
     ledger: SuppressionLedger
     macro_summary: Optional[dict]
     synthesis: dict[str, str] = field(default_factory=dict)
+    # Optional-discovery appendix: suppression-surviving score-4/5 rows not
+    # shown as visible cards. Never counted in surfaced_count. Empty on no_news.
+    additional_articles: tuple[dict, ...] = ()
 
     def synthesis_candidates(self) -> dict[str, list[dict]]:
         """Final capped groups with 2+ Insights — the only legal input to
@@ -65,6 +70,32 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning("Invalid config value for reporting.%s; using %d", key, default)
         return default
+
+
+DEFAULT_MAX_ADDITIONAL_ARTICLES = 10
+
+
+def _max_additional_articles(reporting_cfg: dict) -> int:
+    """Resolve the appendix cap (reporting.max_additional_articles, default 10).
+    A report-assembly knob, read here beside the visible-card caps — not a
+    scoring threshold."""
+    return _config_int(reporting_cfg, "max_additional_articles", DEFAULT_MAX_ADDITIONAL_ARTICLES)
+
+
+def _config_optional_int(cfg: dict, key: str) -> Optional[int]:
+    """Read an optional cap from a config sub-dict.
+
+    Returns None when the key is absent or explicitly null (meaning: no cap).
+    An integer (or int-coercible string) returns that cap. A malformed value
+    warns and falls back to None (uncapped) — a bad cap must not silently
+    shrink the report."""
+    if cfg.get(key) is None:
+        return None
+    try:
+        return int(cfg[key])
+    except (TypeError, ValueError):
+        logger.warning("Invalid config value for reporting.%s; leaving uncapped", key)
+        return None
 
 
 def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
@@ -173,6 +204,68 @@ def _apply_delivery_suppression(
     return kept, ledger
 
 
+def _is_usable_additional_article(row: dict, scorer: Scoring) -> bool:
+    """True when a row qualifies for the optional-discovery appendix: it is in
+    the weak-relevance band (supporting <= impact < visible — the same band the
+    rest of the report uses) and carries a non-blank headline and source URL.
+
+    Delivery-suppression survival and 'not already a visible card' are enforced
+    by the caller (it selects from `kept` minus the final-group hashes)."""
+    return (
+        scorer.is_weak_relevance(row)
+        and bool((row.get("headline") or "").strip())
+        and bool((row.get("source_url") or "").strip())
+    )
+
+
+def _parses_as_datetime(val: str) -> bool:
+    """True when val is a parseable ISO-8601 datetime (tolerating a trailing Z).
+    Pure — parsing reads no clock."""
+    s = val.strip()
+    try:
+        datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _appendix_recency_token(row: dict) -> str:
+    """Recency sort token: published_at when it parses as a datetime, else
+    created_at when it parses, else ''. ISO-8601 timestamptz strings sort
+    lexicographically in chronological order, so descending string order is
+    newest-first. The parse guard keeps a non-ISO scraped value (e.g.
+    'Yesterday') from spuriously ranking above real dates — and matches the
+    renderer, which already drops an unparseable published_at. No clock read."""
+    for key in ("published_at", "created_at"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip() and _parses_as_datetime(val):
+            return val.strip()
+    return ""
+
+
+def _select_additional_articles(
+    kept: list[dict],
+    final_hashes: set,
+    scorer: Scoring,
+    cap: int,
+) -> tuple[dict, ...]:
+    """Pick the appendix rows from suppression survivors not shown as cards.
+
+    Deterministic order (applied as stable sorts, least-significant first):
+    url_hash asc -> normalized headline asc -> recency desc -> effective impact
+    desc. So every score-5 precedes every score-4, ties break by recency then
+    headline then hash. Capped at `cap`."""
+    pool = [
+        r for r in kept
+        if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
+    ]
+    pool.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
+                             r.get("url_hash") or ""))
+    pool.sort(key=_appendix_recency_token, reverse=True)
+    pool.sort(key=lambda r: _effective_impact(r), reverse=True)
+    return tuple(pool[:cap])
+
+
 def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
     """Bucket items by commercial_segment; rows without one default to Enterprise / Cross-Segment."""
     from collections import defaultdict
@@ -210,9 +303,12 @@ def assemble_report(
             macro_summary=macro_summary,
         )
 
-    reporting_cfg          = config.get("reporting", {}) or {}
-    max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
-    max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
+    reporting_cfg                   = config.get("reporting", {}) or {}
+    # Caps are optional: None (null / absent key) means show every visible
+    # article. An integer re-imposes the cap — a config-only rollback if the
+    # report gets noisy.
+    max_per_segment: Optional[int]  = _config_optional_int(reporting_cfg, "max_visible_articles_per_segment")
+    max_total_visible: Optional[int] = _config_optional_int(reporting_cfg, "max_total_visible_articles")
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
@@ -226,6 +322,7 @@ def assemble_report(
     groups_full = _group_by_commercial_segment(visible_pool)
 
     # 4. Per-segment cap (highest-impact articles first within each group).
+    #    Sort even when uncapped so within-segment order stays materiality-desc.
     groups = {
         seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
         for seg, arts in groups_full.items()
@@ -233,7 +330,7 @@ def assemble_report(
 
     # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
     total = sum(len(arts) for arts in groups.values())
-    if total > max_total_visible:
+    if max_total_visible is not None and total > max_total_visible:
         all_visible = sorted(
             [(seg, a) for seg, arts in groups.items() for a in arts],
             key=lambda kv: _effective_impact(kv[1]),
@@ -244,16 +341,27 @@ def assemble_report(
                   for seg, arts in groups.items()}
         groups = {seg: arts for seg, arts in groups.items() if arts}
 
-    # 6. weak_relevance: rows in `kept` with effective impact 4-5 that didn't
-    # make it into any final group (the old Peripheral pool, now hidden).
     final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
+
+    # 6. Optional-discovery appendix: suppression survivors in the weak-relevance
+    #    band not shown as cards. Does NOT alter surfaced_count.
+    additional_articles = _select_additional_articles(
+        kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
+    )
+
+    # 7. weak_relevance: weak-relevance (4-5) rows shown NOWHERE — neither a
+    #    visible card nor the appendix (e.g. pushed out by the appendix cap).
+    #    (below_impact_threshold above is deliberately broader: it counts every
+    #    suppression-surviving below-visible row, including ones the appendix
+    #    now displays — it describes the visible-card decision, not end hiding.)
+    shown_hashes = final_hashes | {a.get("url_hash") for a in additional_articles}
     weak_relevance_count = sum(
         1 for r in kept
         if scorer.is_weak_relevance(r)
-        and r.get("url_hash") not in final_hashes
+        and r.get("url_hash") not in shown_hashes
     )
 
-    # 7. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
+    # 8. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
     surfaced_count = sum(len(arts) for arts in groups.values())
 
     ledger = (ledger
@@ -267,4 +375,5 @@ def assemble_report(
         screened_count=_resolve_screened_count(macro_summary, rows),
         ledger=ledger,
         macro_summary=macro_summary,
+        additional_articles=additional_articles,
     )
