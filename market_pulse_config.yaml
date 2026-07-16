@@ -19,6 +19,10 @@ reporting:
   max_visible_articles_per_segment: null   # e.g. 3 to cap per-segment
   max_total_visible_articles: null         # e.g. 12 to cap the total
 
+  # Cap on the optional "Additional Articles to Explore" appendix — the
+  # score-4/5 near-threshold rows shown compactly at the bottom of the email.
+  max_additional_articles: 10
+
 # Strategic segment taxonomy.
 # Edit labels and descriptions freely — they are passed directly into the LLM prompt.
 # Do NOT reorder keys; add new segments at the bottom.

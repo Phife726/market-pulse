@@ -1218,6 +1218,33 @@ def test_report_capped_articles_do_not_reappear():
 
 
 # ---------------------------------------------------------------------------
+# Additional Articles appendix — model field and cap config (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_report_model_has_additional_articles_tuple():
+    """ReportModel carries an additional_articles tuple; empty on the daily
+    variant until selection lands, and always empty on no_news."""
+    daily = assemble_report(
+        [_make_new_article("a", 8, commercial_segment="Packaging",
+                           headline="Packaging demand firms on brand-owner restocking")],
+        config={"reporting": {"visible_impact_threshold": 6}},
+    )
+    assert isinstance(daily.additional_articles, tuple)
+
+    no_news = assemble_report([], config={"reporting": {"visible_impact_threshold": 6}})
+    assert no_news.variant == "no_news"
+    assert no_news.additional_articles == ()
+
+
+def test_max_additional_articles_default_is_ten():
+    """The appendix cap resolves to 10 by default and honors an override — it is
+    a report-assembly knob, read in report.py (not a scoring threshold)."""
+    from report import _max_additional_articles
+    assert _max_additional_articles({}) == 10
+    assert _max_additional_articles({"max_additional_articles": 5}) == 5
+
+
+# ---------------------------------------------------------------------------
 # Uncapped-by-default report: caps are optional knobs (null / absent = no cap)
 # ---------------------------------------------------------------------------
 

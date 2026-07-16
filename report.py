@@ -49,6 +49,9 @@ class ReportModel:
     ledger: SuppressionLedger
     macro_summary: Optional[dict]
     synthesis: dict[str, str] = field(default_factory=dict)
+    # Optional-discovery appendix: suppression-surviving score-4/5 rows not
+    # shown as visible cards. Never counted in surfaced_count. Empty on no_news.
+    additional_articles: tuple[dict, ...] = ()
 
     def synthesis_candidates(self) -> dict[str, list[dict]]:
         """Final capped groups with 2+ Insights — the only legal input to
@@ -66,6 +69,16 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning("Invalid config value for reporting.%s; using %d", key, default)
         return default
+
+
+DEFAULT_MAX_ADDITIONAL_ARTICLES = 10
+
+
+def _max_additional_articles(reporting_cfg: dict) -> int:
+    """Resolve the appendix cap (reporting.max_additional_articles, default 10).
+    A report-assembly knob, read here beside the visible-card caps — not a
+    scoring threshold."""
+    return _config_int(reporting_cfg, "max_additional_articles", DEFAULT_MAX_ADDITIONAL_ARTICLES)
 
 
 def _config_optional_int(cfg: dict, key: str) -> Optional[int]:
