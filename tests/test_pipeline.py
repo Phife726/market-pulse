@@ -1379,6 +1379,22 @@ def test_appendix_deterministic_recency_then_headline_then_hash():
     assert _appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
 
 
+def test_appendix_recency_ignores_unparseable_published_at():
+    """A non-ISO published_at must not be used for recency: it falls back to
+    created_at, so it can't spuriously outrank a real recent date. (Aligns the
+    selector with the renderer, which already drops unparseable published_at.)"""
+    garbage = _make_new_article("garbage", 5, commercial_segment="Packaging",
+                                headline="Bogus timestamp near-threshold packaging note")
+    garbage["published_at"] = "Yesterday"                       # unparseable
+    garbage["created_at"] = "2026-07-10T00:00:00+00:00"         # real, older
+    real_recent = _make_new_article("recent", 5, commercial_segment="Industrial",
+                                    headline="Genuinely recent near-threshold industrial note")
+    real_recent["published_at"] = "2026-07-15T00:00:00+00:00"   # real, newer
+    model = assemble_report([garbage, real_recent], config=_APPENDIX_CFG)
+    # real_recent (Jul 15) must lead; garbage falls back to created_at (Jul 10).
+    assert _appendix_hashes(model) == ["recent", "garbage"]
+
+
 _APPENDIX_ACCT_HEADLINES = [
     "Recycled content mandate reshapes flexible film sourcing",
     "Feedstock naphtha spread widens across Gulf Coast crackers",

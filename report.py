@@ -14,6 +14,7 @@ Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 """
 import logging
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Literal, Optional
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
@@ -217,13 +218,27 @@ def _is_usable_additional_article(row: dict, scorer: Scoring) -> bool:
     )
 
 
+def _parses_as_datetime(val: str) -> bool:
+    """True when val is a parseable ISO-8601 datetime (tolerating a trailing Z).
+    Pure — parsing reads no clock."""
+    s = val.strip()
+    try:
+        datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _appendix_recency_token(row: dict) -> str:
-    """Recency sort token: published_at when present, else created_at, else ''.
-    ISO-8601 timestamptz strings sort lexicographically in chronological order,
-    so descending string order is newest-first — no clock read, fully pure."""
+    """Recency sort token: published_at when it parses as a datetime, else
+    created_at when it parses, else ''. ISO-8601 timestamptz strings sort
+    lexicographically in chronological order, so descending string order is
+    newest-first. The parse guard keeps a non-ISO scraped value (e.g.
+    'Yesterday') from spuriously ranking above real dates — and matches the
+    renderer, which already drops an unparseable published_at. No clock read."""
     for key in ("published_at", "created_at"):
         val = row.get(key)
-        if isinstance(val, str) and val.strip():
+        if isinstance(val, str) and val.strip() and _parses_as_datetime(val):
             return val.strip()
     return ""
 
