@@ -797,6 +797,94 @@ def test_generate_macro_summary_persists_macro_outlook_and_union_sources():
     assert {s["id"] for s in stored["executive_sources"]} == {1, 2}
 
 
+def test_generate_macro_summary_llm_none_degrades_without_crash():
+    """An LLM transport failure (None) yields False — no macro row, no crash —
+    exactly as the pre-macro-outlook behavior."""
+    fake = FakeLLM(returns=None)
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+    assert result is False
+    assert fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01") is None
+
+
+def test_generate_macro_summary_malformed_outlook_keeps_bullets():
+    """A malformed macro_outlook key degrades to None while the executive
+    bullets survive — per-key validation, one call, independent failure."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial steady.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage.", "citation_source_ids": []},
+        ],
+        "macro_outlook": "totally not an object",
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+    assert result is True
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is None
+    assert stored["executive_bullets"] is not None
+    assert len(stored["executive_bullets"]) == 3
+
+
+def test_macro_outlook_cites_card_suppressed_article():
+    """A macro article suppressed as a card (generic-market-report title, no
+    entities) can still be cited by the outlook — the outlook renders from the
+    summary row, independent of card visibility."""
+    suppressed = _make_new_article("supp", 8, commercial_segment="Industrial",
+                                   headline="Global polymer market outlook to reach $50 billion")
+    suppressed["entities_mentioned"] = []
+    visible = _make_new_article("vis", 8, commercial_segment="Packaging",
+                                headline="Packaging supply disruption raises converter costs")
+    macro = {
+        "macro_outlook": {
+            "current_condition": "Industrial demand softening.",
+            "signals": [
+                {"indicator": "Manufacturing PMI", "direction": "Declining",
+                 "americhem_implication": "Downside risk for industrial compound demand.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [7]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 7, "headline": "Global polymer market outlook report",
+             "url": "https://s/7", "domain": "m.com"},
+        ],
+    }
+    config = {
+        "reporting": {"visible_impact_threshold": 6},
+        "delivery_suppression": {"title_patterns_generic_market_report": ["market outlook", "to reach $"]},
+    }
+    model = assemble_report([suppressed, visible], macro_summary=macro, config=config)
+    card_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert "supp" not in card_hashes                      # suppressed as a card
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE in html                           # outlook still renders
+    assert "Global polymer market outlook report" in html  # cited in Sources footer
+
+
+def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
+    """Delivery's fetch_macro_summary returns the row verbatim, so macro_outlook
+    (incl. the test-mode production-row fallback) is carried along for free."""
+    import delivery_engine
+    from datetime import date
+    fake_repo = InMemoryIntelligenceRepo()
+    fake_repo.upsert_summary({
+        "run_date": date.today().isoformat(),
+        "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "Mixed / Watch",
+        "macro_outlook": _VALID_MACRO_OUTLOOK,
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    summary = delivery_engine.fetch_macro_summary()
+    assert summary["macro_outlook"] == _VALID_MACRO_OUTLOOK
+
+
 def test_generate_macro_summary_persists_none_when_no_material_signal():
     """When macro_outlook has no material signal, None is persisted (no section)."""
     fake = FakeLLM(returns={
