@@ -1709,6 +1709,104 @@ def test_report_model_no_news_macro_outlook_none():
 
 
 # ---------------------------------------------------------------------------
+# Macroeconomic Outlook — rendering (PR 2, Task 11)
+# ---------------------------------------------------------------------------
+
+_MACRO_TITLE = "MACROECONOMIC OUTLOOK"
+
+
+def _macro_summary_with_outlook() -> dict:
+    return {
+        "dominant_condition": "Demand Softness",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {
+            "current_condition": "Industrial and construction demand both softening.",
+            "signals": [
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in building-products volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [2]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 1, "headline": "Industrial PMI slips", "url": "https://s/1", "domain": "s.com"},
+            {"id": 2, "headline": "Housing starts fall", "url": "https://s/2", "domain": "t.com"},
+        ],
+    }
+
+
+def test_macro_section_renders_between_exec_and_segment_watch():
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging supply disruption card")
+    model = assemble_report([visible], macro_summary=_macro_summary_with_outlook(),
+                            config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE in html
+    assert "Industrial and construction demand both softening." in html
+    assert "Housing starts" in html
+    assert "Declining" in html
+    assert "Weakness in building-products volumes." in html
+    assert "Industrial" in html
+    i_exec = html.find("Executive Summary")
+    i_macro = html.find(_MACRO_TITLE)
+    i_watch = html.find("COMMERCIAL SEGMENT WATCH")
+    assert i_exec != -1 and i_macro != -1 and i_watch != -1
+    assert i_exec < i_macro < i_watch
+
+
+def test_macro_section_absent_when_none():
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging card with no outlook")
+    model = assemble_report([visible], macro_summary={"dominant_condition": "Mixed / Watch"},
+                            config=_APPENDIX_CFG)
+    assert model.macro_outlook is None
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE not in html
+
+
+def test_macro_section_current_condition_rendered_once():
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card to accompany the macro outlook")],
+        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert html.count("Industrial and construction demand both softening.") == 1
+
+
+def test_macro_section_shares_one_citation_numbering_space():
+    """Bullets cite source 1, the macro signal cites source 2: the exec summary
+    shows [1], the macro section shows [2], and the single Sources footer lists
+    both — one numbering space (bullets enumerated, then signals)."""
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card next to the macro outlook here")],
+        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    # Both cited sources resolve in the bottom Sources list.
+    assert "Industrial PMI slips" in html
+    assert "Housing starts fall" in html
+    # Footer numbering covers both ids.
+    assert "[1]" in html and "[2]" in html
+    # The macro signal's marker links to source 2's url.
+    assert 'href="https://s/2"' in html
+
+
+def test_macro_section_escapes_untrusted_text():
+    macro = _macro_summary_with_outlook()
+    macro["macro_outlook"]["signals"][0]["americhem_implication"] = "<script>alert('x')</script> risk"
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card with an XSS-y macro outlook")],
+        macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+
+
+# ---------------------------------------------------------------------------
 # Additional Articles appendix — rendering (Task 5)
 # ---------------------------------------------------------------------------
 
