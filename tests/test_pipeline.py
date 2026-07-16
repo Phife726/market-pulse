@@ -228,6 +228,59 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Dedicated macroeconomic discovery targets (PR 2, Task 7)
+# ---------------------------------------------------------------------------
+
+_MACRO_GROUP_KEYS = [
+    "macro_manufacturing",
+    "macro_construction",
+    "macro_automotive",
+    "macro_consumer_demand",
+    "macro_inflation_rates",
+    "macro_energy_freight",
+    "macro_business_investment",
+]
+
+
+def _load_targets_yaml() -> dict:
+    import yaml
+    with open("targets.yaml") as fh:
+        return yaml.safe_load(fh)
+
+
+def test_targets_yaml_has_active_macro_concept_groups():
+    """The dedicated macro concept groups are present, active, and load as
+    concept targets covering the seven macro domains."""
+    targets = load_targets("targets.yaml")
+    categories = {t["category"] for t in targets}
+    assert set(_MACRO_GROUP_KEYS) <= categories
+
+
+def test_targets_yaml_generic_economic_group_removed():
+    """The old generic `economic` group is absorbed by the dedicated macro
+    groups and no longer exists (do not run both)."""
+    cfg = _load_targets_yaml()
+    assert "economic" not in cfg
+
+
+def test_targets_yaml_macro_groups_are_last_in_file_order():
+    """Macro groups occupy the final positions in file order — targets process
+    in file order, so a deadline-limited run sacrifices macro before entity
+    coverage (graceful degradation by construction)."""
+    cfg = _load_targets_yaml()
+    keys = [k for k in cfg if k != "discovery"]
+    assert keys[-len(_MACRO_GROUP_KEYS):] == _MACRO_GROUP_KEYS
+
+
+def test_macro_groups_are_concept_mode():
+    """Each macro group is a concept-mode group (one combined OR query)."""
+    cfg = _load_targets_yaml()
+    for key in _MACRO_GROUP_KEYS:
+        assert cfg[key]["search_mode"] == "concept"
+        assert cfg[key]["active"] is True
+
+
+# ---------------------------------------------------------------------------
 # 5. DISCARD signal
 # ---------------------------------------------------------------------------
 
@@ -4196,9 +4249,12 @@ def test_targets_yaml_regional_queries_have_geographic_anchors():
     assert '"Asia Pacific masterbatch"' in apac
 
 
-def test_targets_yaml_active_concept_targets_grew_by_exactly_three():
+def test_targets_yaml_active_concept_targets_count():
+    """Concept-target count = the #38 baseline (10) + 3 innovation/regional
+    groups, minus the absorbed generic `economic` group, plus the 7 dedicated
+    macro groups."""
     concepts = _concept_targets(_load_real_targets())
-    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3
+    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS)
 
 
 def test_targets_yaml_entity_targets_unchanged():
