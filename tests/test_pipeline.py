@@ -1882,6 +1882,37 @@ def test_macro_section_shares_one_citation_numbering_space():
     assert 'href="https://s/2"' in html
 
 
+def test_section_header_is_full_width_not_squeezed():
+    """Section headers span the full width with an underline — no `nowrap`
+    title cell that a narrow client squeezes into a 3-line wrap."""
+    from delivery_engine import _section_header_row
+    hdr = _section_header_row("Additional Articles to Explore",
+                              title_color="#5a6678", rule_color="#E5E7EB")
+    assert "Additional Articles to Explore" in hdr
+    assert "white-space:nowrap" not in hdr
+    assert "border-bottom:1px solid #E5E7EB" in hdr
+
+
+def test_section_headers_render_without_nowrap():
+    """The rendered email's section titles are not placed in nowrap cells."""
+    macro = _macro_summary_with_outlook()
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="High-impact packaging card for header test"),
+         _make_new_article("w", 5, commercial_segment="Industrial",
+                           headline="Near-threshold industrial reading for appendix here")],
+        macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    for title in ("MACROECONOMIC OUTLOOK", "COMMERCIAL SEGMENT WATCH",
+                  "Additional Articles to Explore"):
+        # Each title sits in a full-width underlined header cell, not a
+        # nowrap+padding-right two-cell layout.
+        i = html.find(title)
+        assert i != -1
+        header_open = html.rfind("<td", 0, i)
+        assert "white-space:nowrap" not in html[header_open:i]
+
+
 def test_macro_section_direction_styling_is_valence_neutral():
     """Direction must not be risk-colored: 'Rising' is adverse for cost-side
     indicators (inflation, energy, freight) but favorable for demand-side ones,
