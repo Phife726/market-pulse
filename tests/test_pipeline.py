@@ -1437,6 +1437,104 @@ def test_below_impact_threshold_unchanged_by_appendix():
 
 
 # ---------------------------------------------------------------------------
+# Additional Articles appendix — rendering (Task 5)
+# ---------------------------------------------------------------------------
+
+_APPENDIX_TITLE = "Additional Articles to Explore"
+
+
+def test_appendix_renders_when_items_present():
+    """The appendix section shows title, linked headline, segment, impact, and
+    source for each row."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging demand firms up")
+    row["source_publication"] = "Plastics News"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE in html
+    assert "Near-threshold packaging demand firms up" in html
+    assert "Packaging" in html
+    assert "Impact: 5/10" in html
+    assert "Plastics News" in html
+    assert 'href="https://news.com/article"' in html
+
+
+def test_appendix_absent_when_empty():
+    """No appendix section renders when there are no additional articles."""
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible high-impact packaging card only")
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert model.additional_articles == ()
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE not in html
+
+
+def test_appendix_shows_date_only_when_published_at():
+    """Publication date renders only from published_at, never a scrape timestamp."""
+    dated = _make_new_article("d", 5, commercial_segment="Packaging",
+                              headline="Dated near-threshold packaging signal here")
+    dated["published_at"] = "2026-07-15T09:00:00+00:00"
+    dated["created_at"] = "2026-07-16T23:59:00+00:00"  # scrape time — must NOT show
+    undated = _make_new_article("u", 5, commercial_segment="Industrial",
+                                headline="Undated near-threshold industrial signal")
+    undated["created_at"] = "2026-07-16T23:59:00+00:00"
+    model = assemble_report([dated, undated], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "Jul 15, 2026" in html          # published_at of the dated row
+    assert "Jul 16, 2026" not in html      # scrape timestamp never displayed
+
+
+def test_appendix_omits_so_what_narrative():
+    """The appendix does not render the americhem_impact 'So what' narrative."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="Near-threshold packaging note for appendix")
+    row["americhem_impact"] = "UNIQUE_SO_WHAT_NARRATIVE_TOKEN"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    assert _appendix_hashes(model) == ["a"]
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _APPENDIX_TITLE in html
+    assert "UNIQUE_SO_WHAT_NARRATIVE_TOKEN" not in html
+
+
+def test_appendix_escapes_untrusted_and_guards_href():
+    """Headline/source are HTML-escaped and a non-http(s) URL is neutralized."""
+    row = _make_new_article("a", 5, commercial_segment="Packaging",
+                            headline="<script>alert('x')</script> resin note")
+    row["source_url"] = "javascript:alert(1)"
+    model = assemble_report([row], config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+    assert 'href="javascript:' not in html
+
+
+def test_appendix_renders_below_segment_watch_above_sources():
+    """Section order: Commercial Segment Watch -> Additional Articles -> Sources."""
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging supply disruption card")
+    weak = _make_new_article("w", 5, commercial_segment="Industrial",
+                             headline="Near-threshold industrial reading for appendix")
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pressure body.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Supply body.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Action body.", "citation_source_ids": []},
+        ],
+        "executive_sources": [
+            {"id": 1, "headline": "Source one", "url": "https://s/1", "domain": "s.com"},
+        ],
+    }
+    model = assemble_report([visible, weak], macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    i_watch = html.find("COMMERCIAL SEGMENT WATCH")
+    i_appendix = html.find(_APPENDIX_TITLE)
+    i_sources = html.find(">Sources<")
+    assert i_watch != -1 and i_appendix != -1 and i_sources != -1
+    assert i_watch < i_appendix < i_sources
+
+
+# ---------------------------------------------------------------------------
 # Uncapped-by-default report: caps are optional knobs (null / absent = no cap)
 # ---------------------------------------------------------------------------
 
