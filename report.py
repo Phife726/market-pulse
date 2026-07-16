@@ -35,7 +35,8 @@ class ReportModel:
     Invariants (guaranteed by assemble_report):
     - variant == "no_news" iff the input rows were empty; suppressed-to-empty
       still yields "daily" (full chrome, zero cards, write-back still owed).
-    - groups values are materiality-descending; per-segment and total caps hold.
+    - groups values are materiality-descending; per-segment and total caps hold
+      when configured (a null / absent cap means show every visible article).
     - surfaced_count == sum(len(arts) for arts in groups.values()).
     - ledger is the complete delivery-side accounting, including the derived
       below_impact_threshold and weak_relevance counts — the write-back
@@ -65,6 +66,22 @@ def _config_int(cfg: dict, key: str, default: int) -> int:
     except (TypeError, ValueError):
         logger.warning("Invalid config value for reporting.%s; using %d", key, default)
         return default
+
+
+def _config_optional_int(cfg: dict, key: str) -> Optional[int]:
+    """Read an optional cap from a config sub-dict.
+
+    Returns None when the key is absent or explicitly null (meaning: no cap).
+    An integer (or int-coercible string) returns that cap. A malformed value
+    warns and falls back to None (uncapped) — a bad cap must not silently
+    shrink the report."""
+    if cfg.get(key) is None:
+        return None
+    try:
+        return int(cfg[key])
+    except (TypeError, ValueError):
+        logger.warning("Invalid config value for reporting.%s; leaving uncapped", key)
+        return None
 
 
 def _matches_any_pattern(haystack: str, patterns: list[str]) -> bool:
@@ -210,9 +227,12 @@ def assemble_report(
             macro_summary=macro_summary,
         )
 
-    reporting_cfg          = config.get("reporting", {}) or {}
-    max_per_segment: int   = _config_int(reporting_cfg, "max_visible_articles_per_segment", 3)
-    max_total_visible: int = _config_int(reporting_cfg, "max_total_visible_articles", 12)
+    reporting_cfg                   = config.get("reporting", {}) or {}
+    # Caps are optional: None (null / absent key) means show every visible
+    # article. An integer re-imposes the cap — a config-only rollback if the
+    # report gets noisy.
+    max_per_segment: Optional[int]  = _config_optional_int(reporting_cfg, "max_visible_articles_per_segment")
+    max_total_visible: Optional[int] = _config_optional_int(reporting_cfg, "max_total_visible_articles")
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
@@ -226,6 +246,7 @@ def assemble_report(
     groups_full = _group_by_commercial_segment(visible_pool)
 
     # 4. Per-segment cap (highest-impact articles first within each group).
+    #    Sort even when uncapped so within-segment order stays materiality-desc.
     groups = {
         seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
         for seg, arts in groups_full.items()
@@ -233,7 +254,7 @@ def assemble_report(
 
     # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
     total = sum(len(arts) for arts in groups.values())
-    if total > max_total_visible:
+    if max_total_visible is not None and total > max_total_visible:
         all_visible = sorted(
             [(seg, a) for seg, arts in groups.items() for a in arts],
             key=lambda kv: _effective_impact(kv[1]),

@@ -1217,6 +1217,118 @@ def test_report_capped_articles_do_not_reappear():
     assert "HC Headline 3" not in html
 
 
+# ---------------------------------------------------------------------------
+# Uncapped-by-default report: caps are optional knobs (null / absent = no cap)
+# ---------------------------------------------------------------------------
+
+_UNCAPPED_HC_HEADLINES = [
+    "Hospital network merger squeezes specialty polymer volumes",
+    "FDA clears new implantable-grade compound for cardiac devices",
+    "Aging population drives record demand for medical-grade resins",
+    "Generic drug expansion pressures premium plastics pricing",
+    "Supply disruption at key resin plant delays surgical kit output",
+]
+
+
+def test_assemble_report_uncapped_per_segment_when_null():
+    """With max_visible_articles_per_segment: null, every visible article in a
+    segment survives — no per-segment drop."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=10 - i,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": None,
+            "max_total_visible_articles": None,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert len(model.groups["Healthcare"]) == 5
+    assert model.surfaced_count == 5
+
+
+def test_assemble_report_uncapped_total_when_null():
+    """With max_total_visible_articles: null, all visible articles across
+    segments survive — no total drop."""
+    # 14 genuinely distinct headlines (semantic-duplicate suppression fires at
+    # token_sort_ratio >= 88, so near-identical headlines would collapse).
+    specs = [
+        ("Healthcare", "Hospital merger reshapes specialty polymer procurement"),
+        ("Healthcare", "FDA clears implantable-grade compound for cardiac devices"),
+        ("Fibers", "Nonwoven hygiene demand lifts polypropylene fiber orders"),
+        ("Fibers", "Carpet mill restart tightens solution-dyed yarn supply"),
+        ("Packaging", "Brand owners accelerate recyclable flexible film pledges"),
+        ("Packaging", "Food-contact resin shortage delays beverage closures"),
+        ("Industrial", "Wire-and-cable buildout drives jacketing compound volumes"),
+        ("Industrial", "Agricultural film season opens with firmer additive pricing"),
+        ("Transportation - Automotive", "EV interior programs shift to flame-retardant grades"),
+        ("Transportation - Automotive", "Tier-one supplier books record under-hood resin demand"),
+        ("Transportation - Aerospace", "Rotorcraft OEM qualifies new flame-rated cabin polymer"),
+        ("Transportation - Aerospace", "Defense procurement lifts high-temperature composite orders"),
+        ("Engineered Resins", "PEEK capacity expansion eases medical-device lead times"),
+        ("Engineered Resins", "Glass-filled nylon pricing climbs on feedstock tightness"),
+    ]
+    articles = [
+        _make_new_article(
+            f"u{i}", americhem_impact_score=8,
+            commercial_segment=seg, headline=headline,
+        )
+        for i, (seg, headline) in enumerate(specs)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": None,
+            "max_total_visible_articles": None,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert model.surfaced_count == 14
+
+
+def test_assemble_report_uncapped_by_default():
+    """Built-in defaults (config=None) impose no caps: all 5 visible articles
+    in one segment survive."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=8,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    model = assemble_report(articles, config=None)
+    assert len(model.groups["Healthcare"]) == 5
+
+
+def test_assemble_report_integer_cap_still_enforced():
+    """An integer cap in config still caps — the knob is retained for rollback."""
+    articles = [
+        _make_new_article(
+            f"h{i}", americhem_impact_score=10 - i,
+            commercial_segment="Healthcare",
+            headline=_UNCAPPED_HC_HEADLINES[i],
+        )
+        for i in range(5)
+    ]
+    config = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "max_visible_articles_per_segment": 3,
+            "max_total_visible_articles": 12,
+        }
+    }
+    model = assemble_report(articles, config=config)
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["h0", "h1", "h2"]
+    assert model.surfaced_count == 3
+
+
 # ===========================================================================
 # Negative moderate-impact: impact score drives filtering, not sentiment tone
 # ===========================================================================
