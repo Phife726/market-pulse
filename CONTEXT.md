@@ -51,7 +51,18 @@ pure functions differently, not by injection.
   **alert tiers** (CRITICAL ≤3 / STRATEGIC ≥8 / ROUTINE). All live in `scoring.py`
   (`Scoring.from_config`, `tier`, `is_legacy_critical`).
 - **Macro summary** — the once-per-run brief (`dominant_condition` +
-  `executive_bullets`) written to `daily_summaries`.
+  `executive_bullets` + `macro_outlook`) written to `daily_summaries`.
+- **Macroeconomic Outlook** (`macro_outlook`) — the structured macro read:
+  `{current_condition, signals:[{indicator, direction, americhem_implication,
+  affected_segments, citation_source_ids}]}`. Validated at ingestion by
+  `_validate_macro_outlook`: every signal needs a valid `direction`
+  (`prompts.VALID_MACRO_DIRECTIONS`), canonical `affected_segments`
+  (`insight.VALID_COMMERCIAL_SEGMENTS`), and **at least one valid citation**
+  (the materiality gate — an uncitable signal is dropped; no surviving signal
+  → `null`). Carried on `ReportModel.macro_outlook`, rendered between the
+  executive summary and Commercial Segment Watch. Its citations share one
+  numbering space with the executive bullets, and `executive_sources` is the
+  **union** of bullet- and signal-cited sources.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
 - **Additional Articles to Explore** — the optional-discovery appendix
@@ -66,6 +77,7 @@ pure functions differently, not by injection.
   plain frozen data: `variant` (`daily` / `no_news`), the final segment groups
   (capped only when configured; caps default to `null` = uncapped),
   `additional_articles` (the optional-discovery appendix — see below),
+  `macro_outlook` (the renderable Macroeconomic Outlook, or `None`),
   `surfaced_count` / `screened_count`, the delivery-side suppression
   ledger (including the derived `below_impact_threshold` and `weak_relevance`
   counts), the raw macro-summary row, and the thematic synthesis paragraphs.
