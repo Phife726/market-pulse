@@ -1882,6 +1882,39 @@ def test_macro_section_shares_one_citation_numbering_space():
     assert 'href="https://s/2"' in html
 
 
+def test_macro_section_direction_styling_is_valence_neutral():
+    """Direction must not be risk-colored: 'Rising' is adverse for cost-side
+    indicators (inflation, energy, freight) but favorable for demand-side ones,
+    and the signal carries no good/bad field — so green/red would invert the
+    risk on cost rows. Valence lives in the implication text, not the color."""
+    macro = {
+        "macro_outlook": {
+            "current_condition": "Input costs climbing while demand holds.",
+            "signals": [
+                {"indicator": "Producer prices", "direction": "Rising",
+                 "americhem_implication": "Margin pressure through resin, energy, and freight costs.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in building-products volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 1, "headline": "PPI climbs", "url": "https://s/1", "domain": "s.com"},
+        ],
+    }
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging", sentiment_tag="Neutral",
+                           headline="Neutral-tag packaging card beside the outlook")],
+        macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    macro_section = html[html.find(_MACRO_TITLE):html.find("COMMERCIAL SEGMENT WATCH")]
+    # No sentiment green/red inside the macro section — direction is neutral.
+    assert "#16A34A" not in macro_section    # green (would imply Rising = good)
+    assert "#DC2626" not in macro_section    # red (would imply Declining = bad)
+    assert "Rising" in macro_section and "Declining" in macro_section
+
+
 def test_macro_section_escapes_untrusted_text():
     macro = _macro_summary_with_outlook()
     macro["macro_outlook"]["signals"][0]["americhem_implication"] = "<script>alert('x')</script> risk"

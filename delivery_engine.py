@@ -717,11 +717,11 @@ def _macro_outlook_signals(macro_summary: dict | None) -> list:
     return []
 
 
-_MACRO_DIRECTION_COLORS: dict[str, str] = {
-    "Rising":    "#16A34A",
-    "Stable":    "#6B7280",
-    "Declining": "#DC2626",
-}
+# Direction is factual, not valenced: "Rising" is adverse for cost-side
+# indicators (inflation, energy, freight) but favorable for demand-side ones,
+# and the signal carries no good/bad field. So direction is styled neutrally —
+# the Americhem good/bad reading lives in the implication text, never the color.
+_MACRO_DIRECTION_COLOR = "#475569"
 
 
 def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dict | None) -> str:
@@ -751,7 +751,7 @@ def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dic
         implication = html.escape(sig.get("americhem_implication") or "")
         segments = ", ".join(html.escape(str(s)) for s in (sig.get("affected_segments") or []))
         marker = _render_citation_marker(sig.get("citation_source_ids"), src_by_id, display_map)
-        dir_color = _MACRO_DIRECTION_COLORS.get(sig.get("direction"), "#6B7280")
+        dir_color = _MACRO_DIRECTION_COLOR
         seg_html = (
             f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>{segments}'
             if segments else ""
