@@ -1661,6 +1661,54 @@ def test_below_impact_threshold_unchanged_by_appendix():
 
 
 # ---------------------------------------------------------------------------
+# Macro outlook carried through the report model (PR 2, Task 10)
+# ---------------------------------------------------------------------------
+
+_VALID_MACRO_OUTLOOK = {
+    "current_condition": "Industrial demand softening as construction cools.",
+    "signals": [
+        {"indicator": "Manufacturing PMI", "direction": "Declining",
+         "americhem_implication": "Downside risk for engineered-resin demand.",
+         "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+    ],
+}
+
+
+def test_report_model_carries_macro_outlook():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card to make a daily model")
+    macro = {"dominant_condition": "Demand Softness", "macro_outlook": _VALID_MACRO_OUTLOOK}
+    model = assemble_report([row], macro_summary=macro, config=_APPENDIX_CFG)
+    assert model.macro_outlook == _VALID_MACRO_OUTLOOK
+
+
+def test_report_model_macro_outlook_none_when_absent():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card with no macro outlook")
+    model = assemble_report([row], macro_summary={"dominant_condition": "Mixed / Watch"},
+                            config=_APPENDIX_CFG)
+    assert model.macro_outlook is None
+
+
+def test_report_model_macro_outlook_none_when_malformed():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card with malformed outlook")
+    for bad in ({}, {"current_condition": "x", "signals": []},
+                {"current_condition": "  ", "signals": [{"indicator": "PMI"}]},
+                {"signals": [{"indicator": "PMI"}]}, "nope", None):
+        model = assemble_report([row], macro_summary={"macro_outlook": bad},
+                                config=_APPENDIX_CFG)
+        assert model.macro_outlook is None, bad
+
+
+def test_report_model_no_news_macro_outlook_none():
+    model = assemble_report([], macro_summary={"macro_outlook": _VALID_MACRO_OUTLOOK},
+                            config=_APPENDIX_CFG)
+    assert model.variant == "no_news"
+    assert model.macro_outlook is None
+
+
+# ---------------------------------------------------------------------------
 # Additional Articles appendix — rendering (Task 5)
 # ---------------------------------------------------------------------------
 

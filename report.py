@@ -53,6 +53,9 @@ class ReportModel:
     # Optional-discovery appendix: suppression-surviving score-4/5 rows not
     # shown as visible cards. Never counted in surfaced_count. Empty on no_news.
     additional_articles: tuple[dict, ...] = ()
+    # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
+    # non-empty current_condition and >=1 signal, else None. None on no_news.
+    macro_outlook: Optional[dict] = None
 
     def synthesis_candidates(self) -> dict[str, list[dict]]:
         """Final capped groups with 2+ Insights — the only legal input to
@@ -280,6 +283,24 @@ def _resolve_screened_count(macro_summary: Optional[dict], rows: list[dict]) -> 
     return len(rows) if screened is None else screened
 
 
+def _extract_macro_outlook(macro_summary: Optional[dict]) -> Optional[dict]:
+    """Pull a renderable macro_outlook out of the macro-summary row: a dict with
+    a non-empty current_condition and at least one signal. Anything else
+    (missing, None, malformed, empty signals) becomes None, so the renderer
+    shows no section. Signal *contents* were validated at ingestion
+    (_validate_macro_outlook); this is the defensive read of a stored row."""
+    outlook = (macro_summary or {}).get("macro_outlook")
+    if not isinstance(outlook, dict):
+        return None
+    current = outlook.get("current_condition")
+    signals = outlook.get("signals")
+    if not isinstance(current, str) or not current.strip():
+        return None
+    if not isinstance(signals, list) or not signals:
+        return None
+    return outlook
+
+
 def assemble_report(
     rows: list[dict],
     macro_summary: Optional[dict] = None,
@@ -376,4 +397,5 @@ def assemble_report(
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
+        macro_outlook=_extract_macro_outlook(macro_summary),
     )
