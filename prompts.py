@@ -48,7 +48,17 @@ EXEC_BULLET_LABELS: tuple[str, ...] = (
     "Market pressure", "Supply chain watch", "Commercial action",
 )
 
+# Macro-outlook signal direction — a small validated enum (same one-definition
+# discipline as VALID_MACRO_CONDITIONS: the prompt promises exactly these and
+# the macro-outlook validator enforces exactly these).
+VALID_MACRO_DIRECTIONS: frozenset[str] = frozenset({"Rising", "Stable", "Declining"})
+
 MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
+# Of those pack slots, reserve up to this many for signal_type == "Macro" rows,
+# which tend to score mid-range on materiality and would otherwise be crowded
+# out of the citable pack on heavy news days — starving the macro outlook.
+MACRO_OUTLOOK_SOURCE_PACK_QUOTA = 10
+MAX_MACRO_OUTLOOK_SIGNALS = 6
 MAX_EXECUTIVE_BULLET_CITATIONS = 3
 
 
@@ -297,22 +307,34 @@ def _source_domain(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _macro_sort_key(a: dict):
+    """Deterministic macro ranking key: materiality desc, headline asc, hash asc.
+    created_at is NOT used — the in-memory stored-articles buffer does not carry
+    it — but the key is still fully deterministic."""
+    return (
+        -insight.effective_impact(a),
+        a.get("headline", "") or "",
+        a.get("url_hash", "") or "",
+    )
+
+
 def _rank_macro_articles(articles: list[dict]) -> list[dict]:
     """Deterministic, capped ordering of citable articles.
 
-    Sort key: materiality desc, headline asc, url_hash asc. created_at is NOT
-    used — the in-memory stored-articles buffer does not carry it — but the key
-    is still fully deterministic, so the same article set always ranks the same.
-    """
-    ordered = sorted(
-        articles,
-        key=lambda a: (
-            -insight.effective_impact(a),
-            a.get("headline", "") or "",
-            a.get("url_hash", "") or "",
-        ),
-    )
-    return ordered[:MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES]
+    Ranks by _macro_sort_key and caps at MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES,
+    but first RESERVES up to MACRO_OUTLOOK_SOURCE_PACK_QUOTA slots for
+    signal_type == "Macro" rows so the macro outlook always has something to
+    cite; the remaining slots are filled from the overall ranking. The final
+    list is re-sorted by the same key, so the digest and source-pack ids still
+    come from one enumeration in materiality order."""
+    ordered = sorted(articles, key=_macro_sort_key)
+
+    reserved = [a for a in ordered if insight.signal_type(a) == "Macro"][:MACRO_OUTLOOK_SOURCE_PACK_QUOTA]
+    reserved_ids = {id(a) for a in reserved}
+    remaining = MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES - len(reserved)
+    fill = [a for a in ordered if id(a) not in reserved_ids][:remaining]
+
+    return sorted(reserved + fill, key=_macro_sort_key)
 
 
 def _build_macro_source_pack(ranked_articles: list[dict]) -> list[dict]:
@@ -354,12 +376,13 @@ def macro_prompt(articles: list[dict]) -> MacroPrompt:
     )
 
     macro_conditions_text = ", ".join(sorted(VALID_MACRO_CONDITIONS))
+    macro_directions_text = " | ".join(sorted(VALID_MACRO_DIRECTIONS))
     label_a, label_b, label_c = EXEC_BULLET_LABELS
 
     system = (
         f"OUTPUT LANGUAGE:\n{ENGLISH_OUTPUT_RULE}\n\n"
         "You are a senior Americhem commercial intelligence analyst writing the morning brief\n"
-        "for GMMs and Sales leaders. Output ONLY a JSON object with two keys.\n\n"
+        "for GMMs and Sales leaders. Output ONLY a JSON object with three keys.\n\n"
         "1. dominant_condition — pick exactly one value from this list that best describes\n"
         "   today's overall commercial weather across the digest:\n"
         f"     {macro_conditions_text}\n\n"
@@ -377,7 +400,27 @@ def macro_prompt(articles: list[dict]) -> MacroPrompt:
         '   Low-signal special case:\n'
         '   If dominant_condition is "Low Signal", the Commercial action body MUST be the\n'
         '   literal string "No action required." with citation_source_ids []. The other two\n'
-        '   bullets MUST describe the absence of meaningful signal.'
+        '   bullets MUST describe the absence of meaningful signal.\n\n'
+        "3. macro_outlook — a structured read of MATERIAL macro/economic signals and their\n"
+        "   Americhem implications. An object with two keys:\n"
+        '     "current_condition": "<one concise sentence on overall macro conditions>",\n'
+        f'     "signals": [ zero or more objects (use [] when no material signal exists), up to {MAX_MACRO_OUTLOOK_SIGNALS}, each:\n'
+        '        {\n'
+        '          "indicator": "<the macro indicator, e.g. Manufacturing PMI>",\n'
+        f'          "direction": "<exactly one of: {macro_directions_text}>",\n'
+        '          "americhem_implication": "<the operational so-what for Americhem: a demand,\n'
+        '             cost, capacity, margin, or segment effect — NEVER restate the indicator>",\n'
+        f'          "affected_segments": ["<one or more EXACT labels from: {_FALLBACK_COMMERCIAL_SEGMENT_LIST}>"],\n'
+        '          "citation_source_ids": [<source numbers from the digest>]\n'
+        '        }\n'
+        '     ]\n'
+        '   A signal is MATERIAL only if it implies a demand inflection, cost/margin pressure,\n'
+        '   capacity/investment constraint, credit/liquidity pressure, logistics/feedstock\n'
+        '   disruption, or a contradiction to the current commercial outlook. EXCLUDE generic\n'
+        '   economic commentary (a GDP or inflation mention with no defensible Americhem\n'
+        '   implication).\n'
+        '   Every signal MUST cite at least one digest source id that supports it; OMIT any\n'
+        '   signal you cannot cite. Use ONLY source numbers that appear in the digest.'
     )
 
     user = (
