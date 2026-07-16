@@ -228,6 +228,59 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Dedicated macroeconomic discovery targets (PR 2, Task 7)
+# ---------------------------------------------------------------------------
+
+_MACRO_GROUP_KEYS = [
+    "macro_manufacturing",
+    "macro_construction",
+    "macro_automotive",
+    "macro_consumer_demand",
+    "macro_inflation_rates",
+    "macro_energy_freight",
+    "macro_business_investment",
+]
+
+
+def _load_targets_yaml() -> dict:
+    import yaml
+    with open("targets.yaml") as fh:
+        return yaml.safe_load(fh)
+
+
+def test_targets_yaml_has_active_macro_concept_groups():
+    """The dedicated macro concept groups are present, active, and load as
+    concept targets covering the seven macro domains."""
+    targets = load_targets("targets.yaml")
+    categories = {t["category"] for t in targets}
+    assert set(_MACRO_GROUP_KEYS) <= categories
+
+
+def test_targets_yaml_generic_economic_group_removed():
+    """The old generic `economic` group is absorbed by the dedicated macro
+    groups and no longer exists (do not run both)."""
+    cfg = _load_targets_yaml()
+    assert "economic" not in cfg
+
+
+def test_targets_yaml_macro_groups_are_last_in_file_order():
+    """Macro groups occupy the final positions in file order — targets process
+    in file order, so a deadline-limited run sacrifices macro before entity
+    coverage (graceful degradation by construction)."""
+    cfg = _load_targets_yaml()
+    keys = [k for k in cfg if k != "discovery"]
+    assert keys[-len(_MACRO_GROUP_KEYS):] == _MACRO_GROUP_KEYS
+
+
+def test_macro_groups_are_concept_mode():
+    """Each macro group is a concept-mode group (one combined OR query)."""
+    cfg = _load_targets_yaml()
+    for key in _MACRO_GROUP_KEYS:
+        assert cfg[key]["search_mode"] == "concept"
+        assert cfg[key]["active"] is True
+
+
+# ---------------------------------------------------------------------------
 # 5. DISCARD signal
 # ---------------------------------------------------------------------------
 
@@ -606,6 +659,249 @@ def test_generate_macro_summary_empty_articles():
     """Should return False immediately when no articles are provided."""
     result = generate_macro_summary([])
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Macro-outlook validation + persistence (PR 2, Task 9)
+# ---------------------------------------------------------------------------
+
+from ingestion_engine import _validate_macro_outlook
+
+_MACRO_VALID_IDS = frozenset({1, 2, 3})
+
+
+def _macro_signal(**over) -> dict:
+    sig = {
+        "indicator": "Manufacturing PMI",
+        "direction": "Declining",
+        "americhem_implication": "Downside risk for industrial resin demand.",
+        "affected_segments": ["Industrial"],
+        "citation_source_ids": [1],
+    }
+    sig.update(over)
+    return sig
+
+
+def _macro_outlook(**over) -> dict:
+    out = {"current_condition": "Manufacturing demand mixed.", "signals": [_macro_signal()]}
+    out.update(over)
+    return out
+
+
+def test_validate_macro_outlook_accepts_material_signal():
+    result = _validate_macro_outlook(_macro_outlook(), _MACRO_VALID_IDS)
+    assert result is not None
+    assert result["current_condition"] == "Manufacturing demand mixed."
+    assert len(result["signals"]) == 1
+    assert result["signals"][0]["direction"] == "Declining"
+    assert result["signals"][0]["affected_segments"] == ["Industrial"]
+    assert result["signals"][0]["citation_source_ids"] == [1]
+
+
+def test_validate_macro_outlook_empty_signals_is_none():
+    assert _validate_macro_outlook(_macro_outlook(signals=[]), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_non_dict_is_none():
+    assert _validate_macro_outlook(None, _MACRO_VALID_IDS) is None
+    assert _validate_macro_outlook("nope", _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_blank_current_condition_is_none():
+    assert _validate_macro_outlook(_macro_outlook(current_condition="  "), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_drops_signal_without_citation():
+    """Materiality gate: an uncitable signal is dropped; a lone uncitable signal
+    yields no section."""
+    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_drops_signal_with_only_invalid_citations():
+    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[99])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_invalid_direction():
+    out = _macro_outlook(signals=[_macro_signal(direction="Sideways")])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_invalid_segment():
+    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Building & Construction"])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_rejects_blank_fields():
+    assert _validate_macro_outlook(
+        _macro_outlook(signals=[_macro_signal(indicator="  ")]), _MACRO_VALID_IDS) is None
+    assert _validate_macro_outlook(
+        _macro_outlook(signals=[_macro_signal(americhem_implication="")]), _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_keeps_only_valid_signals():
+    """A mix of valid + invalid signals keeps only the valid ones."""
+    out = _macro_outlook(signals=[
+        _macro_signal(indicator="Manufacturing PMI"),
+        _macro_signal(direction="Sideways"),                       # bad direction
+        _macro_signal(indicator="Construction starts", citation_source_ids=[2]),
+    ])
+    result = _validate_macro_outlook(out, _MACRO_VALID_IDS)
+    assert [s["indicator"] for s in result["signals"]] == ["Manufacturing PMI", "Construction starts"]
+
+
+def _macro_articles() -> list[dict]:
+    return [
+        {"category": "macro_manufacturing", "headline": "Manufacturing PMI slips into contraction",
+         "americhem_impact_score": 9, "americhem_impact": "Industrial demand softening.",
+         "signal_type": "Macro", "url_hash": "m1", "source_url": "https://x/1"},
+        {"category": "macro_construction", "headline": "Housing starts fall for third month",
+         "americhem_impact_score": 8, "americhem_impact": "Building products demand risk.",
+         "signal_type": "Macro", "url_hash": "m2", "source_url": "https://x/2"},
+        {"category": "competitors", "headline": "Competitor opens new compounding line",
+         "americhem_impact_score": 7, "americhem_impact": "Capacity pressure.",
+         "signal_type": "Competitive", "url_hash": "c1", "source_url": "https://x/3"},
+    ]
+
+
+def test_generate_macro_summary_persists_macro_outlook_and_union_sources():
+    """generate_macro_summary validates + persists macro_outlook and packs
+    executive_sources as the UNION of bullet-cited and signal-cited sources."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Demand Softness",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {
+            "current_condition": "Industrial and construction demand both softening.",
+            "signals": [
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in Building & Construction-adjacent volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [2]},
+            ],
+        },
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+
+    assert result is True
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is not None
+    assert [s["indicator"] for s in stored["macro_outlook"]["signals"]] == ["Housing starts"]
+    # executive_sources is the union of bullet-cited (1) and signal-cited (2).
+    assert {s["id"] for s in stored["executive_sources"]} == {1, 2}
+
+
+def test_generate_macro_summary_llm_none_degrades_without_crash():
+    """An LLM transport failure (None) yields False — no macro row, no crash —
+    exactly as the pre-macro-outlook behavior."""
+    fake = FakeLLM(returns=None)
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+    assert result is False
+    assert fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01") is None
+
+
+def test_generate_macro_summary_malformed_outlook_keeps_bullets():
+    """A malformed macro_outlook key degrades to None while the executive
+    bullets survive — per-key validation, one call, independent failure."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial steady.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage.", "citation_source_ids": []},
+        ],
+        "macro_outlook": "totally not an object",
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(_macro_articles())
+    assert result is True
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is None
+    assert stored["executive_bullets"] is not None
+    assert len(stored["executive_bullets"]) == 3
+
+
+def test_macro_outlook_cites_card_suppressed_article():
+    """A macro article suppressed as a card (generic-market-report title, no
+    entities) can still be cited by the outlook — the outlook renders from the
+    summary row, independent of card visibility."""
+    suppressed = _make_new_article("supp", 8, commercial_segment="Industrial",
+                                   headline="Global polymer market outlook to reach $50 billion")
+    suppressed["entities_mentioned"] = []
+    visible = _make_new_article("vis", 8, commercial_segment="Packaging",
+                                headline="Packaging supply disruption raises converter costs")
+    macro = {
+        "macro_outlook": {
+            "current_condition": "Industrial demand softening.",
+            "signals": [
+                {"indicator": "Manufacturing PMI", "direction": "Declining",
+                 "americhem_implication": "Downside risk for industrial compound demand.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [7]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 7, "headline": "Global polymer market outlook report",
+             "url": "https://s/7", "domain": "m.com"},
+        ],
+    }
+    config = {
+        "reporting": {"visible_impact_threshold": 6},
+        "delivery_suppression": {"title_patterns_generic_market_report": ["market outlook", "to reach $"]},
+    }
+    model = assemble_report([suppressed, visible], macro_summary=macro, config=config)
+    card_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert "supp" not in card_hashes                      # suppressed as a card
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE in html                           # outlook still renders
+    assert "Global polymer market outlook report" in html  # cited in Sources footer
+
+
+def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
+    """Delivery's fetch_macro_summary returns the row verbatim, so macro_outlook
+    (incl. the test-mode production-row fallback) is carried along for free."""
+    import delivery_engine
+    from datetime import date
+    fake_repo = InMemoryIntelligenceRepo()
+    fake_repo.upsert_summary({
+        "run_date": date.today().isoformat(),
+        "run_mode": "production",
+        "executive_summary": "x", "macro_sentiment": "Mixed / Watch",
+        "macro_outlook": _VALID_MACRO_OUTLOOK,
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    summary = delivery_engine.fetch_macro_summary()
+    assert summary["macro_outlook"] == _VALID_MACRO_OUTLOOK
+
+
+def test_generate_macro_summary_persists_none_when_no_material_signal():
+    """When macro_outlook has no material signal, None is persisted (no section)."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Steady.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Steady.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {"current_condition": "Quiet.", "signals": []},
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        generate_macro_summary(_macro_articles())
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["macro_outlook"] is None
 
 
 
@@ -1450,6 +1746,185 @@ def test_below_impact_threshold_unchanged_by_appendix():
     assert model.ledger.breakdown["below_impact_threshold"] == 3
     # Two of them are surfaced in the appendix — that overlap is intentional.
     assert len(model.additional_articles) == 2
+
+
+# ---------------------------------------------------------------------------
+# Macro outlook carried through the report model (PR 2, Task 10)
+# ---------------------------------------------------------------------------
+
+_VALID_MACRO_OUTLOOK = {
+    "current_condition": "Industrial demand softening as construction cools.",
+    "signals": [
+        {"indicator": "Manufacturing PMI", "direction": "Declining",
+         "americhem_implication": "Downside risk for engineered-resin demand.",
+         "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+    ],
+}
+
+
+def test_report_model_carries_macro_outlook():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card to make a daily model")
+    macro = {"dominant_condition": "Demand Softness", "macro_outlook": _VALID_MACRO_OUTLOOK}
+    model = assemble_report([row], macro_summary=macro, config=_APPENDIX_CFG)
+    assert model.macro_outlook == _VALID_MACRO_OUTLOOK
+
+
+def test_report_model_macro_outlook_none_when_absent():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card with no macro outlook")
+    model = assemble_report([row], macro_summary={"dominant_condition": "Mixed / Watch"},
+                            config=_APPENDIX_CFG)
+    assert model.macro_outlook is None
+
+
+def test_report_model_macro_outlook_none_when_malformed():
+    row = _make_new_article("v", 8, commercial_segment="Packaging",
+                            headline="Visible packaging card with malformed outlook")
+    for bad in ({}, {"current_condition": "x", "signals": []},
+                {"current_condition": "  ", "signals": [{"indicator": "PMI"}]},
+                {"signals": [{"indicator": "PMI"}]}, "nope", None):
+        model = assemble_report([row], macro_summary={"macro_outlook": bad},
+                                config=_APPENDIX_CFG)
+        assert model.macro_outlook is None, bad
+
+
+def test_report_model_no_news_macro_outlook_none():
+    model = assemble_report([], macro_summary={"macro_outlook": _VALID_MACRO_OUTLOOK},
+                            config=_APPENDIX_CFG)
+    assert model.variant == "no_news"
+    assert model.macro_outlook is None
+
+
+# ---------------------------------------------------------------------------
+# Macroeconomic Outlook — rendering (PR 2, Task 11)
+# ---------------------------------------------------------------------------
+
+_MACRO_TITLE = "MACROECONOMIC OUTLOOK"
+
+
+def _macro_summary_with_outlook() -> dict:
+    return {
+        "dominant_condition": "Demand Softness",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {
+            "current_condition": "Industrial and construction demand both softening.",
+            "signals": [
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in building-products volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [2]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 1, "headline": "Industrial PMI slips", "url": "https://s/1", "domain": "s.com"},
+            {"id": 2, "headline": "Housing starts fall", "url": "https://s/2", "domain": "t.com"},
+        ],
+    }
+
+
+def test_macro_section_renders_between_exec_and_segment_watch():
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging supply disruption card")
+    model = assemble_report([visible], macro_summary=_macro_summary_with_outlook(),
+                            config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE in html
+    assert "Industrial and construction demand both softening." in html
+    assert "Housing starts" in html
+    assert "Declining" in html
+    assert "Weakness in building-products volumes." in html
+    assert "Industrial" in html
+    i_exec = html.find("Executive Summary")
+    i_macro = html.find(_MACRO_TITLE)
+    i_watch = html.find("COMMERCIAL SEGMENT WATCH")
+    assert i_exec != -1 and i_macro != -1 and i_watch != -1
+    assert i_exec < i_macro < i_watch
+
+
+def test_macro_section_absent_when_none():
+    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+                                headline="High-impact packaging card with no outlook")
+    model = assemble_report([visible], macro_summary={"dominant_condition": "Mixed / Watch"},
+                            config=_APPENDIX_CFG)
+    assert model.macro_outlook is None
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _MACRO_TITLE not in html
+
+
+def test_macro_section_current_condition_rendered_once():
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card to accompany the macro outlook")],
+        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert html.count("Industrial and construction demand both softening.") == 1
+
+
+def test_macro_section_shares_one_citation_numbering_space():
+    """Bullets cite source 1, the macro signal cites source 2: the exec summary
+    shows [1], the macro section shows [2], and the single Sources footer lists
+    both — one numbering space (bullets enumerated, then signals)."""
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card next to the macro outlook here")],
+        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    # Both cited sources resolve in the bottom Sources list.
+    assert "Industrial PMI slips" in html
+    assert "Housing starts fall" in html
+    # Footer numbering covers both ids.
+    assert "[1]" in html and "[2]" in html
+    # The macro signal's marker links to source 2's url.
+    assert 'href="https://s/2"' in html
+
+
+def test_macro_section_direction_styling_is_valence_neutral():
+    """Direction must not be risk-colored: 'Rising' is adverse for cost-side
+    indicators (inflation, energy, freight) but favorable for demand-side ones,
+    and the signal carries no good/bad field — so green/red would invert the
+    risk on cost rows. Valence lives in the implication text, not the color."""
+    macro = {
+        "macro_outlook": {
+            "current_condition": "Input costs climbing while demand holds.",
+            "signals": [
+                {"indicator": "Producer prices", "direction": "Rising",
+                 "americhem_implication": "Margin pressure through resin, energy, and freight costs.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+                {"indicator": "Housing starts", "direction": "Declining",
+                 "americhem_implication": "Weakness in building-products volumes.",
+                 "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+            ],
+        },
+        "executive_sources": [
+            {"id": 1, "headline": "PPI climbs", "url": "https://s/1", "domain": "s.com"},
+        ],
+    }
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging", sentiment_tag="Neutral",
+                           headline="Neutral-tag packaging card beside the outlook")],
+        macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    macro_section = html[html.find(_MACRO_TITLE):html.find("COMMERCIAL SEGMENT WATCH")]
+    # No sentiment green/red inside the macro section — direction is neutral.
+    assert "#16A34A" not in macro_section    # green (would imply Rising = good)
+    assert "#DC2626" not in macro_section    # red (would imply Declining = bad)
+    assert "Rising" in macro_section and "Declining" in macro_section
+
+
+def test_macro_section_escapes_untrusted_text():
+    macro = _macro_summary_with_outlook()
+    macro["macro_outlook"]["signals"][0]["americhem_implication"] = "<script>alert('x')</script> risk"
+    model = assemble_report(
+        [_make_new_article("v", 8, commercial_segment="Packaging",
+                           headline="Packaging card with an XSS-y macro outlook")],
+        macro_summary=macro, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
 
 
 # ---------------------------------------------------------------------------
@@ -4196,9 +4671,12 @@ def test_targets_yaml_regional_queries_have_geographic_anchors():
     assert '"Asia Pacific masterbatch"' in apac
 
 
-def test_targets_yaml_active_concept_targets_grew_by_exactly_three():
+def test_targets_yaml_active_concept_targets_count():
+    """Concept-target count = the #38 baseline (10) + 3 innovation/regional
+    groups, minus the absorbed generic `economic` group, plus the 7 dedicated
+    macro groups."""
     concepts = _concept_targets(_load_real_targets())
-    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3
+    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS)
 
 
 def test_targets_yaml_entity_targets_unchanged():

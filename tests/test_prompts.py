@@ -232,6 +232,67 @@ def test_source_pack_entry_shape_and_domain():
 
 
 # ---------------------------------------------------------------------------
+# Macro prompt — macro-outlook contract (PR 2)
+# ---------------------------------------------------------------------------
+
+def test_macro_outlook_direction_enum_defined_and_promised():
+    """VALID_MACRO_DIRECTIONS is a small enum owned in prompts.py, and every
+    value appears literally in the macro system prompt."""
+    assert prompts.VALID_MACRO_DIRECTIONS == frozenset({"Rising", "Stable", "Declining"})
+    system = prompts.macro_prompt([_article("A")]).system
+    for direction in prompts.VALID_MACRO_DIRECTIONS:
+        assert direction in system
+
+
+def test_macro_outlook_promises_canonical_segment_labels():
+    """affected_segments must use the canonical commercial-segment labels — the
+    transportation labels in full, and NOT informal variants."""
+    system = prompts.macro_prompt([_article("A")]).system
+    assert "Transportation - Automotive" in system
+    assert "Transportation - Non-Automotive" in system
+    assert "Transportation - Aerospace" in system
+    assert "Enterprise / Cross-Segment" in system
+    # Informal variants that would fail insight.VALID_COMMERCIAL_SEGMENTS.
+    assert "Building & Construction" not in system
+
+
+def test_macro_outlook_requires_citation_and_materiality():
+    """The macro_outlook contract requires at least one citation per signal and
+    excludes generic commentary without an Americhem implication."""
+    system = prompts.macro_prompt([_article("A")]).system
+    assert "macro_outlook" in system
+    assert "current_condition" in system
+    assert "affected_segments" in system
+    assert "americhem_implication" in system
+    # Citation-mandatory + materiality language (structural, not just prose).
+    assert "at least one" in system.lower()
+    assert "citation_source_ids" in system
+    # The JSON example must show single braces (no unrendered f-string doubles).
+    assert "{{" not in system and "}}" not in system
+
+
+def test_rank_macro_articles_reserves_quota_for_macro_signals():
+    """Low-materiality Macro-signal rows survive into the source pack even when
+    40+ higher-materiality non-macro rows would otherwise crowd them out."""
+    non_macro = [
+        _article(f"NM{i:02d}", score=9, url_hash=f"h{i:02d}", category="competitors")
+        for i in range(40)
+    ]
+    for a in non_macro:
+        a["signal_type"] = "Competitive"
+    macro = [
+        {**_article(f"MACRO{i}", score=2, url_hash=f"m{i}", category="macro_manufacturing"),
+         "signal_type": "Macro"}
+        for i in range(3)
+    ]
+    mp = prompts.macro_prompt(non_macro + macro)
+    pack_headlines = {s["headline"] for s in mp.source_pack}
+    assert len(mp.source_pack) == prompts.MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES
+    for i in range(3):
+        assert f"MACRO{i}" in pack_headlines
+
+
+# ---------------------------------------------------------------------------
 # Thematic prompt — grouped-text serialization
 # ---------------------------------------------------------------------------
 

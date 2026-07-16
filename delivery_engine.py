@@ -581,18 +581,27 @@ def _safe_http_url(url: Optional[str]) -> str:
     return url if scheme in ("http", "https") else ""
 
 
-def _citation_display_map(bullets: list[dict], sources: Optional[list[dict]]) -> dict[int, int]:
+def _citation_display_map(bullets: list[dict], sources: Optional[list[dict]],
+                          signals: Optional[list[dict]] = None) -> dict[int, int]:
     """Map raw cited source id -> sequential display number (1..N), ordered by
-    first appearance across bullets. Only ids that have a matching source entry
+    first appearance across bullets then macro-outlook signals. Only ids that
+    have a matching source entry
     are numbered, so legacy rows (no executive_sources) yield an empty map."""
     src_ids = {s["id"] for s in (sources or []) if isinstance(s, dict) and "id" in s}
     order: list = []
-    for b in bullets or []:
-        if not isinstance(b, dict):
-            continue
-        for cid in b.get("citation_source_ids") or []:
-            if cid in src_ids and cid not in order:
-                order.append(cid)
+
+    def _collect(items):
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            for cid in it.get("citation_source_ids") or []:
+                if cid in src_ids and cid not in order:
+                    order.append(cid)
+
+    # Bullets first, then macro-outlook signals — one shared numbering space
+    # across the executive summary, the macro section, and the Sources footer.
+    _collect(bullets)
+    _collect(signals)
     return {cid: n for n, cid in enumerate(order, start=1)}
 
 
@@ -699,6 +708,101 @@ def _structured_exec_bullets(macro_summary: dict | None):
     return None
 
 
+def _macro_outlook_signals(macro_summary: dict | None) -> list:
+    """The macro-outlook signals list from the summary row, or [] when absent or
+    malformed. Feeds the shared citation numbering (bullets then signals)."""
+    outlook = (macro_summary or {}).get("macro_outlook")
+    if isinstance(outlook, dict) and isinstance(outlook.get("signals"), list):
+        return outlook["signals"]
+    return []
+
+
+# Direction is factual, not valenced: "Rising" is adverse for cost-side
+# indicators (inflation, energy, freight) but favorable for demand-side ones,
+# and the signal carries no good/bad field. So direction is styled neutrally —
+# the Americhem good/bad reading lives in the implication text, never the color.
+_MACRO_DIRECTION_COLOR = "#475569"
+
+
+def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dict | None) -> str:
+    """Render the Macroeconomic Outlook section: a one-line current condition
+    plus one compact row per material macro signal (indicator, direction,
+    Americhem implication, affected segments, inline citation). Returns '' when
+    there is no outlook or no signal. All untrusted text is escaped; citation
+    markers share the email's single numbering space (bullets then signals)."""
+    if not macro_outlook:
+        return ""
+    signals = macro_outlook.get("signals") or []
+    if not signals:
+        return ""
+
+    current = html.escape(macro_outlook.get("current_condition") or "")
+    sources = (macro_summary or {}).get("executive_sources") or []
+    bullets = _structured_exec_bullets(macro_summary)
+    display_map = _citation_display_map(bullets, sources, signals)
+    src_by_id = {s["id"]: s for s in sources if isinstance(s, dict) and "id" in s}
+
+    rows_html = ""
+    for sig in signals:
+        if not isinstance(sig, dict):
+            continue
+        indicator = html.escape(sig.get("indicator") or "")
+        direction = html.escape(sig.get("direction") or "")
+        implication = html.escape(sig.get("americhem_implication") or "")
+        segments = ", ".join(html.escape(str(s)) for s in (sig.get("affected_segments") or []))
+        marker = _render_citation_marker(sig.get("citation_source_ids"), src_by_id, display_map)
+        dir_color = _MACRO_DIRECTION_COLOR
+        seg_html = (
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>{segments}'
+            if segments else ""
+        )
+        rows_html += (
+            f'<tr><td style="padding:6px 0 8px 0;border-bottom:1px solid #F1F3F5;">'
+            f'<p style="margin:0 0 2px 0;font-size:12px;color:#6B7280;'
+            f'font-family:Arial,sans-serif;">'
+            f'<strong style="color:{_BRAND_NAVY};font-size:13px;">{indicator}</strong>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
+            f'<span style="color:{dir_color};font-weight:600;">{direction}</span>'
+            f'{seg_html}</p>'
+            f'<p style="margin:0;font-size:13px;color:#374151;'
+            f"font-family:Georgia,'Times New Roman',serif;line-height:1.5;\">"
+            f'{implication}{marker}</p>'
+            f'</td></tr>'
+        )
+
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr>
+              <td style="padding-bottom:10px;">
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="font-size:11px;font-weight:700;letter-spacing:1.5px;
+                                text-transform:uppercase;color:{_BRAND_NAVY};
+                                font-family:Arial,sans-serif;white-space:nowrap;
+                                padding-right:12px;">
+                      MACROECONOMIC OUTLOOK
+                    </td>
+                    <td style="border-bottom:1px solid {_BRAND_NAVY};width:100%;"></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <p style="margin:0 0 8px 0;font-size:13px;color:#1a2a45;
+                           font-family:Georgia,'Times New Roman',serif;line-height:1.6;">
+                  {current}
+                </p>
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>"""
+
+
 def _render_exec_summary(macro_summary: dict | None) -> str:
     """Render the Executive Summary row.
 
@@ -720,7 +824,9 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
 
     bullets = _structured_exec_bullets(macro_summary)
     if bullets is not None:
-        display_map = _citation_display_map(bullets, sources)
+        # Include signals so bullet numbering shares one space with the macro
+        # section (bullets enumerate first, so their numbers are unchanged).
+        display_map = _citation_display_map(bullets, sources, _macro_outlook_signals(macro_summary))
         body_html = _render_executive_bullets(bullets, sources, display_map)
     elif legacy_text:
         body_html = (
@@ -762,13 +868,15 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
 def _render_sources_section(macro_summary: dict | None) -> str:
     """Render the cited-source list as a full-width row at the very bottom of the
     email. Reuses the same display-number map as the inline citation markers in
-    the executive summary, so the numbering is identical. Returns '' when there
-    are no cited sources (legacy rows, or no bullet cited anything)."""
-    bullets = _structured_exec_bullets(macro_summary)
-    if bullets is None:
+    the executive summary AND the macro outlook, so the numbering is identical.
+    Returns '' when nothing is cited (legacy rows, or no bullet/signal cited
+    anything)."""
+    if not macro_summary:
         return ""
+    bullets = _structured_exec_bullets(macro_summary)
+    signals = _macro_outlook_signals(macro_summary)
     sources = macro_summary.get("executive_sources") or []
-    display_map = _citation_display_map(bullets, sources)
+    display_map = _citation_display_map(bullets, sources, signals)
     footer_html = _render_sources_footer(sources, display_map)
     if not footer_html:
         return ""
@@ -857,6 +965,7 @@ def render_report(
     sections_html = _render_segment_watch_section(model.groups, model.synthesis)
     additional_html = _render_additional_articles_section(list(model.additional_articles))
     exec_html = _render_exec_summary(macro_summary)
+    macro_outlook_html = _render_macro_outlook_section(model.macro_outlook, macro_summary)
 
     # Cited-source list, rendered at the very bottom of the email (below the
     # segment-watch content) rather than under the executive summary block.
@@ -935,6 +1044,7 @@ def render_report(
           </table>
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             {exec_html}
+            {macro_outlook_html}
             {sections_html}
             {additional_html}
             {sources_html}

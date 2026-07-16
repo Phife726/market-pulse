@@ -492,21 +492,6 @@ industry:
   exclude_any:
     - tenders
 
-economic:
-  search_mode: concept
-  active: true
-  include_any:
-    - "economic indicators"
-    - "labor market"
-    - "hiring layoffs"
-    - "economic forecast"
-    - "global economy"
-  include_all: []
-  exclude_any:
-    - Xinhua
-    - "Anadolu Agency"
-    - Mondaq
-
 healthcare:
   search_mode: concept
   active: true
@@ -664,3 +649,137 @@ performance_compounds:
     - compounding
   exclude_any:
     - patents
+
+# ── MACROECONOMIC OUTLOOK GROUPS ──────────────────────────────
+# Dedicated macro-signal discovery feeding the Macroeconomic Outlook section
+# (see the macro-outlook design). These MUST remain the LAST groups in the
+# file: load_targets() processes groups in file order, so a deadline-limited
+# ingestion run sacrifices macro coverage before entity coverage — graceful
+# degradation by construction. Do not interleave entity/concept groups below.
+# The old generic `economic` group is intentionally absorbed here; do not
+# reintroduce it (it would duplicate discovery and dilute the source pack).
+macro_manufacturing:
+  search_mode: concept
+  active: true
+  include_any:
+    - "manufacturing PMI"
+    - "ISM manufacturing"
+    - "industrial production"
+    - "factory output"
+    - "manufacturing new orders"
+    - "manufacturing contraction"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_construction:
+  search_mode: concept
+  active: true
+  include_any:
+    - "construction starts"
+    - "building permits"
+    - "housing starts"
+    - "nonresidential construction"
+    - "construction spending"
+    - "architecture billings index"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_automotive:
+  search_mode: concept
+  active: true
+  include_any:
+    - "automotive production"
+    - "vehicle sales"
+    - "light vehicle sales"
+    - "auto assembly"
+    - "automotive output"
+    - "SAAR auto sales"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_consumer_demand:
+  search_mode: concept
+  active: true
+  include_any:
+    - "consumer spending"
+    - "durable goods orders"
+    - "retail sales"
+    - "consumer confidence"
+    - "personal consumption expenditures"
+    - "consumer demand outlook"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_inflation_rates:
+  search_mode: concept
+  active: true
+  include_any:
+    - "consumer price index"
+    - "producer price index"
+    - "interest rate decision"
+    - "Federal Reserve rate"
+    - "credit conditions"
+    - "inflation data"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_energy_freight:
+  search_mode: concept
+  active: true
+  include_any:
+    - "energy prices"
+    - "natural gas prices"
+    - "freight rates"
+    - "feedstock costs"
+    - "petrochemical feedstock"
+    - "trucking rates"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+macro_business_investment:
+  search_mode: concept
+  active: true
+  include_any:
+    - "business investment"
+    - "capital expenditure"
+    - "capex spending"
+    - "capacity utilization"
+    - "durable goods capex"
+    - "manufacturing investment"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
