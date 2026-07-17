@@ -38,7 +38,7 @@ def _run_mode() -> str:
 
 
 MAX_DAILY_SCRAPES = 150
-PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside the 35-min CI limit
+PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside the 40-min CI limit
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 

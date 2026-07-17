@@ -13,7 +13,7 @@ env:
 jobs:
   run-market-pulse:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
