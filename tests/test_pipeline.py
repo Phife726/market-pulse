@@ -1296,16 +1296,35 @@ def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch):
     protected from entity-tail starvation."""
     import ingestion_engine
 
-    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 2)
-    monkeypatch.setattr(ingestion_engine, "TAIL_RESERVE_SCRAPES", 1)
+    # One concept target × results_per_entity=2 → derived reserve of 2.
+    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 3)
     stored = _run_reserve_pipeline(monkeypatch, [
         _reserve_target("EntityA", "entity"),
         _reserve_target("EntityB", "entity"),
         _reserve_target("concept_group", "concept"),
     ])
-    # EntityA consumes the unreserved slot; EntityB is skipped by the reserve;
-    # the concept group spends the reserved slot.
+    # EntityA consumes the single unreserved slot; EntityB is skipped by the
+    # reserve; the concept group spends the reserved budget.
     assert stored == ["EntityA", "concept_group"]
+
+
+def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch):
+    """The slot reserve is DERIVED from the configured tail demand
+    (sum of results_per_entity over concept targets), not a fixed constant —
+    so every concept/macro group gets a discovery pass even when each earlier
+    concept target consumes its full candidate budget."""
+    import ingestion_engine
+
+    # Two concept targets × results_per_entity=2 → demand 4; cap 5 leaves
+    # exactly one unreserved slot for the entity tier.
+    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 5)
+    stored = _run_reserve_pipeline(monkeypatch, [
+        _reserve_target("EntityA", "entity"),
+        _reserve_target("EntityB", "entity"),
+        _reserve_target("concept_one", "concept"),
+        _reserve_target("concept_two", "concept"),
+    ])
+    assert stored == ["EntityA", "concept_one", "concept_two"]
 
 
 def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
@@ -1332,12 +1351,23 @@ def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
 
 
 def test_tail_reserve_defaults_leave_headroom_for_tail_groups():
-    """The shipped constants must actually reserve something: a nonzero slot
-    and time reserve, both smaller than the budgets they carve from."""
+    """Against the real targets.yaml, the derived slot reserve must be nonzero
+    (there are concept/macro groups to protect) and leave the entity tier a
+    majority of the cap; the time reserve must sit inside the deadline."""
     import ingestion_engine
 
-    assert 0 < ingestion_engine.TAIL_RESERVE_SCRAPES < ingestion_engine.MAX_DAILY_SCRAPES
+    targets = load_targets("targets.yaml")
+    demand = ingestion_engine._tail_scrape_demand(targets)
+    assert 0 < demand < ingestion_engine.MAX_DAILY_SCRAPES / 2
     assert 0 < ingestion_engine.TAIL_RESERVE_SECONDS < ingestion_engine.PIPELINE_DEADLINE_SECONDS
+
+
+def test_tail_scrape_demand_is_zero_without_concept_targets():
+    """No concept targets → nothing to protect → entity targets never skipped."""
+    import ingestion_engine
+
+    assert ingestion_engine._tail_scrape_demand(
+        [_reserve_target("EntityA", "entity")]) == 0
 
 
 # ===========================================================================

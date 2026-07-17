@@ -39,11 +39,14 @@ def _run_mode() -> str:
 
 MAX_DAILY_SCRAPES = 180
 PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside the 40-min CI limit
-# Protected tail budget: once remaining scrape slots or wall-clock fall to these
-# floors, remaining ENTITY targets are skipped so the concept/macro groups at the
-# bottom of targets.yaml always get discovery. Entity coverage is redundant
+# Protected tail budget: once remaining scrape slots or wall-clock fall to the
+# reserve floor, remaining ENTITY targets are skipped so the concept/macro groups
+# at the bottom of targets.yaml always get discovery. Entity coverage is redundant
 # day-over-day (dedup absorbs re-discoveries); concept/macro coverage is not.
-TAIL_RESERVE_SCRAPES = 30
+# The slot reserve is derived per-run from the configured tail demand (see
+# _tail_scrape_demand) so adding concept groups or raising results_per_entity
+# cannot silently reopen the starvation gap; only the time floor is a constant
+# (sized for ~40+ scrape attempts at the observed ~9s each).
 TAIL_RESERVE_SECONDS = 360
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
@@ -791,9 +794,22 @@ def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
     )
 
 
+def _tail_scrape_demand(targets: list[dict]) -> int:
+    """Worst-case scrape attempts the concept/macro tail can consume: every
+    concept target yields its full results_per_entity as new scrapable URLs
+    (true on any day their queries surface fresh news — dedup only absorbs
+    re-discoveries). This is the slot reserve the entity tier must not eat."""
+    return sum(
+        int(t.get("results_per_entity", 0))
+        for t in targets
+        if t.get("search_mode") == "concept"
+    )
+
+
 def execute_pipeline() -> None:
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
+    tail_reserve_scrapes = _tail_scrape_demand(targets)
     target_metadata = (
         relevance_gate.load_target_metadata("target_metadata.yaml")
         if _relevance_gate_enabled() else {}
@@ -827,7 +843,7 @@ def execute_pipeline() -> None:
         # of targets.yaml still get their discovery pass. Concept targets keep
         # running until the hard cap/deadline above actually fires.
         if target.get("search_mode", "entity") == "entity":
-            slots_low = scrapes_attempted >= MAX_DAILY_SCRAPES - TAIL_RESERVE_SCRAPES
+            slots_low = scrapes_attempted >= MAX_DAILY_SCRAPES - tail_reserve_scrapes
             clock_low = (
                 time.monotonic() - pipeline_start
                 >= PIPELINE_DEADLINE_SECONDS - TAIL_RESERVE_SECONDS
