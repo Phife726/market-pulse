@@ -242,12 +242,16 @@ def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> l
     data = response.json()
     # Serper's news endpoint returns pages of 10 and ignores small `num`
     # values, so results_per_entity must be enforced client-side.
-    results = [
+    raw_results = [
         (item["link"], item.get("title", ""))
         for item in data.get("news", [])
         if "link" in item
-    ][:results_per_entity]
-    logger.info("Discovered %d URL(s) for query '%s'", len(results), query[:80])
+    ]
+    results = raw_results[:results_per_entity]
+    logger.info(
+        "Discovered %d URL(s) (kept %d) for query '%s'",
+        len(raw_results), len(results), query[:80],
+    )
     return results
 
 
