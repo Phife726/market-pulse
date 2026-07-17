@@ -39,7 +39,7 @@ def _run_mode() -> str:
 
 MAX_DAILY_SCRAPES = 150
 PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
-FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
+FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MP_CONFIG: Optional[dict] = None
@@ -888,7 +888,6 @@ def execute_pipeline() -> None:
                 suppression_ledger = suppression_ledger.record(
                     "scrape_failed", url=raw_url, title=candidate_title,
                 )
-                time.sleep(1.5)
                 continue
 
             article_insight = synthesize_insight(article_text, normalized, entity_name, category)
