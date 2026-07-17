@@ -58,7 +58,7 @@ MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
 # which tend to score mid-range on materiality and would otherwise be crowded
 # out of the citable pack on heavy news days — starving the macro outlook.
 MACRO_OUTLOOK_SOURCE_PACK_QUOTA = 10
-MAX_MACRO_OUTLOOK_SIGNALS = 6
+MAX_MACRO_OUTLOOK_SIGNALS = 3
 MAX_EXECUTIVE_BULLET_CITATIONS = 3
 
 
@@ -464,12 +464,12 @@ def thematic_prompt(groups: dict[str, list[dict]]) -> PromptSpec:
     system = (
         f"OUTPUT LANGUAGE:\n{ENGLISH_OUTPUT_RULE}\n\n"
         "You are a market intelligence analyst for Americhem, a specialty plastics compounder.\n\n"
-        "For each CATEGORY block below, write exactly one synthesis paragraph (2–3 sentences).\n"
-        "The paragraph must:\n"
-        "- Identify the shared trend or structural driver across the listed signals\n"
-        "- Explicitly state the implication for Americhem's supply chain, demand pipeline, or margin\n"
+        "For each CATEGORY block below, write exactly one synthesis sentence (maximum 30 words).\n"
+        "The sentence must:\n"
+        "- Fuse the shared trend or structural driver across the listed signals with "
+        "its implication for Americhem's supply chain, demand pipeline, or margin\n"
         "- Be written for a senior executive who will act on it — no hedging, no filler\n\n"
-        "Return valid JSON with category names as keys and synthesis paragraphs as values.\n"
+        "Return valid JSON with category names as keys and synthesis sentences as values.\n"
         "Use the exact category names provided. Do not invent categories.\n"
         "Only include categories that appear in the input."
     )

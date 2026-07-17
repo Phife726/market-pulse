@@ -271,6 +271,14 @@ def test_macro_outlook_requires_citation_and_materiality():
     assert "{{" not in system and "}}" not in system
 
 
+def test_macro_prompt_promises_signal_cap():
+    """The macro system prompt promises the same signal cap the validator
+    enforces, and the product cap is 3 (reduced from 6 on 2026-07-17)."""
+    mp = prompts.macro_prompt([_article("Manufacturing PMI slips again", score=8)])
+    assert f"up to {prompts.MAX_MACRO_OUTLOOK_SIGNALS}," in mp.system
+    assert "up to 3," in mp.system
+
+
 def test_rank_macro_articles_reserves_quota_for_macro_signals():
     """Low-materiality Macro-signal rows survive into the source pack even when
     40+ higher-materiality non-macro rows would otherwise crowd them out."""
@@ -307,4 +315,5 @@ def test_thematic_user_contains_category_blocks_and_impact_lines():
     assert "CATEGORY: Healthcare" in spec.user
     assert "[Acme | impact:8/10 | Neutral] Hospital demand up." in spec.user
     assert "Device approvals accelerating." in spec.user
-    assert "exactly one synthesis paragraph" in spec.system
+    assert "exactly one synthesis sentence" in spec.system
+    assert "maximum 30 words" in spec.system

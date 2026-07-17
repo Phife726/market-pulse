@@ -692,10 +692,13 @@ def _structured_exec_bullets(macro_summary: dict | None):
 
 def _macro_outlook_signals(macro_summary: dict | None) -> list:
     """The macro-outlook signals list from the summary row, or [] when absent or
-    malformed. Feeds the shared citation numbering (bullets then signals)."""
+    malformed. Sliced to prompts.MAX_MACRO_OUTLOOK_SIGNALS so a row stored
+    before the cap reduction numbers its footer/citations from the same signals
+    the sliced outlook body renders (no orphan Sources entries on QA re-renders).
+    Feeds the shared citation numbering (bullets then signals)."""
     outlook = (macro_summary or {}).get("macro_outlook")
     if isinstance(outlook, dict) and isinstance(outlook.get("signals"), list):
-        return outlook["signals"]
+        return outlook["signals"][:prompts.MAX_MACRO_OUTLOOK_SIGNALS]
     return []
 
 
