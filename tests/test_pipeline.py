@@ -1401,6 +1401,58 @@ def test_report_macro_outlook_sliced_to_cap():
     assert len(model.macro_outlook["signals"]) == MAX_MACRO_OUTLOOK_SIGNALS
 
 
+def test_legacy_outlook_render_lists_no_orphan_sources():
+    """A daily_summaries row stored before the cap reduction may hold 6 signals
+    citing 6 distinct sources. The rendered outlook body shows only the sliced
+    3 signals, so the exec-summary citation numbering and the bottom Sources
+    footer must list ONLY those 3 cited sources — no orphan [4][5][6] footer
+    entries with no inline marker anywhere in the visible email (QA
+    run_ingestion=false re-render scenario)."""
+    from prompts import MAX_MACRO_OUTLOOK_SIGNALS
+
+    signals = [
+        {
+            "indicator": f"Indicator {i + 1}",
+            "direction": "Declining",
+            "americhem_implication": f"Downside risk number {i + 1} for resin demand.",
+            "affected_segments": ["Industrial"],
+            "citation_source_ids": [i + 1],
+        }
+        for i in range(6)
+    ]
+    sources = [
+        {"id": i + 1, "headline": f"Macro source {i + 1}",
+         "url": f"https://s/{i + 1}", "domain": f"src{i + 1}.com"}
+        for i in range(6)
+    ]
+    macro_summary = {
+        "dominant_condition": "Demand Softness",
+        # Bullets cite nothing, so citation numbering starts with the signals.
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": []},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {"current_condition": "Manufacturing demand mixed.",
+                          "signals": signals},
+        "executive_sources": sources,
+    }
+    rows = [_make_new_article("v", 8, commercial_segment="Packaging",
+                              headline="Packaging demand firms on brand-owner restocking")]
+    model = assemble_report(rows, macro_summary=macro_summary, config=_APPENDIX_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+
+    # The kept (sliced) sources appear in the Sources footer.
+    for i in range(MAX_MACRO_OUTLOOK_SIGNALS):
+        assert f"Macro source {i + 1}" in html
+        assert f"src{i + 1}.com" in html
+    # The sliced-off sources have no inline marker, so they must NOT appear as
+    # orphan Sources footer entries.
+    for i in range(MAX_MACRO_OUTLOOK_SIGNALS, 6):
+        assert f"Macro source {i + 1}" not in html
+        assert f"src{i + 1}.com" not in html
+
+
 def test_assemble_report_groups_by_commercial_segment():
     """Two new-style articles with the same commercial_segment are grouped under that label."""
     # Use genuinely distinct headlines so delivery suppression doesn't flag them
