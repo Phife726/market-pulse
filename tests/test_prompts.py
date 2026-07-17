@@ -315,4 +315,5 @@ def test_thematic_user_contains_category_blocks_and_impact_lines():
     assert "CATEGORY: Healthcare" in spec.user
     assert "[Acme | impact:8/10 | Neutral] Hospital demand up." in spec.user
     assert "Device approvals accelerating." in spec.user
-    assert "exactly one synthesis paragraph" in spec.system
+    assert "exactly one synthesis sentence" in spec.system
+    assert "maximum 30 words" in spec.system
