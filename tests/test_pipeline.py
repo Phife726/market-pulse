@@ -4768,6 +4768,9 @@ def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
     ("https://www.reuters.com/markets/some-article/", False),
     ("https://notlinkedin.com/article", False),        # suffix must be dot-anchored
     ("not a url", False),                              # malformed → let the scraper decide
+    ("https://corporate.walmart.com/news/2026/earnings", False),   # retail newsroom subdomain
+    ("https://corporate.homedepot.com/newsroom/some-story", False),
+    ("https://m.facebook.com/story.php?id=1", True),               # social subdomains still suffix-matched
 ])
 def test_is_unscrapable_domain(url, expected):
     assert _is_unscrapable_domain(url) is expected

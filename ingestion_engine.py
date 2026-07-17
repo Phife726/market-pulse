@@ -425,20 +425,31 @@ def discover_candidates(target: dict) -> list[dict]:
 
 
 UNSCRAPABLE_DOMAINS: frozenset[str] = frozenset({
-    # Login-walled or bot-blocked platforms — Firecrawl returns 0 chars or
-    # burns the full wall-clock timeout on these.
+    # Login-walled or bot-blocked platforms — suffix match: every subdomain
+    # (uk.linkedin.com, m.facebook.com) is equally unscrapable.
     "linkedin.com", "facebook.com", "instagram.com", "x.com", "twitter.com",
     "youtube.com", "tiktok.com", "reddit.com",
-    # Retail product pages — never articles, frequent Serper false positives.
-    "amazon.com", "ebay.com", "walmart.com", "homedepot.com", "lowes.com",
+})
+
+UNSCRAPABLE_HOSTS: frozenset[str] = frozenset({
+    # Retail storefronts — exact host match only: product pages are never
+    # articles, but corporate newsroom subdomains (corporate.walmart.com,
+    # corporate.homedepot.com) publish legitimate news and must stay scrapable.
+    "amazon.com", "www.amazon.com",
+    "ebay.com", "www.ebay.com",
+    "walmart.com", "www.walmart.com",
+    "homedepot.com", "www.homedepot.com",
+    "lowes.com", "www.lowes.com",
 })
 
 
 def _is_unscrapable_domain(url: str) -> bool:
-    """True when the URL's host is (or is a subdomain of) a domain we never
-    scrape — login-walled platforms and retail product pages that waste the
+    """True when the URL's host is a retail storefront (exact match) or is
+    (a subdomain of) a login-walled platform we never scrape — both waste the
     Firecrawl budget. Malformed URLs return False (let the scraper decide)."""
     host = (urlparse(url).hostname or "").lower()
+    if host in UNSCRAPABLE_HOSTS:
+        return True
     return any(host == d or host.endswith("." + d) for d in UNSCRAPABLE_DOMAINS)
 
 
