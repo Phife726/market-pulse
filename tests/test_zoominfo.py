@@ -1105,7 +1105,7 @@ def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, 
 
     assert (
         "Provider yield — zoominfo discovered=0 scraped=0 stored=0 "
-        "discards=0 relevance_dropped=0 scrape_failed=0 duplicates=0" in caplog.text
+        "discards=0 relevance_dropped=0 scrape_failed=0 unscrapable=0 duplicates=0" in caplog.text
     )
 
 

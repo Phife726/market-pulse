@@ -14,7 +14,7 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 5
+    assert len(INGESTION_CODES) == 6
     assert len(DELIVERY_CODES) == 9
 
 
@@ -306,3 +306,12 @@ def test_zoominfo_company_mismatch_rejected_on_delivery_ledger():
     led = SuppressionLedger.for_delivery()
     with pytest.raises(ValueError, match="not owned by delivery"):
         led.record("zoominfo_company_mismatch", url="u", title="t")
+
+
+def test_unscrapable_domain_is_ingestion_owned():
+    assert side_of("unscrapable_domain") == "ingestion"
+    assert label_for("unscrapable_domain") == "unscrapable domain"
+    led = SuppressionLedger.for_ingestion().record(
+        "unscrapable_domain", url="https://www.linkedin.com/posts/x", title="T1",
+    )
+    assert led.breakdown == {"unscrapable_domain": 1}

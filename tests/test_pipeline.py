@@ -12,10 +12,13 @@ from llm import FakeLLM
 
 from ingestion_engine import (
     _TextExtractor,
+    _is_unscrapable_domain,
     _scrape_fallback,
     _validate_executive_bullets,
     build_query,
     compute_url_hash,
+    discover_urls,
+    execute_pipeline,
     generate_macro_summary,
     load_targets,
     normalize_url,
@@ -4609,6 +4612,33 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
 
 
 # ---------------------------------------------------------------------------
+# 18. discover_urls — client-side truncation to results_per_entity
+# ---------------------------------------------------------------------------
+
+def test_discover_urls_truncates_to_results_per_entity(monkeypatch):
+    """Serper's news endpoint returns pages of 10 regardless of the `num`
+    param — the client must enforce results_per_entity itself."""
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"news": [
+                {"link": f"https://example.com/article-{i}", "title": f"Headline {i}"}
+                for i in range(10)
+            ]}
+
+    monkeypatch.setenv("SERPER_API_KEY", "test_key")
+    monkeypatch.setattr("ingestion_engine.requests.post", lambda *a, **k: FakeResponse())
+
+    results = discover_urls("test query", 24, 2)
+
+    assert len(results) == 2
+    assert results[0] == ("https://example.com/article-0", "Headline 0")
+    assert results[1] == ("https://example.com/article-1", "Headline 1")
+
+
+# ---------------------------------------------------------------------------
 # targets.yaml configuration contract (reads the real control file)
 # ---------------------------------------------------------------------------
 
@@ -4723,3 +4753,107 @@ def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
     for group in _NEW_CONCEPT_GROUPS:
         assert "zoominfo_company_id" not in config[group]
         assert "zoominfo_company_id" not in targets[group]
+
+
+# ---------------------------------------------------------------------------
+# 19. Pre-scrape unscrapable-domain filter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://www.linkedin.com/posts/somebody-123", True),
+    ("https://linkedin.com/pulse/x", True),
+    ("https://uk.linkedin.com/jobs/view/1", True),     # country subdomain
+    ("https://www.amazon.com/dp/B0ABC123", True),
+    ("https://www.homedepot.com/p/product/12345", True),
+    ("https://www.reuters.com/markets/some-article/", False),
+    ("https://notlinkedin.com/article", False),        # suffix must be dot-anchored
+    ("not a url", False),                              # malformed → let the scraper decide
+    ("https://corporate.walmart.com/news/2026/earnings", False),   # retail newsroom subdomain
+    ("https://corporate.homedepot.com/newsroom/some-story", False),
+    ("https://m.facebook.com/story.php?id=1", True),               # social subdomains still suffix-matched
+])
+def test_is_unscrapable_domain(url, expected):
+    assert _is_unscrapable_domain(url) is expected
+
+
+def test_execute_pipeline_skips_unscrapable_domain_before_scraping(monkeypatch):
+    """An unscrapable-domain candidate must be suppressed pre-scrape: no
+    Firecrawl attempt, and the ledger records unscrapable_domain."""
+    import ingestion_engine as ie
+
+    target = {
+        "name": "Acme", "category": "competitor", "query": '"Acme"',
+        "lookback_hours": 24, "results_per_entity": 2, "min_article_length": 500,
+    }
+    candidate = {
+        "url": "https://www.linkedin.com/posts/acme-update",
+        "title": "Acme update", "provider": "serper",
+    }
+    summary_kwargs = {}
+
+    monkeypatch.setattr(ie, "load_targets", lambda path: [target])
+    monkeypatch.setattr(ie, "discover_candidates", lambda t: [candidate])
+    monkeypatch.setattr(ie, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ie, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(
+        ie, "scrape_article",
+        lambda *a, **k: pytest.fail("scrape_article must not be called for an unscrapable domain"),
+    )
+    monkeypatch.setattr(
+        ie, "generate_macro_summary",
+        lambda buffer, screened_count, **kwargs: summary_kwargs.update(kwargs),
+    )
+
+    execute_pipeline()
+
+    assert summary_kwargs["suppression_breakdown"] == {"unscrapable_domain": 1}
+    assert summary_kwargs["suppression_samples"] == [{
+        "reason": "unscrapable_domain",
+        "url": "https://www.linkedin.com/posts/acme-update",
+        "title": "Acme update",
+    }]
+
+
+def test_render_qa_debug_section_includes_unscrapable_domain():
+    """The unscrapable_domain code must get a labeled breakdown row in the QA
+    debug section (not just fold into the suppressed total)."""
+    from delivery_engine import _render_qa_debug_section
+    macro = {
+        "screened_count": 40,
+        "surfaced_count": 5,
+        "suppression_breakdown": {"unscrapable_domain": 4},
+        "suppression_samples": [],
+    }
+    html = _render_qa_debug_section(macro)
+    assert "unscrapable domain" in html
+    assert ">4</td>" in html
+
+
+# ---------------------------------------------------------------------------
+# 20. scrape_article — wall-clock ceiling actually bounds wall-clock
+# ---------------------------------------------------------------------------
+
+def test_scrape_article_returns_promptly_after_wall_clock_timeout(monkeypatch):
+    """After the wall-clock timeout fires, scrape_article must return without
+    waiting for the hung request thread (the old `with ThreadPoolExecutor`
+    pattern blocked in shutdown(wait=True) until the thread finished)."""
+    import time as _time
+    import threading
+    import ingestion_engine as ie
+
+    def hanging_post(*args, **kwargs):
+        # Use threading.Event().wait instead of time.sleep in case tests
+        # globally monkeypatch time.sleep to a no-op.
+        threading.Event().wait(2.0)
+        raise AssertionError("hung request should have been abandoned")
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+    monkeypatch.setattr(ie, "FIRECRAWL_WALL_CLOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr("ingestion_engine.requests.post", hanging_post)
+
+    start = _time.monotonic()
+    result = ie.scrape_article("https://example.com/article", min_length=500)
+    elapsed = _time.monotonic() - start
+
+    assert result is None
+    assert elapsed < 1.0  # must not wait out the 2s hung thread

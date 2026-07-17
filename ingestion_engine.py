@@ -39,7 +39,7 @@ def _run_mode() -> str:
 
 MAX_DAILY_SCRAPES = 150
 PIPELINE_DEADLINE_SECONDS = 600   # stop ingestion after 10 min to stay inside the 15-min CI limit
-FIRECRAWL_WALL_CLOCK_TIMEOUT = 45  # hard per-request ceiling; prevents keepalive-induced hangs
+FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
 _MP_CONFIG: Optional[dict] = None
@@ -240,12 +240,18 @@ def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> l
         logger.error("Serper.dev request failed for query '%s': %s", query[:80], exc)
         return []
     data = response.json()
-    results = [
+    # Serper's news endpoint returns pages of 10 and ignores small `num`
+    # values, so results_per_entity must be enforced client-side.
+    raw_results = [
         (item["link"], item.get("title", ""))
         for item in data.get("news", [])
         if "link" in item
     ]
-    logger.info("Discovered %d URL(s) for query '%s'", len(results), query[:80])
+    results = raw_results[:results_per_entity]
+    logger.info(
+        "Discovered %d URL(s) (kept %d) for query '%s'",
+        len(raw_results), len(results), query[:80],
+    )
     return results
 
 
@@ -325,7 +331,8 @@ def _discovery_metadata(candidate: dict) -> dict:
 def _new_provider_yield() -> dict:
     return {
         "discovered": 0, "scraped": 0, "stored": 0,
-        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0, "duplicates": 0,
+        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0,
+        "unscrapable": 0, "duplicates": 0,
     }
 
 
@@ -335,9 +342,10 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         y = provider_yield[provider]
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
-            "discards=%d relevance_dropped=%d scrape_failed=%d duplicates=%d",
+            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
-            y["discards"], y["relevance_dropped"], y["scrape_failed"], y["duplicates"],
+            y["discards"], y["relevance_dropped"], y["scrape_failed"],
+            y["unscrapable"], y["duplicates"],
         )
 
 
@@ -416,6 +424,35 @@ def discover_candidates(target: dict) -> list[dict]:
     return candidates
 
 
+UNSCRAPABLE_DOMAINS: frozenset[str] = frozenset({
+    # Login-walled or bot-blocked platforms — suffix match: every subdomain
+    # (uk.linkedin.com, m.facebook.com) is equally unscrapable.
+    "linkedin.com", "facebook.com", "instagram.com", "x.com", "twitter.com",
+    "youtube.com", "tiktok.com", "reddit.com",
+})
+
+UNSCRAPABLE_HOSTS: frozenset[str] = frozenset({
+    # Retail storefronts — exact host match only: product pages are never
+    # articles, but corporate newsroom subdomains (corporate.walmart.com,
+    # corporate.homedepot.com) publish legitimate news and must stay scrapable.
+    "amazon.com", "www.amazon.com",
+    "ebay.com", "www.ebay.com",
+    "walmart.com", "www.walmart.com",
+    "homedepot.com", "www.homedepot.com",
+    "lowes.com", "www.lowes.com",
+})
+
+
+def _is_unscrapable_domain(url: str) -> bool:
+    """True when the URL's host is a retail storefront (exact match) or is
+    (a subdomain of) a login-walled platform we never scrape — both waste the
+    Firecrawl budget. Malformed URLs return False (let the scraper decide)."""
+    host = (urlparse(url).hostname or "").lower()
+    if host in UNSCRAPABLE_HOSTS:
+        return True
+    return any(host == d or host.endswith("." + d) for d in UNSCRAPABLE_DOMAINS)
+
+
 def normalize_url(url: str) -> str:
     parsed = urlparse(url)
     clean = parsed._replace(query="", fragment="")
@@ -446,9 +483,9 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     def _firecrawl_post() -> requests.Response:
         return requests.post(endpoint, json=payload, headers=headers, timeout=30)
 
+    executor = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
+        response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
         response.raise_for_status()
     except FutureTimeoutError:
         logger.error(
@@ -481,6 +518,15 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     except requests.exceptions.RequestException as exc:
         logger.error("Firecrawl request failed for URL %s: %s", url, exc)
         return None
+    finally:
+        # wait=False: after a wall-clock timeout the worker thread may still be
+        # blocked inside requests.post; waiting for it (the `with` default)
+        # would defeat the ceiling. The orphaned thread exits on its own when
+        # the underlying request times out.
+        # Caveat: concurrent.futures' atexit hook still joins orphaned threads
+        # at interpreter shutdown, so a hang on the run's final scrape can delay
+        # process exit (not the pipeline loop) by up to the inner 30s timeouts.
+        executor.shutdown(wait=False)
     data = response.json()
     markdown: str = data.get("data", {}).get("markdown", "") or ""
     if len(markdown) < min_length:
@@ -770,6 +816,7 @@ def execute_pipeline() -> None:
         entity_name = target["name"]
         category = target["category"]
         min_article_length = target["min_article_length"]
+        target_start = time.monotonic()
 
         candidates = discover_candidates(target)
         stats["urls_discovered"] += len(candidates)
@@ -836,6 +883,14 @@ def execute_pipeline() -> None:
                 )
                 continue
 
+            if _is_unscrapable_domain(raw_url):
+                logger.info("UNSCRAPABLE_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
+                _bump(provider, "unscrapable")
+                suppression_ledger = suppression_ledger.record(
+                    "unscrapable_domain", url=raw_url, title=candidate_title,
+                )
+                continue
+
             gate_decision = _gate_zoominfo_candidate(candidate, entity_name, target_metadata)
             if gate_decision is not None and gate_decision.drop:
                 logger.info(
@@ -858,7 +913,6 @@ def execute_pipeline() -> None:
                 suppression_ledger = suppression_ledger.record(
                     "scrape_failed", url=raw_url, title=candidate_title,
                 )
-                time.sleep(1.5)
                 continue
 
             article_insight = synthesize_insight(article_text, normalized, entity_name, category)
@@ -919,6 +973,11 @@ def execute_pipeline() -> None:
                 seen_headlines.add(article_insight["headline"])
 
             time.sleep(1.5)
+
+        logger.info(
+            "Target '%s' processed in %.1fs (%d candidates)",
+            entity_name, time.monotonic() - target_start, len(candidates),
+        )
 
     _log_stats(stats, suppression_ledger.breakdown)
     _log_provider_yield(provider_yield)
