@@ -754,6 +754,19 @@ def test_validate_macro_outlook_keeps_only_valid_signals():
     assert [s["indicator"] for s in result["signals"]] == ["Manufacturing PMI", "Construction starts"]
 
 
+def test_validate_macro_outlook_truncates_at_cap():
+    """The validator keeps at most MAX_MACRO_OUTLOOK_SIGNALS signals, and the
+    product cap is 3 (reduced from 6 on 2026-07-17 for report density)."""
+    from prompts import MAX_MACRO_OUTLOOK_SIGNALS
+
+    assert MAX_MACRO_OUTLOOK_SIGNALS == 3
+    signals = [_macro_signal(indicator=f"Indicator {i}") for i in range(5)]
+    result = _validate_macro_outlook(_macro_outlook(signals=signals), _MACRO_VALID_IDS)
+    assert [s["indicator"] for s in result["signals"]] == [
+        "Indicator 0", "Indicator 1", "Indicator 2",
+    ]
+
+
 def _macro_articles() -> list[dict]:
     return [
         {"category": "macro_manufacturing", "headline": "Manufacturing PMI slips into contraction",

@@ -58,7 +58,7 @@ MAX_MACRO_SUMMARY_SOURCE_PACK_ARTICLES = 40
 # which tend to score mid-range on materiality and would otherwise be crowded
 # out of the citable pack on heavy news days — starving the macro outlook.
 MACRO_OUTLOOK_SOURCE_PACK_QUOTA = 10
-MAX_MACRO_OUTLOOK_SIGNALS = 6
+MAX_MACRO_OUTLOOK_SIGNALS = 3
 MAX_EXECUTIVE_BULLET_CITATIONS = 3
 
 
