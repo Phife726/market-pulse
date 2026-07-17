@@ -4824,3 +4824,33 @@ def test_render_qa_debug_section_includes_unscrapable_domain():
     html = _render_qa_debug_section(macro)
     assert "unscrapable domain" in html
     assert ">4</td>" in html
+
+
+# ---------------------------------------------------------------------------
+# 20. scrape_article — wall-clock ceiling actually bounds wall-clock
+# ---------------------------------------------------------------------------
+
+def test_scrape_article_returns_promptly_after_wall_clock_timeout(monkeypatch):
+    """After the wall-clock timeout fires, scrape_article must return without
+    waiting for the hung request thread (the old `with ThreadPoolExecutor`
+    pattern blocked in shutdown(wait=True) until the thread finished)."""
+    import time as _time
+    import threading
+    import ingestion_engine as ie
+
+    def hanging_post(*args, **kwargs):
+        # Use threading.Event().wait instead of time.sleep in case tests
+        # globally monkeypatch time.sleep to a no-op.
+        threading.Event().wait(2.0)
+        raise AssertionError("hung request should have been abandoned")
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
+    monkeypatch.setattr(ie, "FIRECRAWL_WALL_CLOCK_TIMEOUT", 0.2)
+    monkeypatch.setattr("ingestion_engine.requests.post", hanging_post)
+
+    start = _time.monotonic()
+    result = ie.scrape_article("https://example.com/article", min_length=500)
+    elapsed = _time.monotonic() - start
+
+    assert result is None
+    assert elapsed < 1.0  # must not wait out the 2s hung thread

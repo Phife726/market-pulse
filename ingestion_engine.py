@@ -468,9 +468,9 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     def _firecrawl_post() -> requests.Response:
         return requests.post(endpoint, json=payload, headers=headers, timeout=30)
 
+    executor = ThreadPoolExecutor(max_workers=1)
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
+        response = executor.submit(_firecrawl_post).result(timeout=FIRECRAWL_WALL_CLOCK_TIMEOUT)
         response.raise_for_status()
     except FutureTimeoutError:
         logger.error(
@@ -503,6 +503,12 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
     except requests.exceptions.RequestException as exc:
         logger.error("Firecrawl request failed for URL %s: %s", url, exc)
         return None
+    finally:
+        # wait=False: after a wall-clock timeout the worker thread may still be
+        # blocked inside requests.post; waiting for it (the `with` default)
+        # would defeat the ceiling. The orphaned thread exits on its own when
+        # the underlying request times out.
+        executor.shutdown(wait=False)
     data = response.json()
     markdown: str = data.get("data", {}).get("markdown", "") or ""
     if len(markdown) < min_length:
