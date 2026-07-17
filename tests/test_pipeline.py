@@ -1536,14 +1536,23 @@ def test_assemble_report_total_articles_cap():
     assert sum(len(arts) for arts in model.groups.values()) == model.surfaced_count
 
 
-def test_report_capped_articles_do_not_reappear():
-    """Articles dropped by the per-segment cap must not reappear anywhere in the email."""
-    # 4 Healthcare articles, impacts 10, 9, 8, 7 — max_per_segment=3 drops impact-7
+def test_report_capped_articles_flow_into_appendix():
+    """Articles dropped by the per-segment cap reappear in the Additional
+    Articles appendix — never as visible cards. (Flipped 2026-07-17: the cap
+    previously dropped overflow entirely.)"""
+    # Genuinely distinct headlines — token_sort_ratio >= 88 would otherwise
+    # suppress them as semantic duplicates before the cap runs.
+    _hc_headlines = [
+        "Hospital network merger squeezes specialty polymer volumes",
+        "FDA clears new implantable-grade compound for cardiac devices",
+        "Aging population drives record demand for medical-grade resins",
+        "Generic drug expansion pressures premium plastics pricing",
+    ]
     articles = [
         _make_new_article(
             f"h{i}", americhem_impact_score=10 - i,
             commercial_segment="Healthcare",
-            headline=f"HC Headline {i}",
+            headline=_hc_headlines[i],
         )
         for i in range(4)
     ]
@@ -1554,10 +1563,15 @@ def test_report_capped_articles_do_not_reappear():
             "max_total_visible_articles": 12,
         }
     }
-    html = render_report(assemble_report(articles, config=config), today_str=_TODAY_STR)
+    model = assemble_report(articles, config=config)
 
-    # h3 (impact=7) was in the group but capped — must not reappear anywhere
-    assert "HC Headline 3" not in html
+    # Top 3 by impact are cards; h3 (impact=7) is capped out but not lost.
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["h0", "h1", "h2"]
+    assert [a["url_hash"] for a in model.additional_articles] == ["h3"]
+    assert model.surfaced_count == 3
+
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _hc_headlines[3] in html
 
 
 # ---------------------------------------------------------------------------
@@ -1735,6 +1749,51 @@ def test_appendix_recency_ignores_unparseable_published_at():
     model = assemble_report([garbage, real_recent], config=_APPENDIX_CFG)
     # real_recent (Jul 15) must lead; garbage falls back to created_at (Jul 10).
     assert _appendix_hashes(model) == ["recent", "garbage"]
+
+
+def test_appendix_ranks_cap_overflow_ahead_of_weak_relevance():
+    """Capped-out visible-band rows (impact >= 6) precede weak-relevance
+    (4-5) rows in the appendix — the existing impact-desc sort, wider band."""
+    articles = [
+        _make_new_article("v0", 10, commercial_segment="Healthcare",
+                          headline="Hospital network merger squeezes specialty polymer volumes"),
+        _make_new_article("v1", 9, commercial_segment="Healthcare",
+                          headline="FDA clears new implantable-grade compound for cardiac devices"),
+        _make_new_article("v2", 7, commercial_segment="Healthcare",
+                          headline="Aging population drives record demand for medical-grade resins"),
+        _make_new_article("w0", 5, commercial_segment="Packaging",
+                          headline="Beverage brands trial mono-material caps in European pilot"),
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6,
+                            "max_visible_articles_per_segment": 2}}
+    model = assemble_report(articles, config=config)
+
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["v0", "v1"]
+    assert [a["url_hash"] for a in model.additional_articles] == ["v2", "w0"]
+
+
+def test_appendix_overflow_does_not_alter_ledger_counts():
+    """Capped-out rows are displayed, not suppressed: they never enter
+    weak_relevance, and below_impact_threshold still counts only
+    suppression-surviving below-visible rows."""
+    articles = [
+        _make_new_article("v0", 10, commercial_segment="Healthcare",
+                          headline="Hospital network merger squeezes specialty polymer volumes"),
+        _make_new_article("v1", 7, commercial_segment="Healthcare",
+                          headline="FDA clears new implantable-grade compound for cardiac devices"),
+        _make_new_article("w0", 4, commercial_segment="Packaging",
+                          headline="Beverage brands trial mono-material caps in European pilot"),
+    ]
+    config = {"reporting": {"visible_impact_threshold": 6,
+                            "max_visible_articles_per_segment": 1}}
+    model = assemble_report(articles, config=config)
+
+    # w0 is the only below-visible survivor; v1 (visible-band, capped) is not counted.
+    assert model.ledger.breakdown["below_impact_threshold"] == 1
+    # w0 is shown in the appendix, so it is not "shown nowhere".
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+    assert model.surfaced_count == 1
+    assert [a["url_hash"] for a in model.additional_articles] == ["v1", "w0"]
 
 
 _APPENDIX_ACCT_HEADLINES = [

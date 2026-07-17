@@ -51,8 +51,10 @@ class ReportModel:
     ledger: SuppressionLedger
     macro_summary: Optional[dict]
     synthesis: dict[str, str] = field(default_factory=dict)
-    # Optional-discovery appendix: suppression-surviving score-4/5 rows not
-    # shown as visible cards. Never counted in surfaced_count. Empty on no_news.
+    # Optional-discovery appendix: suppression-surviving rows at/above the
+    # supporting threshold not shown as visible cards — the weak-relevance band
+    # plus rows capped out of their segment. Never counted in surfaced_count.
+    # Empty on no_news.
     additional_articles: tuple[dict, ...] = ()
     # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
     # non-empty current_condition and >=1 signal, else None. None on no_news.
@@ -209,14 +211,15 @@ def _apply_delivery_suppression(
 
 
 def _is_usable_additional_article(row: dict, scorer: Scoring) -> bool:
-    """True when a row qualifies for the optional-discovery appendix: it is in
-    the weak-relevance band (supporting <= impact < visible — the same band the
-    rest of the report uses) and carries a non-blank headline and source URL.
+    """True when a row qualifies for the optional-discovery appendix: it scores
+    at or above the supporting threshold — the weak-relevance band plus
+    visible-band rows that lost their card slot to a cap — and carries a
+    non-blank headline and source URL.
 
     Delivery-suppression survival and 'not already a visible card' are enforced
     by the caller (it selects from `kept` minus the final-group hashes)."""
     return (
-        scorer.is_weak_relevance(row)
+        (scorer.is_weak_relevance(row) or scorer.is_visible(row))
         and bool((row.get("headline") or "").strip())
         and bool((row.get("source_url") or "").strip())
     )
@@ -257,8 +260,9 @@ def _select_additional_articles(
 
     Deterministic order (applied as stable sorts, least-significant first):
     url_hash asc -> normalized headline asc -> recency desc -> effective impact
-    desc. So every score-5 precedes every score-4, ties break by recency then
-    headline then hash. Capped at `cap`."""
+    desc. So cap overflow (score 6+) precedes every score-5, which precedes
+    every score-4; ties break by recency then headline then hash. Capped at
+    `cap`."""
     pool = [
         r for r in kept
         if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
@@ -369,8 +373,9 @@ def assemble_report(
 
     final_hashes = {a.get("url_hash") for arts in groups.values() for a in arts}
 
-    # 6. Optional-discovery appendix: suppression survivors in the weak-relevance
-    #    band not shown as cards. Does NOT alter surfaced_count.
+    # 6. Optional-discovery appendix: suppression survivors at/above the
+    #    supporting threshold not shown as cards — the weak-relevance band plus
+    #    rows capped out of their segment. Does NOT alter surfaced_count.
     additional_articles = _select_additional_articles(
         kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
     )
