@@ -141,6 +141,7 @@ def test_insight_prompt_includes_both_rules_with_descriptions():
 def test_insight_prompt_falls_back_to_canned_lists_on_empty_config():
     system = _insight_spec({}).system
     assert "Enterprise / Cross-Segment" in system      # fallback segment list
+    assert "Building & Construction" in system         # fallback segment list
     assert "Supply Chain | Technology | Macro" in system  # fallback signal list
 
 
@@ -252,8 +253,9 @@ def test_macro_outlook_promises_canonical_segment_labels():
     assert "Transportation - Non-Automotive" in system
     assert "Transportation - Aerospace" in system
     assert "Enterprise / Cross-Segment" in system
+    assert "Building & Construction" in system
     # Informal variants that would fail insight.VALID_COMMERCIAL_SEGMENTS.
-    assert "Building & Construction" not in system
+    assert "Building and Construction" not in system
 
 
 def test_macro_outlook_requires_citation_and_materiality():

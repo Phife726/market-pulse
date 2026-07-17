@@ -39,7 +39,7 @@ VALID_COMMERCIAL_SEGMENTS: frozenset[str] = frozenset({
     "Healthcare", "Fibers",
     "Transportation - Automotive", "Transportation - Non-Automotive",
     "Transportation - Aerospace",
-    "Industrial", "Packaging", "Engineered Resins",
+    "Industrial", "Building & Construction", "Packaging", "Engineered Resins",
     "Enterprise / Cross-Segment",
 })
 

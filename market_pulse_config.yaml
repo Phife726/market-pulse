@@ -131,11 +131,11 @@ commercial_segments:
   industrial:
     label: "Industrial"
     description: >
-      Industrial plastics, durable goods, wire and cable, building products,
-      construction materials, agricultural applications, electrical infrastructure.
-      Includes general industrial demand cycles and construction-driven plastics
-      consumption. Route healthcare devices and automotive end-uses to their own
-      segments.
+      Industrial plastics, durable goods, wire and cable, agricultural
+      applications, electrical infrastructure. Includes general industrial
+      demand cycles. Route building products and construction materials to
+      Building & Construction; route healthcare devices and automotive
+      end-uses to their own segments.
 
   packaging:
     label: "Packaging"
@@ -162,6 +162,17 @@ commercial_segments:
       Spans multiple commercial segments or addresses Americhem-wide topics
       (corporate finance, multi-segment supplier moves, generic industry trends).
       Use only when no single end-market dominates the article.
+
+  building_construction:
+    label: "Building & Construction"
+    description: >
+      Building products and construction materials: siding, decking, fencing,
+      windows and doors, roofing, flooring, PVC/vinyl profiles, composite lumber,
+      weatherable exterior compounds. Includes residential and commercial
+      construction demand signals (housing starts, building permits, construction
+      spending) and building-products manufacturer moves. Route construction
+      *equipment* (excavators, heavy machinery) to Transportation -
+      Non-Automotive.
 
 signal_types:
   competitive:

@@ -90,6 +90,10 @@ customers:
   exclude_any:
     - patents
     - "securities analyst reports"
+    # Motorsports sponsorship noise (GAF Roofing race coverage burned scrape
+    # slots on 2026-07-17 at impact 4; sponsorships recur all season).
+    - speedway
+    - "race results"
   entities:
     - name: Cavanaugh Building Corporation
       zoominfo_company_id: 18008481
