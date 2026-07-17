@@ -48,12 +48,15 @@ create index if not exists idx_daily_intelligence_strategic_segment
     on daily_intelligence (strategic_segment);
 
 -- Stores one executive summary row per pipeline run date.
+-- Content columns are nullable (migration 006): a run that stores zero
+-- articles persists an accounting-only row — screened/suppression columns
+-- with no summary content.
 create table if not exists daily_summaries (
     id uuid primary key default gen_random_uuid(),
     created_at timestamptz not null default now(),
     run_date date not null,
-    executive_summary text not null,
-    macro_sentiment text not null,
+    executive_summary text,
+    macro_sentiment text,
     -- Commercial intelligence brief fields (migration 002)
     run_mode text not null default 'production',
     dominant_condition text,

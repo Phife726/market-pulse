@@ -198,6 +198,33 @@ def test_upsert_summary_compound_key():
     assert test["executive_summary"] == "Test mode"
 
 
+def test_upsert_summary_column_subset_preserves_existing_columns():
+    """Supabase upsert (merge-duplicates) updates only the columns present in
+    the payload — an accounting-only upsert on an existing row (zero-yield
+    same-day retry, issue #43) must not wipe the summary content columns. The
+    fake mirrors that column-subset merge."""
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({
+        "run_date": "2026-05-26",
+        "run_mode": "production",
+        "executive_summary": "Full summary",
+        "macro_sentiment": "Stable",
+        "suppression_breakdown": {"duplicate_url": 1},
+    })
+    repo.upsert_summary({
+        "run_date": "2026-05-26",
+        "run_mode": "production",
+        "screened_count": 12,
+        "suppression_breakdown": {"duplicate_url": 4},
+        "suppression_samples": [],
+    })
+    got = repo.get_delivery_state(run_date="2026-05-26", run_mode="production")
+    assert got["executive_summary"] == "Full summary"
+    assert got["macro_sentiment"] == "Stable"
+    assert got["screened_count"] == 12
+    assert got["suppression_breakdown"] == {"duplicate_url": 4}
+
+
 def test_upsert_summary_round_trips_all_columns():
     """Every column the engines write must round-trip unchanged."""
     repo = InMemoryIntelligenceRepo()

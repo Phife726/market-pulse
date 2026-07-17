@@ -707,9 +707,27 @@ def generate_macro_summary(
     - screened_count: total URLs discovered (stats["urls_discovered"])
     - suppression_breakdown: reason-code counters dict
     - suppression_samples: list of up to 10 suppressed-item samples
+
+    Accounting survives every run (issue #43): when no summary can be
+    generated (zero stored articles, or an unusable LLM response), an
+    accounting-only row is upserted instead. Content columns are OMITTED from
+    that payload — Supabase upsert only updates provided columns, so a
+    same-day retry never wipes an earlier full summary.
     """
+    from datetime import date
+    accounting_row = {
+        "run_date": date.today().isoformat(),
+        "run_mode": _run_mode(),
+        "screened_count": screened_count,
+        "suppression_breakdown": suppression_breakdown or {},
+        "suppression_samples": suppression_samples or [],
+    }
+
     if not articles:
-        logger.warning("No articles to summarize — skipping macro summary generation.")
+        logger.warning(
+            "No articles to summarize — persisting accounting-only summary row."
+        )
+        _repo().upsert_summary(accounting_row)
         return False
 
     mp = prompts.macro_prompt(articles)
@@ -718,7 +736,11 @@ def generate_macro_summary(
 
     parsed = _llm().complete_json(**mp.kwargs())
     if parsed is None:
-        logger.error("Macro summary generation failed — no usable LLM response.")
+        logger.error(
+            "Macro summary generation failed — no usable LLM response; "
+            "persisting accounting-only summary row."
+        )
+        _repo().upsert_summary(accounting_row)
         return False
 
     # Validate dominant_condition.
@@ -760,19 +782,14 @@ def generate_macro_summary(
     else:
         executive_summary = "Macro summary unavailable today."
 
-    from datetime import date
     _repo().upsert_summary({
-        "run_date": date.today().isoformat(),
-        "run_mode": _run_mode(),
+        **accounting_row,
         "dominant_condition": cond,
         "executive_bullets": bullets,
         "macro_outlook": macro_outlook,
         "executive_sources": executive_sources,
         "executive_summary": executive_summary,
         "macro_sentiment": cond,
-        "screened_count": screened_count,
-        "suppression_breakdown": suppression_breakdown or {},
-        "suppression_samples": suppression_samples or [],
     })
     logger.info("Macro summary upserted — condition: %s", cond)
     return True
