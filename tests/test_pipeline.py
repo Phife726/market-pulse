@@ -16,6 +16,7 @@ from ingestion_engine import (
     _validate_executive_bullets,
     build_query,
     compute_url_hash,
+    discover_urls,
     generate_macro_summary,
     load_targets,
     normalize_url,
@@ -4606,6 +4607,33 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
     assert "Sources" not in html_out
     assert "<a" not in html_out
     assert "Unused" not in html_out   # uncited source never leaks into output
+
+
+# ---------------------------------------------------------------------------
+# 18. discover_urls — client-side truncation to results_per_entity
+# ---------------------------------------------------------------------------
+
+def test_discover_urls_truncates_to_results_per_entity(monkeypatch):
+    """Serper's news endpoint returns pages of 10 regardless of the `num`
+    param — the client must enforce results_per_entity itself."""
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"news": [
+                {"link": f"https://example.com/article-{i}", "title": f"Headline {i}"}
+                for i in range(10)
+            ]}
+
+    monkeypatch.setenv("SERPER_API_KEY", "test_key")
+    monkeypatch.setattr("ingestion_engine.requests.post", lambda *a, **k: FakeResponse())
+
+    results = discover_urls("test query", 24, 2)
+
+    assert len(results) == 2
+    assert results[0] == ("https://example.com/article-0", "Headline 0")
+    assert results[1] == ("https://example.com/article-1", "Headline 1")
 
 
 # ---------------------------------------------------------------------------
