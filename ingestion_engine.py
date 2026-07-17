@@ -327,7 +327,8 @@ def _discovery_metadata(candidate: dict) -> dict:
 def _new_provider_yield() -> dict:
     return {
         "discovered": 0, "scraped": 0, "stored": 0,
-        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0, "duplicates": 0,
+        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0,
+        "unscrapable": 0, "duplicates": 0,
     }
 
 
@@ -337,9 +338,10 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         y = provider_yield[provider]
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
-            "discards=%d relevance_dropped=%d scrape_failed=%d duplicates=%d",
+            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
-            y["discards"], y["relevance_dropped"], y["scrape_failed"], y["duplicates"],
+            y["discards"], y["relevance_dropped"], y["scrape_failed"],
+            y["unscrapable"], y["duplicates"],
         )
 
 
@@ -416,6 +418,24 @@ def discover_candidates(target: dict) -> list[dict]:
     except Exception as exc:
         logger.error("ZoomInfo discovery failed for target '%s': %s", target.get("name"), exc)
     return candidates
+
+
+UNSCRAPABLE_DOMAINS: frozenset[str] = frozenset({
+    # Login-walled or bot-blocked platforms — Firecrawl returns 0 chars or
+    # burns the full wall-clock timeout on these.
+    "linkedin.com", "facebook.com", "instagram.com", "x.com", "twitter.com",
+    "youtube.com", "tiktok.com", "reddit.com",
+    # Retail product pages — never articles, frequent Serper false positives.
+    "amazon.com", "ebay.com", "walmart.com", "homedepot.com", "lowes.com",
+})
+
+
+def _is_unscrapable_domain(url: str) -> bool:
+    """True when the URL's host is (or is a subdomain of) a domain we never
+    scrape — login-walled platforms and retail product pages that waste the
+    Firecrawl budget. Malformed URLs return False (let the scraper decide)."""
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in UNSCRAPABLE_DOMAINS)
 
 
 def normalize_url(url: str) -> str:
@@ -835,6 +855,14 @@ def execute_pipeline() -> None:
                 _bump(provider, "duplicates")
                 suppression_ledger = suppression_ledger.record(
                     "semantic_duplicate", url=raw_url, title=candidate_title,
+                )
+                continue
+
+            if _is_unscrapable_domain(raw_url):
+                logger.info("UNSCRAPABLE_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
+                _bump(provider, "unscrapable")
+                suppression_ledger = suppression_ledger.record(
+                    "unscrapable_domain", url=raw_url, title=candidate_title,
                 )
                 continue
 

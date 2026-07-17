@@ -12,11 +12,13 @@ from llm import FakeLLM
 
 from ingestion_engine import (
     _TextExtractor,
+    _is_unscrapable_domain,
     _scrape_fallback,
     _validate_executive_bullets,
     build_query,
     compute_url_hash,
     discover_urls,
+    execute_pipeline,
     generate_macro_summary,
     load_targets,
     normalize_url,
@@ -4751,3 +4753,74 @@ def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
     for group in _NEW_CONCEPT_GROUPS:
         assert "zoominfo_company_id" not in config[group]
         assert "zoominfo_company_id" not in targets[group]
+
+
+# ---------------------------------------------------------------------------
+# 19. Pre-scrape unscrapable-domain filter
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://www.linkedin.com/posts/somebody-123", True),
+    ("https://linkedin.com/pulse/x", True),
+    ("https://uk.linkedin.com/jobs/view/1", True),     # country subdomain
+    ("https://www.amazon.com/dp/B0ABC123", True),
+    ("https://www.homedepot.com/p/product/12345", True),
+    ("https://www.reuters.com/markets/some-article/", False),
+    ("https://notlinkedin.com/article", False),        # suffix must be dot-anchored
+    ("not a url", False),                              # malformed → let the scraper decide
+])
+def test_is_unscrapable_domain(url, expected):
+    assert _is_unscrapable_domain(url) is expected
+
+
+def test_execute_pipeline_skips_unscrapable_domain_before_scraping(monkeypatch):
+    """An unscrapable-domain candidate must be suppressed pre-scrape: no
+    Firecrawl attempt, and the ledger records unscrapable_domain."""
+    import ingestion_engine as ie
+
+    target = {
+        "name": "Acme", "category": "competitor", "query": '"Acme"',
+        "lookback_hours": 24, "results_per_entity": 2, "min_article_length": 500,
+    }
+    candidate = {
+        "url": "https://www.linkedin.com/posts/acme-update",
+        "title": "Acme update", "provider": "serper",
+    }
+    summary_kwargs = {}
+
+    monkeypatch.setattr(ie, "load_targets", lambda path: [target])
+    monkeypatch.setattr(ie, "discover_candidates", lambda t: [candidate])
+    monkeypatch.setattr(ie, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ie, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(
+        ie, "scrape_article",
+        lambda *a, **k: pytest.fail("scrape_article must not be called for an unscrapable domain"),
+    )
+    monkeypatch.setattr(
+        ie, "generate_macro_summary",
+        lambda buffer, screened_count, **kwargs: summary_kwargs.update(kwargs),
+    )
+
+    execute_pipeline()
+
+    assert summary_kwargs["suppression_breakdown"] == {"unscrapable_domain": 1}
+    assert summary_kwargs["suppression_samples"] == [{
+        "reason": "unscrapable_domain",
+        "url": "https://www.linkedin.com/posts/acme-update",
+        "title": "Acme update",
+    }]
+
+
+def test_render_qa_debug_section_includes_unscrapable_domain():
+    """The unscrapable_domain code must get a labeled breakdown row in the QA
+    debug section (not just fold into the suppressed total)."""
+    from delivery_engine import _render_qa_debug_section
+    macro = {
+        "screened_count": 40,
+        "surfaced_count": 5,
+        "suppression_breakdown": {"unscrapable_domain": 4},
+        "suppression_samples": [],
+    }
+    html = _render_qa_debug_section(macro)
+    assert "unscrapable domain" in html
+    assert ">4</td>" in html
