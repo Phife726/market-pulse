@@ -12,6 +12,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
     ("semantic_duplicate",       "semantic duplicate"),
     ("llm_discard",              "LLM discard"),
     ("scrape_failed",            "scrape failed"),
+    ("unscrapable_domain",       "unscrapable domain"),
     ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
 _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
