@@ -146,6 +146,7 @@ def test_load_targets_returns_expected_fields(tmp_path):
     assert t["results_per_entity"] == 3
     assert t["lookback_hours"] == 48
     assert t["min_article_length"] == 300
+    assert t["search_mode"] == "entity"
 
 
 def test_load_targets_concept_group(tmp_path):
@@ -174,6 +175,7 @@ def test_load_targets_concept_group(tmp_path):
     t = targets[0]
     assert t["name"] == "industry"
     assert t["category"] == "industry"
+    assert t["search_mode"] == "concept"
     assert '("plastics industry" OR "chemical industry")' in t["query"]
     assert '-"tenders"' in t["query"]
 
@@ -732,8 +734,13 @@ def test_validate_macro_outlook_rejects_invalid_direction():
 
 
 def test_validate_macro_outlook_rejects_invalid_segment():
-    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Building & Construction"])])
+    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Consumer Goods"])])
     assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
+
+
+def test_validate_macro_outlook_accepts_building_construction_segment():
+    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Building & Construction"])])
+    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is not None
 
 
 def test_validate_macro_outlook_rejects_blank_fields():
@@ -1224,6 +1231,113 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
 
     mock_log_stats.assert_called_once()
     mock_macro.assert_called_once()
+
+
+# ===========================================================================
+# Protected tail budget — concept/macro groups must always get discovery
+# ===========================================================================
+
+def _reserve_target(name: str, search_mode: str) -> dict:
+    return {
+        "name": name,
+        "category": name,
+        "query": f'"{name}"',
+        "results_per_entity": 2,
+        "lookback_hours": 24,
+        "min_article_length": 500,
+        "search_mode": search_mode,
+    }
+
+
+def _run_reserve_pipeline(monkeypatch, targets: list[dict]) -> list[str]:
+    """Run execute_pipeline over fake targets (one candidate each, every scrape
+    succeeds and stores) and return the trigger entities stored, in order."""
+    import ingestion_engine
+
+    monkeypatch.setattr(ingestion_engine, "load_targets", lambda path: targets)
+    monkeypatch.setattr(
+        ingestion_engine, "discover_candidates",
+        lambda target: [{
+            "url": f"https://example.com/{target['name']}",
+            "title": f"News about {target['name']}",
+            "provider": "serper",
+        }],
+    )
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(
+        ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
+    monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "text " * 200)
+    monkeypatch.setattr(
+        ingestion_engine, "synthesize_insight",
+        lambda text, url, entity, category: {
+            "headline": f"Headline {entity}",
+            "americhem_impact": "Impact.",
+            "sentiment_score": 5,
+            "source_url": url,
+            "entities_mentioned": [],
+        },
+    )
+    stored: list[str] = []
+    monkeypatch.setattr(
+        ingestion_engine, "store_insight",
+        lambda payload: stored.append(payload["trigger_entity"]),
+    )
+    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", MagicMock(return_value=True))
+    monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
+
+    execute_pipeline()
+    return stored
+
+
+def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch):
+    """When remaining scrape slots fall to the reserve, remaining ENTITY targets
+    are skipped but concept targets still run — concept/macro coverage is
+    protected from entity-tail starvation."""
+    import ingestion_engine
+
+    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 2)
+    monkeypatch.setattr(ingestion_engine, "TAIL_RESERVE_SCRAPES", 1)
+    stored = _run_reserve_pipeline(monkeypatch, [
+        _reserve_target("EntityA", "entity"),
+        _reserve_target("EntityB", "entity"),
+        _reserve_target("concept_group", "concept"),
+    ])
+    # EntityA consumes the unreserved slot; EntityB is skipped by the reserve;
+    # the concept group spends the reserved slot.
+    assert stored == ["EntityA", "concept_group"]
+
+
+def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
+    """When remaining wall-clock falls to the time reserve, remaining ENTITY
+    targets are skipped but concept targets still run."""
+    import ingestion_engine
+
+    monkeypatch.setattr(ingestion_engine, "PIPELINE_DEADLINE_SECONDS", 100)
+    monkeypatch.setattr(ingestion_engine, "TAIL_RESERVE_SECONDS", 50)
+    # First call anchors pipeline_start at 0; everything after runs at t=60 —
+    # past the entity cutoff (100-50=50) but inside the hard deadline (100).
+    call_count = {"n": 0}
+
+    def fake_monotonic():
+        call_count["n"] += 1
+        return 0.0 if call_count["n"] == 1 else 60.0
+
+    monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
+    stored = _run_reserve_pipeline(monkeypatch, [
+        _reserve_target("EntityA", "entity"),
+        _reserve_target("concept_group", "concept"),
+    ])
+    assert stored == ["concept_group"]
+
+
+def test_tail_reserve_defaults_leave_headroom_for_tail_groups():
+    """The shipped constants must actually reserve something: a nonzero slot
+    and time reserve, both smaller than the budgets they carve from."""
+    import ingestion_engine
+
+    assert 0 < ingestion_engine.TAIL_RESERVE_SCRAPES < ingestion_engine.MAX_DAILY_SCRAPES
+    assert 0 < ingestion_engine.TAIL_RESERVE_SECONDS < ingestion_engine.PIPELINE_DEADLINE_SECONDS
 
 
 # ===========================================================================
@@ -2614,17 +2728,13 @@ def test_config_has_commercial_segments_and_signal_types():
     signal_types, macro_conditions, executive_bullet_labels, and
     delivery_suppression blocks with the expected labels."""
     import yaml
+
+    from insight import VALID_COMMERCIAL_SEGMENTS
     with open("market_pulse_config.yaml") as fh:
         cfg = yaml.safe_load(fh)
 
     segments = {s["label"] for s in cfg["commercial_segments"].values()}
-    assert segments == {
-        "Healthcare", "Fibers",
-        "Transportation - Automotive", "Transportation - Non-Automotive",
-        "Transportation - Aerospace",
-        "Industrial", "Packaging", "Engineered Resins",
-        "Enterprise / Cross-Segment",
-    }
+    assert segments == set(VALID_COMMERCIAL_SEGMENTS)
 
     signals = {s["label"] for s in cfg["signal_types"].values()}
     assert signals == {

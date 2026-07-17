@@ -83,6 +83,10 @@ def test_normalize_preserves_and_strips_valid_segment():
     assert insight.normalize(_raw(commercial_segment="  Healthcare "))["commercial_segment"] == "Healthcare"
 
 
+def test_normalize_preserves_building_construction_segment():
+    assert insight.normalize(_raw(commercial_segment="Building & Construction"))["commercial_segment"] == "Building & Construction"
+
+
 def test_normalize_defaults_invalid_signal_type():
     assert insight.normalize(_raw(signal_type="Vibes"))["signal_type"] == "Other"
 

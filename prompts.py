@@ -111,7 +111,8 @@ class MacroPrompt(PromptSpec):
 _FALLBACK_COMMERCIAL_SEGMENT_LIST = (
     "Healthcare | Fibers | Transportation - Automotive | "
     "Transportation - Non-Automotive | Transportation - Aerospace | "
-    "Industrial | Packaging | Engineered Resins | Enterprise / Cross-Segment"
+    "Industrial | Building & Construction | Packaging | Engineered Resins | "
+    "Enterprise / Cross-Segment"
 )
 
 _FALLBACK_SIGNAL_TYPE_LIST = (

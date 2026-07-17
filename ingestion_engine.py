@@ -37,8 +37,14 @@ def _run_mode() -> str:
     return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
 
 
-MAX_DAILY_SCRAPES = 150
+MAX_DAILY_SCRAPES = 180
 PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside the 40-min CI limit
+# Protected tail budget: once remaining scrape slots or wall-clock fall to these
+# floors, remaining ENTITY targets are skipped so the concept/macro groups at the
+# bottom of targets.yaml always get discovery. Entity coverage is redundant
+# day-over-day (dedup absorbs re-discoveries); concept/macro coverage is not.
+TAIL_RESERVE_SCRAPES = 30
+TAIL_RESERVE_SECONDS = 360
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
@@ -188,6 +194,7 @@ def load_targets(config_path: str) -> list[dict]:
                 targets.append({
                     "name": entity["name"],
                     "category": group_name,
+                    "search_mode": "entity",
                     "query": build_query(
                         "entity",
                         name=entity["name"],
@@ -207,6 +214,7 @@ def load_targets(config_path: str) -> list[dict]:
             targets.append({
                 "name": group_name,
                 "category": group_name,
+                "search_mode": "concept",
                 "query": build_query(
                     "concept",
                     include_any=group_cfg.get("include_any", []),
@@ -805,6 +813,7 @@ def execute_pipeline() -> None:
     def _bump(provider: str, key: str) -> None:
         provider_yield.setdefault(provider, _new_provider_yield())[key] += 1
 
+    tail_reserve_triggered = False
     for target in targets:
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
             logger.warning(
@@ -812,6 +821,26 @@ def execute_pipeline() -> None:
                 PIPELINE_DEADLINE_SECONDS, target["name"],
             )
             break
+
+        # Protected tail budget: once either budget falls to its reserve floor,
+        # stop starting ENTITY targets so the concept/macro groups at the bottom
+        # of targets.yaml still get their discovery pass. Concept targets keep
+        # running until the hard cap/deadline above actually fires.
+        if target.get("search_mode", "entity") == "entity":
+            slots_low = scrapes_attempted >= MAX_DAILY_SCRAPES - TAIL_RESERVE_SCRAPES
+            clock_low = (
+                time.monotonic() - pipeline_start
+                >= PIPELINE_DEADLINE_SECONDS - TAIL_RESERVE_SECONDS
+            )
+            if slots_low or clock_low:
+                if not tail_reserve_triggered:
+                    logger.warning(
+                        "Tail reserve reached (%s) at target '%s' — skipping remaining "
+                        "entity targets to protect concept/macro coverage.",
+                        "scrape slots" if slots_low else "wall clock", target["name"],
+                    )
+                    tail_reserve_triggered = True
+                continue
 
         entity_name = target["name"]
         category = target["category"]
