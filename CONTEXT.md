@@ -66,8 +66,9 @@ pure functions differently, not by injection.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
 - **Additional Articles to Explore** — the optional-discovery appendix
-  (`ReportModel.additional_articles`): suppression-surviving weak-relevance
-  (score 4–5) rows that are not visible cards, ranked deterministically and
+  (`ReportModel.additional_articles`): suppression-surviving rows scoring at
+  or above the supporting threshold (≥ 4) that are not visible cards — the
+  weak-relevance band plus cap overflow — ranked deterministically and
   capped at `reporting.max_additional_articles` (default 10). Rendered
   compactly below Commercial Segment Watch, without the "So what" narrative.
   Never affects `surfaced_count`. Rows shown here are excluded from the
