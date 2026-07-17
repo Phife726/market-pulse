@@ -508,6 +508,9 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
         # blocked inside requests.post; waiting for it (the `with` default)
         # would defeat the ceiling. The orphaned thread exits on its own when
         # the underlying request times out.
+        # Caveat: concurrent.futures' atexit hook still joins orphaned threads
+        # at interpreter shutdown, so a hang on the run's final scrape can delay
+        # process exit (not the pipeline loop) by up to the inner 30s timeouts.
         executor.shutdown(wait=False)
     data = response.json()
     markdown: str = data.get("data", {}).get("markdown", "") or ""
@@ -798,6 +801,7 @@ def execute_pipeline() -> None:
         entity_name = target["name"]
         category = target["category"]
         min_article_length = target["min_article_length"]
+        target_start = time.monotonic()
 
         candidates = discover_candidates(target)
         stats["urls_discovered"] += len(candidates)
@@ -954,6 +958,11 @@ def execute_pipeline() -> None:
                 seen_headlines.add(article_insight["headline"])
 
             time.sleep(1.5)
+
+        logger.info(
+            "Target '%s' processed in %.1fs (%d candidates)",
+            entity_name, time.monotonic() - target_start, len(candidates),
+        )
 
     _log_stats(stats, suppression_ledger.breakdown)
     _log_provider_yield(provider_yield)
