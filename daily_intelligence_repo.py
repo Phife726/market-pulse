@@ -257,7 +257,14 @@ class InMemoryIntelligenceRepo:
         run_mode = row.get("run_mode", "production")
         if not run_date:
             raise ValueError("summary row missing run_date")
-        self._summaries[(run_date, run_mode)] = dict(row)
+        key = (run_date, run_mode)
+        if key in self._summaries:
+            # Mirror Supabase upsert (merge-duplicates): on conflict, only the
+            # columns present in the payload are updated — an accounting-only
+            # upsert must not wipe an existing row's summary content.
+            self._summaries[key].update(dict(row))
+        else:
+            self._summaries[key] = dict(row)
 
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]:
         candidates = [

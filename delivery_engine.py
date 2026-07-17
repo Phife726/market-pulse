@@ -454,6 +454,39 @@ def fetch_todays_intelligence() -> list[dict]:
     return rows
 
 
+def _summary_has_content(row: Optional[dict]) -> bool:
+    """True when the row carries renderable macro-summary content. Zero-yield
+    ingestion runs persist accounting-only rows (screened/suppression counts
+    with no summary fields, issue #43) — those return False."""
+    if not row:
+        return False
+    return bool(
+        row.get("executive_bullets")
+        or row.get("executive_summary")
+        or row.get("macro_outlook")
+        or row.get("dominant_condition")
+    )
+
+
+def _prefer_production_summary(test_row: Optional[dict], production_row: Optional[dict]) -> bool:
+    """Test-mode fallback comparison: content-fullness first, then strict
+    run_date recency; ties keep the test row (the date-rollover grace). An
+    accounting-only row therefore never shadows a content-full one in either
+    direction — before issue #43 such rows did not exist at all."""
+    if production_row is None:
+        return False
+    if test_row is None:
+        return True
+    prod_content = _summary_has_content(production_row)
+    test_content = _summary_has_content(test_row)
+    if prod_content != test_content:
+        return prod_content
+    return (
+        str(production_row.get("run_date") or "")
+        > str(test_row.get("run_date") or "")
+    )
+
+
 def fetch_macro_summary() -> dict | None:
     from datetime import date
     min_run_date = (date.today() - timedelta(days=1)).isoformat()
@@ -465,25 +498,22 @@ def fetch_macro_summary() -> dict | None:
         # Delivery-only test runs (run_ingestion=false) have no same-day
         # test-mode macro row — ingestion is what writes it — and a leftover
         # test row from yesterday's QA run would be stale against today's
-        # articles. Use the production row READ-ONLY whenever it is strictly
-        # NEWER than the test candidate (or the test candidate is absent);
-        # recency ties keep the test row, which preserves the date-rollover
-        # grace the >= yesterday window exists for. Production accounting is
-        # never touched: the delivery write-back keys on run_mode='test',
-        # which matches no row and is a silent no-op UPDATE. Production mode
-        # never falls back — it must not read test rows.
+        # articles. Use the production row READ-ONLY whenever it out-ranks
+        # the test candidate per _prefer_production_summary (absent candidate,
+        # more content, or strictly newer at equal content); recency ties keep
+        # the test row, which preserves the date-rollover grace the
+        # >= yesterday window exists for. Production accounting is never
+        # touched: the delivery write-back keys on run_mode='test', which
+        # matches no row and is a silent no-op UPDATE. Production mode never
+        # falls back — it must not read test rows.
         production_row = _repo().fetch_latest_summary(
             run_mode="production",
             min_date=min_run_date,
         )
-        if production_row is not None and (
-            summary is None
-            or str(production_row.get("run_date") or "")
-            > str(summary.get("run_date") or "")
-        ):
+        if _prefer_production_summary(summary, production_row):
             logger.info(
-                "No same-day test-mode macro summary — using the newer "
-                "production row (run_date %s) for the QA re-render.",
+                "Using the production macro-summary row (run_date %s) for the "
+                "QA re-render — test candidate absent, stale, or content-empty.",
                 production_row.get("run_date"),
             )
             summary = production_row

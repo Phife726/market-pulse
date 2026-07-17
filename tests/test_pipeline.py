@@ -660,10 +660,32 @@ def test_render_card_never_renders_action_line(action):
 from ingestion_engine import generate_macro_summary
 
 
-def test_generate_macro_summary_empty_articles():
-    """Should return False immediately when no articles are provided."""
-    result = generate_macro_summary([])
+def test_generate_macro_summary_empty_articles_persists_accounting_only_row():
+    """Zero stored articles must still persist the run's ingestion accounting
+    (issue #43): an accounting-only daily_summaries row carrying screened_count
+    and the suppression breakdown/samples, returning False (no summary was
+    generated). Content columns are OMITTED from the payload — not written as
+    null — so a same-day retry can never wipe an earlier full summary."""
+    from daily_intelligence_repo import InMemoryIntelligenceRepo
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._repo", lambda: fake_repo):
+        result = generate_macro_summary(
+            [],
+            screened_count=17,
+            suppression_breakdown={"duplicate_url": 9, "unscrapable_domain": 2},
+            suppression_samples=[{"reason": "duplicate_url", "url": "u", "title": "t"}],
+        )
     assert result is False
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored is not None
+    assert stored["screened_count"] == 17
+    assert stored["suppression_breakdown"] == {"duplicate_url": 9, "unscrapable_domain": 2}
+    assert stored["suppression_samples"] == [
+        {"reason": "duplicate_url", "url": "u", "title": "t"}
+    ]
+    for content_key in ("executive_summary", "macro_sentiment", "dominant_condition",
+                        "executive_bullets", "macro_outlook", "executive_sources"):
+        assert content_key not in stored, f"{content_key} must be omitted, not written"
 
 
 # ---------------------------------------------------------------------------
@@ -820,16 +842,57 @@ def test_generate_macro_summary_persists_macro_outlook_and_union_sources():
     assert {s["id"] for s in stored["executive_sources"]} == {1, 2}
 
 
-def test_generate_macro_summary_llm_none_degrades_without_crash():
-    """An LLM transport failure (None) yields False — no macro row, no crash —
-    exactly as the pre-macro-outlook behavior."""
+def test_generate_macro_summary_llm_none_persists_accounting_only_row():
+    """An LLM transport failure (None) yields False and no summary content —
+    but the run's ingestion accounting must still be persisted (issue #43),
+    exactly as on a zero-yield run."""
     fake = FakeLLM(returns=None)
     fake_repo = InMemoryIntelligenceRepo()
     with patch("ingestion_engine._llm", return_value=fake), \
          patch("ingestion_engine._repo", lambda: fake_repo):
-        result = generate_macro_summary(_macro_articles())
+        result = generate_macro_summary(
+            _macro_articles(),
+            screened_count=5,
+            suppression_breakdown={"scrape_failed": 1},
+        )
     assert result is False
-    assert fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01") is None
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored is not None
+    assert stored["screened_count"] == 5
+    assert stored["suppression_breakdown"] == {"scrape_failed": 1}
+    assert "executive_summary" not in stored
+    assert "executive_bullets" not in stored
+
+
+def test_generate_macro_summary_zero_yield_retry_keeps_earlier_content():
+    """Same-day retry: a morning run wrote a full summary; an afternoon retry
+    that stores zero articles refreshes the accounting columns WITHOUT wiping
+    the morning's summary content (column-subset upsert)."""
+    fake = FakeLLM(returns={
+        "dominant_condition": "Demand Softness",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Industrial demand cooling.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Feedstock steady.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "Engage key accounts.", "citation_source_ids": []},
+        ],
+    })
+    fake_repo = InMemoryIntelligenceRepo()
+    with patch("ingestion_engine._llm", return_value=fake), \
+         patch("ingestion_engine._repo", lambda: fake_repo):
+        assert generate_macro_summary(
+            _macro_articles(), screened_count=40,
+            suppression_breakdown={"duplicate_url": 3},
+        ) is True
+    with patch("ingestion_engine._repo", lambda: fake_repo):
+        assert generate_macro_summary(
+            [], screened_count=12,
+            suppression_breakdown={"duplicate_url": 12},
+        ) is False
+    stored = fake_repo.fetch_latest_summary(run_mode="production", min_date="2000-01-01")
+    assert stored["dominant_condition"] == "Demand Softness"
+    assert len(stored["executive_bullets"]) == 3
+    assert stored["screened_count"] == 12
+    assert stored["suppression_breakdown"] == {"duplicate_url": 12}
 
 
 def test_generate_macro_summary_malformed_outlook_keeps_bullets():
@@ -3147,6 +3210,107 @@ def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatc
     result = fetch_macro_summary()
     assert result is not None
     assert result["executive_summary"] == "Rollover test summary"
+
+
+def test_fetch_macro_summary_test_mode_accounting_only_test_row_does_not_shadow_production(monkeypatch):
+    """A zero-yield test ingestion run persists an accounting-only test row
+    (issue #43). On a run-date tie it must NOT shadow a content-full production
+    row — content-fullness is compared before recency, so the QA re-render
+    keeps the executive summary."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "screened_count": 9, "suppression_breakdown": {"duplicate_url": 9},
+        "suppression_samples": [],
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "executive_summary": "Prod summary", "macro_sentiment": "Stable",
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Prod summary"
+
+
+def test_fetch_macro_summary_test_mode_accounting_only_production_row_does_not_shadow_test(monkeypatch):
+    """The mirror direction: a strictly-newer accounting-only production row
+    (zero-yield production run today) must not shadow yesterday's content-full
+    test row — pre-#43 no production row would have existed at all."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date, timedelta as _td
+    today = date.today().isoformat()
+    yesterday = (date.today() - _td(days=1)).isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": yesterday, "run_mode": "test",
+        "executive_summary": "Rollover test summary", "macro_sentiment": "Stable",
+    })
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "production",
+        "screened_count": 14, "suppression_breakdown": {"scrape_failed": 14},
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["executive_summary"] == "Rollover test summary"
+
+
+def test_fetch_macro_summary_test_mode_returns_accounting_only_row_when_no_content_anywhere(monkeypatch):
+    """When the only candidate is an accounting-only test row, return it — the
+    QA debug section still renders that day's suppression accounting."""
+    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
+    from delivery_engine import fetch_macro_summary
+    from datetime import date
+    today = date.today().isoformat()
+
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary({
+        "run_date": today, "run_mode": "test",
+        "screened_count": 6, "suppression_breakdown": {"unscrapable_domain": 6},
+        "suppression_samples": [],
+    })
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    result = fetch_macro_summary()
+    assert result is not None
+    assert result["screened_count"] == 6
+
+
+def test_render_report_tolerates_accounting_only_macro_summary(monkeypatch):
+    """A summary-less row (zero-yield ingestion day, issue #43) renders without
+    crashing: no Executive Summary block, no Macroeconomic Outlook, but the
+    QA suppression summary and the screened count in the subtitle still come
+    from the row's accounting."""
+    summary = {
+        "run_date": "2026-07-17", "run_mode": "test",
+        "screened_count": 21,
+        "suppression_breakdown": {"duplicate_url": 5},
+        "suppression_samples": [{"reason": "duplicate_url", "url": "https://x/d", "title": "Dup"}],
+    }
+    rows = [
+        {"url_hash": "v1", "commercial_segment": "Packaging",
+         "americhem_impact_score": 7, "sentiment_tag": "Neutral",
+         "signal_type": "Customer", "headline": "Visible packaging signal",
+         "americhem_impact": "Effect.", "source_url": "https://x/v1",
+         "entities_mentioned": ["Acme"]},
+    ]
+    model = assemble_report(rows, summary, config={"reporting": {"visible_impact_threshold": 6}})
+    html = render_report(model, today_str=_TODAY_STR, test_mode=True)
+    assert "Executive Summary" not in html
+    assert "MACROECONOMIC OUTLOOK" not in html
+    assert "Suppression Summary" in html
+    assert "21 screened items" in html
 
 
 def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):

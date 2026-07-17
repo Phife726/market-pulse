@@ -52,6 +52,15 @@ pure functions differently, not by injection.
   (`Scoring.from_config`, `tier`, `is_legacy_critical`).
 - **Macro summary** — the once-per-run brief (`dominant_condition` +
   `executive_bullets` + `macro_outlook`) written to `daily_summaries`.
+- **Accounting-only summary row** — the `daily_summaries` row a run persists
+  when it cannot generate a macro summary (zero stored articles, or an
+  unusable LLM response): `run_date`/`run_mode` plus `screened_count` and the
+  suppression breakdown/samples, with every content column **omitted** from
+  the upsert payload (Supabase updates only provided columns, so a same-day
+  retry never wipes an earlier full summary). Delivery renders it summary-less
+  (no Executive Summary / Macroeconomic Outlook), and in the test-mode
+  fallback `_summary_has_content` ranks content-fullness before recency so an
+  accounting-only row never shadows a content-full one.
 - **Macroeconomic Outlook** (`macro_outlook`) — the structured macro read:
   `{current_condition, signals:[{indicator, direction, americhem_implication,
   affected_segments, citation_source_ids}]}`. Validated at ingestion by
