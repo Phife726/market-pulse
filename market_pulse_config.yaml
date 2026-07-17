@@ -13,14 +13,16 @@ reporting:
   # are used to generate thematic summaries but are not shown as visible cards.
   supporting_impact_threshold: 4
 
-  # Optional caps on visible cards. null (the default) means show EVERY article
-  # at or above visible_impact_threshold. Set either to an integer to re-impose
-  # a cap if the report gets noisy — a config-only change, no code edit.
-  max_visible_articles_per_segment: null   # e.g. 3 to cap per-segment
+  # Optional caps on visible cards. null means show EVERY article at or above
+  # visible_impact_threshold. Per-segment cap re-imposed at 5 on 2026-07-17
+  # (full-target coverage made the uncapped report too long); capped-out
+  # articles flow into the Additional Articles appendix, they are not dropped.
+  max_visible_articles_per_segment: 5      # top 5 by impact score per segment
   max_total_visible_articles: null         # e.g. 12 to cap the total
 
   # Cap on the optional "Additional Articles to Explore" appendix — the
-  # score-4/5 near-threshold rows shown compactly at the bottom of the email.
+  # near-threshold and cap-overflow rows shown compactly at the bottom of the
+  # email.
   max_additional_articles: 10
 
 # Strategic segment taxonomy.
