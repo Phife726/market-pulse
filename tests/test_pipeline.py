@@ -1371,6 +1371,36 @@ def test_assemble_report_filters_below_impact_threshold():
     assert "Low Impact Headline" not in html
 
 
+def test_report_macro_outlook_sliced_to_cap():
+    """daily_summaries rows stored before the cap reduction may hold up to 6
+    signals; assemble_report slices to MAX_MACRO_OUTLOOK_SIGNALS so QA
+    re-renders (run_ingestion=false) comply immediately."""
+    from prompts import MAX_MACRO_OUTLOOK_SIGNALS
+
+    signals = [
+        {
+            "indicator": f"Indicator {i}",
+            "direction": "Declining",
+            "americhem_implication": "Downside risk for resin demand.",
+            "affected_segments": ["Industrial"],
+            "citation_source_ids": [1],
+        }
+        for i in range(6)
+    ]
+    macro_summary = {
+        "macro_outlook": {"current_condition": "Manufacturing demand mixed.",
+                          "signals": signals},
+    }
+    rows = [_make_new_article("a", 8, commercial_segment="Packaging",
+                              headline="Packaging demand firms on brand-owner restocking")]
+    model = assemble_report(rows, macro_summary=macro_summary)
+
+    assert [s["indicator"] for s in model.macro_outlook["signals"]] == [
+        "Indicator 0", "Indicator 1", "Indicator 2",
+    ]
+    assert len(model.macro_outlook["signals"]) == MAX_MACRO_OUTLOOK_SIGNALS
+
+
 def test_assemble_report_groups_by_commercial_segment():
     """Two new-style articles with the same commercial_segment are grouped under that label."""
     # Use genuinely distinct headlines so delivery suppression doesn't flag them

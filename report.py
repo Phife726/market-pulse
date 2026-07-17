@@ -24,6 +24,7 @@ from insight import (
     commercial_segment as _commercial_segment_of,
 )
 from scoring import Scoring
+from prompts import MAX_MACRO_OUTLOOK_SIGNALS
 from suppression_ledger import SuppressionLedger
 
 logger = logging.getLogger(__name__)
@@ -288,7 +289,10 @@ def _extract_macro_outlook(macro_summary: Optional[dict]) -> Optional[dict]:
     a non-empty current_condition and at least one signal. Anything else
     (missing, None, malformed, empty signals) becomes None, so the renderer
     shows no section. Signal *contents* were validated at ingestion
-    (_validate_macro_outlook); this is the defensive read of a stored row."""
+    (_validate_macro_outlook); this is the defensive read of a stored row.
+    Signals are sliced to MAX_MACRO_OUTLOOK_SIGNALS so rows stored before a
+    cap reduction render at most the current cap (returns a new dict — never
+    mutates the stored row)."""
     outlook = (macro_summary or {}).get("macro_outlook")
     if not isinstance(outlook, dict):
         return None
@@ -298,7 +302,8 @@ def _extract_macro_outlook(macro_summary: Optional[dict]) -> Optional[dict]:
         return None
     if not isinstance(signals, list) or not signals:
         return None
-    return outlook
+    return {"current_condition": current,
+            "signals": signals[:MAX_MACRO_OUTLOOK_SIGNALS]}
 
 
 def assemble_report(
