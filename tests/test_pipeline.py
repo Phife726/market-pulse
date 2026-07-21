@@ -5586,3 +5586,217 @@ def test_scrape_article_returns_promptly_after_wall_clock_timeout(monkeypatch):
 
     assert result is None
     assert elapsed < 1.0  # must not wait out the 2s hung thread
+
+
+# ---------------------------------------------------------------------------
+# Display-only segment merge: ground transportation -> "Transportation — Vehicles"
+# ---------------------------------------------------------------------------
+
+_MERGE_CFG = {
+    "reporting": {
+        "visible_impact_threshold": 6,
+        "max_visible_articles_per_segment": 5,
+        "segment_display_groups": {
+            "Transportation — Vehicles": [
+                "Transportation - Automotive",
+                "Transportation - Non-Automotive",
+            ],
+        },
+    },
+}
+
+
+def test_ground_transportation_merges_aerospace_separate():
+    """Automotive + Non-Automotive rows collapse into one display group;
+    Aerospace keeps its own section."""
+    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+                             headline="EV platform retooling lifts under-hood compound demand")
+    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+                                 headline="Rail freight operators standardize on flame-retardant interiors")
+    aero = _make_new_article("aero", 9, commercial_segment="Transportation - Aerospace",
+                             headline="Aircraft interior supplier qualifies new lightweight composite")
+
+    model = assemble_report([auto, non_auto, aero], config=_MERGE_CFG)
+
+    assert set(model.groups) == {"Transportation — Vehicles", "Transportation - Aerospace"}
+    merged = {a["url_hash"] for a in model.groups["Transportation — Vehicles"]}
+    assert merged == {"auto", "nonauto"}
+    assert [a["url_hash"] for a in model.groups["Transportation - Aerospace"]] == ["aero"]
+
+
+def test_ground_transportation_cap_applies_post_merge():
+    """The per-segment cap governs the merged group: 4 automotive + 3
+    non-automotive visible rows with cap 5 yield 5 cards in the merged group
+    (top-5 by impact), and the 2 overflow rows land in the appendix — the
+    combined section must not balloon to all 7."""
+    auto_headlines = [
+        "EV platform retooling lifts under-hood compound demand",
+        "Automaker qualifies bio-based interior trim resin",
+        "Tier-1 supplier expands lightweight bumper compounding",
+        "Battery-tray molders shift to flame-retardant grades",
+    ]
+    non_auto_headlines = [
+        "Rail freight operators standardize on flame-retardant interiors",
+        "Heavy-truck OEM adopts new thermal-management polymer",
+        "Off-highway equipment maker requalifies hydraulic seals",
+    ]
+    autos = [
+        _make_new_article(f"auto{i}", americhem_impact_score=10 - i,
+                          commercial_segment="Transportation - Automotive",
+                          headline=auto_headlines[i])
+        for i in range(4)
+    ]
+    non_autos = [
+        _make_new_article(f"non{i}", americhem_impact_score=6,
+                          commercial_segment="Transportation - Non-Automotive",
+                          headline=non_auto_headlines[i])
+        for i in range(3)
+    ]
+    model = assemble_report(autos + non_autos, config=_MERGE_CFG)
+
+    merged = model.groups["Transportation — Vehicles"]
+    assert len(merged) == 5
+    assert model.surfaced_count == 5
+    # Top-5 by impact: auto0(10), auto1(9), auto2(8), auto3(7), then one of the
+    # score-6 non-autos (tie broken by the stable sort). The two other score-6
+    # non-autos overflow into the appendix.
+    overflow = {a["url_hash"] for a in model.additional_articles}
+    assert len(overflow) == 2
+    assert overflow.issubset({"non0", "non1", "non2"})
+
+
+def test_absent_segment_display_groups_no_merge():
+    """With no segment_display_groups the two ground-transport segments stay
+    separate — a config-only rollback restores today's behavior exactly."""
+    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+                             headline="EV platform retooling lifts under-hood compound demand")
+    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+                                 headline="Rail freight operators standardize on flame-retardant interiors")
+
+    no_key = assemble_report([auto, non_auto],
+                             config={"reporting": {"visible_impact_threshold": 6}})
+    empty_map = assemble_report([auto, non_auto],
+                                config={"reporting": {"visible_impact_threshold": 6,
+                                                      "segment_display_groups": {}}})
+
+    for model in (no_key, empty_map):
+        assert set(model.groups) == {"Transportation - Automotive",
+                                     "Transportation - Non-Automotive"}
+
+
+def test_unknown_segment_label_in_mapping_ignored():
+    """A mapping entry naming a segment label that is not a real canonical
+    segment is ignored — no crash, no phantom group."""
+    cfg = {
+        "reporting": {
+            "visible_impact_threshold": 6,
+            "segment_display_groups": {
+                "Bogus Display": ["Not A Real Segment", "Also Fake"],
+                "Transportation — Vehicles": ["Transportation - Automotive",
+                                              "Transportation - Non-Automotive"],
+            },
+        },
+    }
+    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+                             headline="EV platform retooling lifts under-hood compound demand")
+    model = assemble_report([auto], config=cfg)
+
+    assert set(model.groups) == {"Transportation — Vehicles"}
+    assert "Bogus Display" not in model.groups
+
+
+def test_merged_group_is_single_synthesis_candidate():
+    """A merged group with 2+ articles appears once, under the display label, in
+    synthesis_candidates — so thematic synthesis produces one paragraph for the
+    combined section (not one per canonical segment)."""
+    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+                             headline="EV platform retooling lifts under-hood compound demand")
+    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+                                 headline="Rail freight operators standardize on flame-retardant interiors")
+
+    model = assemble_report([auto, non_auto], config=_MERGE_CFG)
+    candidates = model.synthesis_candidates()
+
+    assert list(candidates) == ["Transportation — Vehicles"]
+    assert {a["url_hash"] for a in candidates["Transportation — Vehicles"]} == {"auto", "nonauto"}
+
+
+def test_surfaced_count_equals_sum_of_final_group_sizes_through_merge():
+    """The surfaced_count invariant (== sum of final group sizes) holds through
+    the merge, even with mixed segments and a cap forcing overflow."""
+    auto = [
+        _make_new_article(f"auto{i}", americhem_impact_score=9 - i,
+                          commercial_segment="Transportation - Automotive",
+                          headline=f"Automotive compound development milestone number {i}")
+        for i in range(4)
+    ]
+    non_auto = [
+        _make_new_article(f"non{i}", americhem_impact_score=6,
+                          commercial_segment="Transportation - Non-Automotive",
+                          headline=f"Rail and heavy-truck polymer qualification update {i}")
+        for i in range(3)
+    ]
+    aero = _make_new_article("aero", 9, commercial_segment="Transportation - Aerospace",
+                             headline="Aircraft interior supplier qualifies new lightweight composite")
+
+    model = assemble_report(auto + non_auto + [aero], config=_MERGE_CFG)
+
+    assert model.surfaced_count == sum(len(arts) for arts in model.groups.values())
+
+
+def test_appendix_rows_carry_display_label():
+    """Cap-overflow rows from a merged group show the merged display label in
+    the appendix segment column — the header consistency the reader sees on the
+    cards also applies to the appendix (mapping done at model-assembly time)."""
+    _auto_headlines = [
+        "EV platform retooling lifts under-hood compound demand",
+        "Automaker qualifies bio-based interior trim resin",
+        "Tier-1 supplier expands lightweight bumper compounding",
+        "Battery-tray molders shift to flame-retardant grades",
+        "Under-the-hood sensor housings move to high-heat nylon",
+        "Fuel-system component maker requalifies a barrier polymer",
+    ]
+    autos = [
+        _make_new_article(f"auto{i}", americhem_impact_score=10 - i,
+                          commercial_segment="Transportation - Automotive",
+                          headline=_auto_headlines[i])
+        for i in range(6)  # 6 visible-band (score 10..8..6..5) but distinct headlines
+    ]
+    # Force all six into the visible band so exactly one overflows the cap of 5.
+    for a in autos:
+        a["americhem_impact_score"] = 10 - autos.index(a) if autos.index(a) < 4 else 6
+    model = assemble_report(autos, config=_MERGE_CFG)
+
+    assert len(model.groups["Transportation — Vehicles"]) == 5
+    assert len(model.additional_articles) == 1
+    assert model.additional_articles[0]["commercial_segment"] == "Transportation — Vehicles"
+    # Purity: the caller's input rows are untouched (copy-on-write).
+    assert all(a["commercial_segment"] == "Transportation - Automotive" for a in autos)
+
+
+def test_macro_outlook_affected_segments_show_display_label():
+    """Macro-outlook signal affected_segments are remapped to display labels for
+    render consistency; validation (canonical, at ingestion) is untouched.
+    Collisions between two merged canonical labels dedupe to one chip."""
+    macro_summary = {
+        "macro_outlook": {
+            "current_condition": "Ground-transport demand firming.",
+            "signals": [{
+                "indicator": "Light-vehicle build rate",
+                "direction": "Improving",
+                "americhem_implication": "Upside for under-hood compound volumes.",
+                "affected_segments": ["Transportation - Automotive",
+                                      "Transportation - Non-Automotive"],
+                "citation_source_ids": [1],
+            }],
+        },
+    }
+    rows = [_make_new_article("v", 8, commercial_segment="Transportation - Automotive",
+                              headline="EV platform retooling lifts under-hood compound demand")]
+    model = assemble_report(rows, macro_summary=macro_summary, config=_MERGE_CFG)
+
+    assert model.macro_outlook["signals"][0]["affected_segments"] == ["Transportation — Vehicles"]
+    # Stored row untouched.
+    assert macro_summary["macro_outlook"]["signals"][0]["affected_segments"] == [
+        "Transportation - Automotive", "Transportation - Non-Automotive",
+    ]
