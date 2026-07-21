@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
@@ -239,12 +240,15 @@ def _discovery_metadata(candidate: dict) -> dict:
     }
 
 
+_LIFECYCLE_YIELD_KEYS: tuple[str, ...] = ("discovered", "scraped", "stored")
+
+
 def _new_provider_yield() -> dict:
-    return {
-        "discovered": 0, "scraped": 0, "stored": 0,
-        "discards": 0, "relevance_dropped": 0, "scrape_failed": 0,
-        "unscrapable": 0, "duplicates": 0,
-    }
+    """One counter per lifecycle stage plus one per suppression yield key —
+    the latter derived from _YIELD_KEY_FOR_REASON, so a new reason code
+    cannot miss its counter."""
+    suppression_keys = sorted(set(_YIELD_KEY_FOR_REASON.values()))
+    return {k: 0 for k in _LIFECYCLE_YIELD_KEYS + tuple(suppression_keys)}
 
 
 def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
@@ -253,10 +257,11 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         y = provider_yield[provider]
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
-            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d",
+            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d "
+            "synthesis_failed=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
             y["discards"], y["relevance_dropped"], y["scrape_failed"],
-            y["unscrapable"], y["duplicates"],
+            y["unscrapable"], y["duplicates"], y["synthesis_failed"],
         )
 
 
@@ -689,26 +694,201 @@ def _concept_demand_ahead(targets: list[dict]) -> list[int]:
     return suffix
 
 
-def execute_pipeline() -> None:
-    pipeline_start = time.monotonic()
-    targets = load_targets("targets.yaml")
-    concept_demand_ahead = _concept_demand_ahead(targets)
-    providers = _discovery_providers()
-    providers_by_name = {p.name: p for p in providers}
-    seen_headlines: set[str] = _hydrate_seen_headlines()
-    scrapes_attempted = 0
-    stats = {
+@dataclass(frozen=True)
+class Stored:
+    """Candidate survived every gate and was persisted."""
+
+
+@dataclass(frozen=True)
+class Suppressed:
+    """Candidate was dropped by a gate; `reason` is the ledger taxonomy code."""
+    reason: str
+
+
+@dataclass(frozen=True)
+class Error:
+    """Candidate failed on a technical error that is not a suppression (store)."""
+
+
+# Which provider_yield counter each ingestion suppression reason bumps. Keyed by
+# the full ingestion taxonomy so ctx.suppress cannot record without bumping —
+# a new reason code without a yield key fails loudly (pinned by a parity test).
+_YIELD_KEY_FOR_REASON: dict[str, str] = {
+    "duplicate_url": "duplicates",
+    "semantic_duplicate": "duplicates",
+    "unscrapable_domain": "unscrapable",
+    "zoominfo_company_mismatch": "relevance_dropped",
+    "scrape_failed": "scrape_failed",
+    "synthesis_failed": "synthesis_failed",
+    "llm_discard": "discards",
+}
+
+
+def _new_run_stats() -> dict:
+    return {
         "urls_discovered": 0,
         "scrapes_attempted": 0,
         "insights_stored": 0,
         "errors": 0,
     }
-    stored_articles_buffer: list[dict] = []
-    suppression_ledger = SuppressionLedger.for_ingestion()
-    provider_yield: dict[str, dict] = {}
 
-    def _bump(provider: str, key: str) -> None:
-        provider_yield.setdefault(provider, _new_provider_yield())[key] += 1
+
+@dataclass
+class RunContext:
+    """Mutable run-state threaded through the candidate gauntlet — plus
+    `providers_by_name`, read-only wiring for the gate dispatch (never mutated).
+
+    The immutable SuppressionLedger lives here as `ledger`, reassigned in place
+    by suppress() — callers never thread a new ledger back by hand.
+    """
+    providers_by_name: dict
+    seen_headlines: set = field(default_factory=set)
+    stats: dict = field(default_factory=_new_run_stats)
+    provider_yield: dict = field(default_factory=dict)
+    stored_articles_buffer: list = field(default_factory=list)
+    ledger: SuppressionLedger = field(default_factory=SuppressionLedger.for_ingestion)
+
+    @property
+    def scrapes_attempted(self) -> int:
+        """The scrape-budget counter the loop's cap and tail-reserve gates
+        read — one definition, stored in stats."""
+        return self.stats["scrapes_attempted"]
+
+    def bump(self, provider: str, key: str) -> None:
+        self.provider_yield.setdefault(provider, _new_provider_yield())[key] += 1
+
+    def suppress(self, reason: str, provider: str, *, url: str, title: str) -> Suppressed:
+        """Record a suppression and bump the paired provider-yield counter —
+        one call, so the pairing cannot be forgotten at any gate."""
+        self.ledger = self.ledger.record(reason, url=url, title=title)
+        self.bump(provider, _YIELD_KEY_FOR_REASON[reason])
+        return Suppressed(reason)
+
+
+def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored | Suppressed | Error":
+    """Run one discovered candidate through the per-candidate gauntlet."""
+    raw_url = candidate["url"]
+    candidate_title = candidate.get("title", "")
+    provider = candidate.get("provider", "unknown")
+
+    normalized = normalize_url(raw_url)
+    url_hash = compute_url_hash(normalized)
+
+    if url_already_processed(url_hash):
+        logger.info("Duplicate — skipping (%s): %s", provider, normalized)
+        return ctx.suppress("duplicate_url", provider, url=raw_url, title=candidate_title)
+
+    is_dup, matched, score = is_semantic_duplicate(candidate_title, ctx.seen_headlines)
+    if is_dup:
+        logger.warning(
+            "SEMANTIC_DUPLICATE — skipped (%s): '%s' ~ '%s' | score: %d",
+            provider, candidate_title, matched, score,
+        )
+        return ctx.suppress("semantic_duplicate", provider, url=raw_url, title=candidate_title)
+
+    if _is_unscrapable_domain(raw_url):
+        logger.info("UNSCRAPABLE_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
+        return ctx.suppress("unscrapable_domain", provider, url=raw_url, title=candidate_title)
+
+    # The provider owns its own false-positive gate (Serper has none);
+    # the consumer applies the decision so suppression accounting stays
+    # in the ledger. No provider-name literal leaks here.
+    provider_obj = ctx.providers_by_name.get(provider)
+    gate_decision = provider_obj.gate(candidate, target) if provider_obj else None
+    if gate_decision is not None and gate_decision.drop:
+        logger.info(
+            "RELEVANCE_GATE drop (%s): exclude=%r no identity rescue | %s",
+            provider, gate_decision.matched_exclude, normalized,
+        )
+        return ctx.suppress(gate_decision.reason, provider, url=raw_url, title=candidate_title)
+
+    ctx.stats["scrapes_attempted"] += 1
+    ctx.bump(provider, "scraped")
+
+    article_text = scrape_article(raw_url, target["min_article_length"])
+    if article_text is None:
+        return ctx.suppress("scrape_failed", provider, url=raw_url, title=candidate_title)
+
+    article_insight = synthesize_insight(article_text, normalized, target["name"], target["category"])
+    # Every exit below has spent an LLM call; the finally paces successive
+    # OpenAI requests — one sleep, instead of one copy per exit path.
+    try:
+        if article_insight is None:
+            return ctx.suppress("synthesis_failed", provider, url=raw_url, title=candidate_title)
+
+        if insight.is_discard(article_insight):
+            logger.info("DISCARD — false positive (%s): %s", provider, normalized)
+            return ctx.suppress("llm_discard", provider, url=raw_url, title=candidate_title)
+
+        payload = {
+            "headline": article_insight["headline"],
+            "americhem_impact": article_insight["americhem_impact"],
+            "sentiment_score": article_insight["sentiment_score"],
+            "source_url": article_insight["source_url"],
+            "url_hash": url_hash,
+            "entities_mentioned": article_insight["entities_mentioned"],
+            "category": target["category"],
+            "trigger_entity": target["name"],
+            "source_publication": article_insight.get("source_publication", ""),
+            "sentiment_rationale": article_insight.get("sentiment_rationale", ""),
+            "recommended_action": article_insight.get("recommended_action", "Monitor"),
+            "article_summary": article_insight.get("article_summary", ""),
+            "sentiment_tag": article_insight.get("sentiment_tag", "Neutral"),
+            "americhem_impact_score": article_insight.get("americhem_impact_score", 5),
+            "impact_rationale": article_insight.get("impact_rationale", ""),
+            "commercial_segment": article_insight.get("commercial_segment", "Enterprise / Cross-Segment"),
+            "signal_type": article_insight.get("signal_type", "Other"),
+        }
+        # Discovery provenance is gated behind STORE_DISCOVERY_METADATA so
+        # production upserts keep working until migration 003 is applied.
+        if config.store_discovery_metadata():
+            payload.update(_discovery_metadata(candidate))
+
+        try:
+            store_insight(payload)
+        except Exception as exc:
+            logger.error("Failed to store insight for %s: %s", normalized, exc)
+            ctx.stats["errors"] += 1
+            return Error()
+
+        logger.info(
+            "Stored [provider=%s, impact=%d, sentiment=%s] %s",
+            provider,
+            article_insight.get("americhem_impact_score", 5),
+            article_insight.get("sentiment_tag", "Neutral"),
+            article_insight["headline"],
+        )
+        ctx.stats["insights_stored"] += 1
+        ctx.bump(provider, "stored")
+        ctx.stored_articles_buffer.append(payload)
+        ctx.seen_headlines.add(article_insight["headline"])
+        return Stored()
+    finally:
+        time.sleep(1.5)
+
+
+def _finalize_run(ctx: RunContext) -> None:
+    """The single end-of-run teardown: flush stats and provider yield, then
+    persist the macro summary (or the accounting-only row). Called at every
+    pipeline exit — mid-batch deadline, scrape cap, and normal completion."""
+    _log_stats(ctx.stats, ctx.ledger.breakdown)
+    _log_provider_yield(ctx.provider_yield)
+    generate_macro_summary(
+        ctx.stored_articles_buffer,
+        screened_count=ctx.stats["urls_discovered"],
+        **ctx.ledger.to_row(),
+    )
+
+
+def execute_pipeline() -> None:
+    pipeline_start = time.monotonic()
+    targets = load_targets("targets.yaml")
+    concept_demand_ahead = _concept_demand_ahead(targets)
+    providers = _discovery_providers()
+    ctx = RunContext(
+        providers_by_name={p.name: p for p in providers},
+        seen_headlines=_hydrate_seen_headlines(),
+    )
 
     tail_reserve_triggered = False
     for target_index, target in enumerate(targets):
@@ -728,7 +908,7 @@ def execute_pipeline() -> None:
         # double-reserved and starve the entity tier below its affordable budget.
         if target.get("search_mode", "entity") == "entity":
             tail_reserve_scrapes = concept_demand_ahead[target_index]
-            slots_low = scrapes_attempted >= MAX_DAILY_SCRAPES - tail_reserve_scrapes
+            slots_low = ctx.scrapes_attempted >= MAX_DAILY_SCRAPES - tail_reserve_scrapes
             clock_low = (
                 time.monotonic() - pipeline_start
                 >= PIPELINE_DEADLINE_SECONDS - TAIL_RESERVE_SECONDS
@@ -743,9 +923,6 @@ def execute_pipeline() -> None:
                     tail_reserve_triggered = True
                 continue
 
-        entity_name = target["name"]
-        category = target["category"]
-        min_article_length = target["min_article_length"]
         target_start = time.monotonic()
 
         # Surface a yield line for every eligible provider, even at zero
@@ -753,173 +930,35 @@ def execute_pipeline() -> None:
         # seeding is provider-list-driven — no hard-coded provider names.
         for provider_obj in providers:
             if provider_obj.eligible(target):
-                provider_yield.setdefault(provider_obj.name, _new_provider_yield())
+                ctx.provider_yield.setdefault(provider_obj.name, _new_provider_yield())
 
         candidates = discover_candidates(target, providers)
-        stats["urls_discovered"] += len(candidates)
+        ctx.stats["urls_discovered"] += len(candidates)
         for candidate in candidates:
-            _bump(candidate.get("provider", "unknown"), "discovered")
+            ctx.bump(candidate.get("provider", "unknown"), "discovered")
 
         for candidate in candidates:
-            raw_url = candidate["url"]
-            candidate_title = candidate.get("title", "")
-            provider = candidate.get("provider", "unknown")
-
             if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
                 logger.warning(
                     "Pipeline deadline (%ds) reached mid-batch — stopping early.",
                     PIPELINE_DEADLINE_SECONDS,
                 )
-                _log_stats(stats, suppression_ledger.breakdown)
-                _log_provider_yield(provider_yield)
-                generate_macro_summary(
-                    stored_articles_buffer,
-                    screened_count=stats["urls_discovered"],
-                    **suppression_ledger.to_row(),
-                )
+                _finalize_run(ctx)
                 return
 
-            if scrapes_attempted >= MAX_DAILY_SCRAPES:
+            if ctx.scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
-                _log_stats(stats, suppression_ledger.breakdown)
-                _log_provider_yield(provider_yield)
-                generate_macro_summary(
-                    stored_articles_buffer,
-                    screened_count=stats["urls_discovered"],
-                    **suppression_ledger.to_row(),
-                )
+                _finalize_run(ctx)
                 return
 
-            normalized = normalize_url(raw_url)
-            url_hash = compute_url_hash(normalized)
-
-            if url_already_processed(url_hash):
-                logger.info("Duplicate — skipping (%s): %s", provider, normalized)
-                _bump(provider, "duplicates")
-                suppression_ledger = suppression_ledger.record(
-                    "duplicate_url", url=raw_url, title=candidate_title,
-                )
-                continue
-
-            is_dup, matched, score = is_semantic_duplicate(candidate_title, seen_headlines)
-            if is_dup:
-                logger.warning(
-                    "SEMANTIC_DUPLICATE — skipped (%s): '%s' ~ '%s' | score: %d",
-                    provider, candidate_title, matched, score,
-                )
-                _bump(provider, "duplicates")
-                suppression_ledger = suppression_ledger.record(
-                    "semantic_duplicate", url=raw_url, title=candidate_title,
-                )
-                continue
-
-            if _is_unscrapable_domain(raw_url):
-                logger.info("UNSCRAPABLE_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
-                _bump(provider, "unscrapable")
-                suppression_ledger = suppression_ledger.record(
-                    "unscrapable_domain", url=raw_url, title=candidate_title,
-                )
-                continue
-
-            # The provider owns its own false-positive gate (Serper has none);
-            # the consumer applies the decision so suppression accounting stays
-            # in the ledger. No provider-name literal leaks here.
-            provider_obj = providers_by_name.get(provider)
-            gate_decision = provider_obj.gate(candidate, target) if provider_obj else None
-            if gate_decision is not None and gate_decision.drop:
-                logger.info(
-                    "RELEVANCE_GATE drop (%s): exclude=%r no identity rescue | %s",
-                    provider, gate_decision.matched_exclude, normalized,
-                )
-                _bump(provider, "relevance_dropped")
-                suppression_ledger = suppression_ledger.record(
-                    gate_decision.reason, url=raw_url, title=candidate_title,
-                )
-                continue
-
-            scrapes_attempted += 1
-            stats["scrapes_attempted"] += 1
-            _bump(provider, "scraped")
-
-            article_text = scrape_article(raw_url, min_article_length)
-            if article_text is None:
-                _bump(provider, "scrape_failed")
-                suppression_ledger = suppression_ledger.record(
-                    "scrape_failed", url=raw_url, title=candidate_title,
-                )
-                continue
-
-            article_insight = synthesize_insight(article_text, normalized, entity_name, category)
-            if article_insight is None:
-                stats["errors"] += 1
-                time.sleep(1.5)
-                continue
-
-            if insight.is_discard(article_insight):
-                logger.info("DISCARD — false positive (%s): %s", provider, normalized)
-                _bump(provider, "discards")
-                suppression_ledger = suppression_ledger.record(
-                    "llm_discard", url=raw_url, title=candidate_title,
-                )
-                time.sleep(1.5)
-                continue
-
-            payload = {
-                "headline": article_insight["headline"],
-                "americhem_impact": article_insight["americhem_impact"],
-                "sentiment_score": article_insight["sentiment_score"],
-                "source_url": article_insight["source_url"],
-                "url_hash": url_hash,
-                "entities_mentioned": article_insight["entities_mentioned"],
-                "category": category,
-                "trigger_entity": entity_name,
-                "source_publication": article_insight.get("source_publication", ""),
-                "sentiment_rationale": article_insight.get("sentiment_rationale", ""),
-                "recommended_action": article_insight.get("recommended_action", "Monitor"),
-                "article_summary": article_insight.get("article_summary", ""),
-                "sentiment_tag": article_insight.get("sentiment_tag", "Neutral"),
-                "americhem_impact_score": article_insight.get("americhem_impact_score", 5),
-                "impact_rationale": article_insight.get("impact_rationale", ""),
-                "commercial_segment": article_insight.get("commercial_segment", "Enterprise / Cross-Segment"),
-                "signal_type": article_insight.get("signal_type", "Other"),
-            }
-            # Discovery provenance is gated behind STORE_DISCOVERY_METADATA so
-            # production upserts keep working until migration 003 is applied.
-            if config.store_discovery_metadata():
-                payload.update(_discovery_metadata(candidate))
-
-            try:
-                store_insight(payload)
-            except Exception as exc:
-                logger.error("Failed to store insight for %s: %s", normalized, exc)
-                stats["errors"] += 1
-            else:
-                logger.info(
-                    "Stored [provider=%s, impact=%d, sentiment=%s] %s",
-                    provider,
-                    article_insight.get("americhem_impact_score", 5),
-                    article_insight.get("sentiment_tag", "Neutral"),
-                    article_insight["headline"],
-                )
-                stats["insights_stored"] += 1
-                _bump(provider, "stored")
-                stored_articles_buffer.append(payload)
-                seen_headlines.add(article_insight["headline"])
-
-            time.sleep(1.5)
+            process_candidate(candidate, target, ctx)
 
         logger.info(
             "Target '%s' processed in %.1fs (%d candidates)",
-            entity_name, time.monotonic() - target_start, len(candidates),
+            target["name"], time.monotonic() - target_start, len(candidates),
         )
 
-    _log_stats(stats, suppression_ledger.breakdown)
-    _log_provider_yield(provider_yield)
-    generate_macro_summary(
-        stored_articles_buffer,
-        screened_count=stats["urls_discovered"],
-        **suppression_ledger.to_row(),
-    )
+    _finalize_run(ctx)
 
 
 def main() -> None:

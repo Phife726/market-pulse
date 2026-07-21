@@ -14,7 +14,7 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 6
+    assert len(INGESTION_CODES) == 7
     assert len(DELIVERY_CODES) == 9
 
 
@@ -81,6 +81,17 @@ def test_record_unknown_reason_raises_value_error():
     led = SuppressionLedger.for_delivery()
     with pytest.raises(ValueError, match="unknown reason"):
         led.record("totally_made_up_code", url="u", title="t")
+
+
+def test_synthesis_failed_is_an_ingestion_reason():
+    """LLM-synthesis failure is a recordable ingestion suppression, mirroring
+    scrape_failed (a technical failure is accounting, not a silent skip)."""
+    assert side_of("synthesis_failed") == "ingestion"
+    assert label_for("synthesis_failed") == "LLM synthesis failed"
+    led = SuppressionLedger.for_ingestion().record(
+        "synthesis_failed", url="https://x/1", title="T1",
+    )
+    assert led.breakdown == {"synthesis_failed": 1}
 
 
 def test_record_dedupes_identical_sample_but_count_still_grows():
