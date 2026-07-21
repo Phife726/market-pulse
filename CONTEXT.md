@@ -131,6 +131,19 @@ zero-I/O purity is untouched.
   side effects — write-back + thematic synthesis — exactly once, after
   assembly and before rendering; both are skipped for `no_news`. Rendering a
   model whose synthesis is empty **is** the bullets-only fallback.
+- **Candidate gauntlet** — the ordered per-candidate decision sequence
+  ingestion runs on every discovered candidate: duplicate URL → semantic
+  duplicate → unscrapable domain → provider relevance gate → scrape →
+  synthesis → store. Lives in `ingestion_engine.process_candidate(candidate,
+  target, ctx)`; every drop is a recorded suppression (record + provider-yield
+  bump are one inseparable call). The run-level budget gates (pipeline
+  deadline, scrape cap, tail reserve) are **not** part of the gauntlet — they
+  are loop control in `execute_pipeline`.
+- **Candidate outcome** — the gauntlet's verdict for one candidate, as plain
+  frozen data: `Stored` (persisted), `Suppressed(reason)` (dropped; `reason`
+  is an ingestion ledger taxonomy code, including `synthesis_failed` for an
+  unusable LLM response), or `Error` (a technical store failure — an error,
+  not a suppression). There is no run-terminating outcome by design.
 - **Relevance gate** — the ZoomInfo false-positive suppression rule
   (`relevance_gate.py`), applied to ZoomInfo candidates during ingestion.
 - **Prompt spec** (`prompts.py`, `PromptSpec` / `MacroPrompt`) — a fully
