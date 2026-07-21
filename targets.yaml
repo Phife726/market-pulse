@@ -499,6 +499,7 @@ industry:
 healthcare:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - "Beckman Coulter"
     - "Aptar Pharma"
@@ -521,39 +522,106 @@ healthcare:
     - patents
     - "securities analyst reports"
 
-transportation:
+# ── PRIORITY SEGMENT GROUPS ───────────────────────────────────
+# The eight priority commercial segments (healthcare, fibers,
+# building_construction, the three transportation_* groups, packaging,
+# engineered_resins) carry results_per_entity: 4 (vs. the global 2) so each
+# gets more discovery candidates per day. Group keys mirror the
+# commercial_segments keys in market_pulse_config.yaml exactly, so the LLM's
+# segment routing and these discovery groups stay in lockstep. Do not raise
+# above 4 without re-measuring the scrape budget (MAX_DAILY_SCRAPES=180): each
+# +1 over the eight priority groups is +8 worst-case scrapes/day.
+
+# The combined `transportation` group was split into three groups matching the
+# commercial_segments sub-segments. Term authoring is per each segment's config
+# description; terms are not duplicated across the three groups.
+transportation_automotive:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - "automotive plastics"
     - "automotive polymer materials"
     - "automotive interior materials"
     - "vehicle lightweighting polymers"
     - "EV flame retardant plastics"
+    - "automotive OEM materials"
+    - "Tier 1 automotive supplier materials"
+    - "EV battery plastics"
+  include_all: []
+  exclude_any: []
+
+transportation_aerospace:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "aircraft interior materials"
     - "aerospace polymer materials"
-    - "off-highway polymer materials"
+    - "aerospace composite materials"
+    - "defense aerospace materials"
+    - "eVTOL materials"
+    - "urban air mobility materials"
+    - "FAR 25.853 flame"
+  include_all: []
+  exclude_any: []
+
+transportation_non_automotive:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "heavy truck plastics"
+    - "commercial vehicle interior materials"
+    - "bus interior materials"
+    - "agricultural equipment polymer"
+    - "construction equipment materials"
+    - "rail interior materials"
+    - "marine composite materials"
+    - "recreational vehicle materials"
   include_all: []
   exclude_any: []
 
 # NOTE: Moody's spec listed "automotive industry" here — confirmed copy-paste error.
-# Replaced with building/construction-specific terms.
+# Replaced with building/construction-specific terms. The original narrow product
+# phrases matched retail/real-estate noise (e.g. "composite decking" matched a
+# home sale on 2026-07-20); retuned to building-products manufacturer / innovation
+# terms with real-estate excludes.
 building_construction:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - "building products plastics"
-    - "construction polymer materials"
-    - "composite decking"
+    - "building products manufacturer"
+    - "construction materials innovation"
+    - "vinyl siding manufacturer"
+    - "window and door profiles"
     - "PVC building products"
-    - "weatherable polymer"
-    - "roofing polymer additives"
-    - "low heat build-up color"
+    - "PVC fencing manufacturer"
+    - "roofing systems innovation"
+    - "composite decking manufacturer"
+    - "weatherable exterior compound"
   include_all: []
-  exclude_any: []
+  exclude_any:
+    # Real-estate/home-sale listing noise (a home sale matched "composite
+    # decking" on 2026-07-20). Keep these real-estate-specific — a bare -"sold"
+    # would also drop legitimate building-products manufacturer moves.
+    - "for sale"
+    - "house sold"
+    - "home sold"
+    - "real estate"
+    - "home listing"
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
 
 fibers:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - "synthetic fiber"
     - "performance fiber"
@@ -573,6 +641,7 @@ fibers:
 packaging:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - "plastic packaging innovation"
     - "packaging masterbatch"
@@ -609,6 +678,7 @@ electronics:
 engineered_resins:
   search_mode: concept
   active: true
+  results_per_entity: 4  # priority segment
   include_any:
     - acetal
     - nylon
