@@ -1638,6 +1638,28 @@ def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch):
     assert stored == ["EntityA", "concept_one", "concept_two"]
 
 
+def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch):
+    """A concept group positioned BEFORE the entity tier (Tier 1 priority
+    segments) must NOT be counted in the entity gate's reserve — it has already
+    run, so counting it over-reserves and skips entity targets that the budget
+    could still afford. The reserve protects only the concept demand still
+    AHEAD of the current target."""
+    import ingestion_engine
+
+    # concept_front runs first (1 scrape), then two entities, then concept_tail.
+    # Static all-concepts reserve = 4 (both concepts) → entity threshold MAX-4=0
+    # → both entities wrongly skipped. Position-aware reserve at the entities =
+    # only concept_tail (2) → threshold MAX-2=2 → EntityA survives.
+    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 4)
+    stored = _run_reserve_pipeline(monkeypatch, [
+        _reserve_target("concept_front", "concept"),
+        _reserve_target("EntityA", "entity"),
+        _reserve_target("EntityB", "entity"),
+        _reserve_target("concept_tail", "concept"),
+    ])
+    assert stored == ["concept_front", "EntityA", "concept_tail"]
+
+
 def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
     """When remaining wall-clock falls to the time reserve, remaining ENTITY
     targets are skipped but concept targets still run."""
