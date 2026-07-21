@@ -10,13 +10,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
+import discovery
 import ingestion_engine
 import zoominfo_client
+from discovery import FakeDiscoveryProvider
 from ingestion_engine import (
     compute_url_hash,
     discover_candidates,
-    discover_serper_candidates,
-    discover_zoominfo_candidates,
     load_targets,
     normalize_url,
 )
@@ -817,114 +817,44 @@ def test_no_credentials_at_all_returns_empty(monkeypatch):
 
 
 # ===========================================================================
-# discover_serper_candidates
+# discover_candidates — provider fan-in, eligibility, failure isolation
+#
+# The per-adapter behaviour (Serper shape, ZoomInfo eligibility/delegation,
+# gate) is tested directly in test_discovery.py. Here we exercise the
+# consumer's fan-in over injected providers — no requests / client patching.
 # ===========================================================================
 
-def test_discover_serper_candidates_shape(monkeypatch):
-    monkeypatch.setattr(
-        ingestion_engine, "discover_urls",
-        lambda q, lb, n: [("https://news.com/a", "Serper Title")],
-    )
-    result = discover_serper_candidates(_zi_target())
-    assert len(result) == 1
-    c = result[0]
-    assert c["url"] == "https://news.com/a"
-    assert c["title"] == "Serper Title"
-    assert c["provider"] == "serper"
-    assert c["zoominfo_company_id"] is None
-    assert c["categories"] == []
-
-
-# ===========================================================================
-# discover_zoominfo_candidates
-# ===========================================================================
-
-def test_zoominfo_candidates_empty_when_disabled(monkeypatch):
-    """Flag off -> never call ZoomInfo, return []."""
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "false")
-    with patch("zoominfo_client.discover_company_news") as mock_call:
-        result = discover_zoominfo_candidates(_zi_target())
-    assert result == []
-    mock_call.assert_not_called()
-
-
-def test_zoominfo_candidates_empty_without_company_id(monkeypatch):
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    target = _zi_target(company_id=None)
-    with patch("zoominfo_client.discover_company_news") as mock_call:
-        result = discover_zoominfo_candidates(target)
-    assert result == []
-    mock_call.assert_not_called()
-
-
-def test_zoominfo_candidates_skipped_when_news_false(monkeypatch):
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    target = _zi_target(zoominfo_news=False)
-    with patch("zoominfo_client.discover_company_news") as mock_call:
-        result = discover_zoominfo_candidates(target)
-    assert result == []
-    mock_call.assert_not_called()
-
-
-def test_zoominfo_candidates_missing_token_no_crash(monkeypatch):
-    """Enabled + mapped id but no token -> [] from the client, pipeline survives."""
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    monkeypatch.delenv("ZOOMINFO_BEARER_TOKEN", raising=False)
-    result = discover_zoominfo_candidates(_zi_target())
-    assert result == []
-
-
-def test_zoominfo_candidates_enabled_returns_candidates(monkeypatch):
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    fake_candidates = [{
-        "url": "https://news.example.com/x", "title": "ZI headline",
-        "provider": "zoominfo", "source_publication": "Reuters",
-        "published_at": "2026-06-13", "description": "d",
-        "categories": ["PRODUCT"], "zoominfo_company_id": 12345678, "raw": {},
-    }]
-    with patch("zoominfo_client.discover_company_news", return_value=fake_candidates) as mock_call:
-        result = discover_zoominfo_candidates(_zi_target())
-    assert result == fake_candidates
-    assert mock_call.call_count == 1
-    _, kwargs = mock_call.call_args
-    assert kwargs["zoominfo_company_id"] == 12345678
-    assert kwargs["page_size"] == 5  # default ZOOMINFO_NEWS_PER_COMPANY
-
-
-# ===========================================================================
-# discover_candidates — merge + failure isolation
-# ===========================================================================
-
-def test_discover_candidates_merges_both_providers(monkeypatch):
+def test_discover_candidates_merges_eligible_providers():
     serper = [{"url": "https://news.com/s", "provider": "serper"}]
     zoominfo = [{"url": "https://news.com/z", "provider": "zoominfo"}]
-    monkeypatch.setattr(ingestion_engine, "discover_serper_candidates", lambda t: serper)
-    monkeypatch.setattr(ingestion_engine, "discover_zoominfo_candidates", lambda t: zoominfo)
-    result = discover_candidates(_zi_target())
-    providers = {c["provider"] for c in result}
-    assert providers == {"serper", "zoominfo"}
+    providers = [
+        FakeDiscoveryProvider("serper", serper),
+        FakeDiscoveryProvider("zoominfo", zoominfo),
+    ]
+    result = discover_candidates(_zi_target(), providers)
+    assert [c["provider"] for c in result] == ["serper", "zoominfo"]  # order preserved
     assert len(result) == 2
 
 
-def test_discover_candidates_serper_failure_does_not_suppress_zoominfo(monkeypatch):
-    def boom(_target):
-        raise RuntimeError("serper down")
-    zoominfo = [{"url": "https://news.com/z", "provider": "zoominfo"}]
-    monkeypatch.setattr(ingestion_engine, "discover_serper_candidates", boom)
-    monkeypatch.setattr(ingestion_engine, "discover_zoominfo_candidates", lambda t: zoominfo)
-    result = discover_candidates(_zi_target())
-    assert result == zoominfo
-
-
-def test_discover_candidates_zoominfo_failure_does_not_suppress_serper(monkeypatch):
-    def boom(_target):
-        raise RuntimeError("zoominfo down")
+def test_discover_candidates_skips_ineligible_provider():
     serper = [{"url": "https://news.com/s", "provider": "serper"}]
-    monkeypatch.setattr(ingestion_engine, "discover_serper_candidates", lambda t: serper)
-    monkeypatch.setattr(ingestion_engine, "discover_zoominfo_candidates", boom)
-    result = discover_candidates(_zi_target())
-    assert result == serper
+    zi = FakeDiscoveryProvider(
+        "zoominfo", [{"url": "https://news.com/z", "provider": "zoominfo"}],
+        eligible=False,
+    )
+    result = discover_candidates(_zi_target(), [FakeDiscoveryProvider("serper", serper), zi])
+    assert [c["provider"] for c in result] == ["serper"]
+    assert zi.discover_calls == []  # ineligible provider never consulted
+
+
+def test_discover_candidates_one_provider_failure_does_not_suppress_others():
+    zoominfo = [{"url": "https://news.com/z", "provider": "zoominfo"}]
+    providers = [
+        FakeDiscoveryProvider("serper", discover_error=RuntimeError("serper down")),
+        FakeDiscoveryProvider("zoominfo", zoominfo),
+    ]
+    result = discover_candidates(_zi_target(), providers)
+    assert result == zoominfo
 
 
 def test_cross_provider_url_dedupe_hash_matches():
@@ -962,7 +892,7 @@ def test_discovery_metadata_shape_for_zoominfo():
 
 
 def test_discovery_metadata_serper_has_empty_company_id():
-    candidate = ingestion_engine._serper_candidate("https://news.com/a", "Title")
+    candidate = discovery._serper_candidate("https://news.com/a", "Title")
     meta = ingestion_engine._discovery_metadata(candidate)
     assert meta["discovery_source"] == "serper"
     assert meta["external_company_id"] == ""
@@ -979,7 +909,7 @@ def _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured):
     cfg.write_text(_entity_yaml())
     monkeypatch.chdir(tmp_path)
 
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target: [candidate])
+    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [candidate])
     monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
     monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
     monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, mn: "Article body text.")
@@ -1051,7 +981,7 @@ def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, 
     cfg = tmp_path / "targets.yaml"
     cfg.write_text(_eligible_zoominfo_targets_yaml())
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target: [])
+    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [])
     monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
     monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
 
@@ -1070,7 +1000,7 @@ def test_no_zoominfo_yield_line_when_not_eligible(monkeypatch, tmp_path, caplog)
     cfg = tmp_path / "targets.yaml"
     cfg.write_text(_eligible_zoominfo_targets_yaml())
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target: [])
+    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [])
     monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
     monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
 
@@ -1101,17 +1031,6 @@ def test_execute_pipeline_omits_metadata_when_disabled(monkeypatch, tmp_path):
 # Relevance gate wiring
 # ---------------------------------------------------------------------------
 
-_GATE_RTP_META = {
-    "Magna International": {
-        "metadata_record_status": "active",
-        "canonical_name": "Magna",
-        "company_identity_terms": ["Magna"],
-        "manual_aliases": [],
-        "exclude_terms": ["casino", "real-time payments"],
-    }
-}
-
-
 def _serper_like(title):
     return {"url": "https://x/s", "title": title, "provider": "serper",
             "description": "", "zoominfo_company_id": None, "raw": {}}
@@ -1120,45 +1039,6 @@ def _serper_like(title):
 def _zi_like(title, description=""):
     return {"url": "https://x/z", "title": title, "provider": "zoominfo",
             "description": description, "zoominfo_company_id": 12345678, "raw": {}}
-
-
-def test_gate_helper_ignores_serper_candidate():
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _serper_like("Casino night"), "Magna International", _GATE_RTP_META)
-    assert d is None
-
-
-def test_gate_helper_noop_when_metadata_empty():
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _zi_like("Casino night"), "Magna International", {})
-    assert d is None
-
-
-def test_gate_helper_noop_when_no_record_for_target():
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _zi_like("Casino night"), "Unknown Co", _GATE_RTP_META)
-    assert d is None
-
-
-def test_gate_helper_ignores_non_active_record():
-    meta = {"Magna International": dict(_GATE_RTP_META["Magna International"],
-                                       metadata_record_status="orphaned")}
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _zi_like("Casino night"), "Magna International", meta)
-    assert d is None
-
-
-def test_gate_helper_drops_exclude_without_rescue():
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _zi_like("Casino night downtown"), "Magna International", _GATE_RTP_META)
-    assert d is not None and d.drop is True
-    assert d.matched_exclude == "casino"
-
-
-def test_gate_helper_keeps_with_identity_rescue():
-    d = ingestion_engine._gate_zoominfo_candidate(
-        _zi_like("Magna opens near a casino"), "Magna International", _GATE_RTP_META)
-    assert d is not None and d.drop is False
 
 
 def _write_gate_metadata(tmp_path):
