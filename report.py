@@ -22,6 +22,7 @@ from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
 from insight import (
     effective_impact as _effective_impact,
     commercial_segment as _commercial_segment_of,
+    VALID_COMMERCIAL_SEGMENTS,
 )
 from scoring import Scoring
 from prompts import MAX_MACRO_OUTLOOK_SIGNALS
@@ -283,12 +284,89 @@ def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
     return dict(buckets)
 
 
+def _segment_display_map(reporting_cfg: dict) -> dict[str, str]:
+    """Build the canonical-segment -> display-label lookup from
+    reporting.segment_display_groups (display label -> [canonical labels]).
+
+    Display-only: the LLM taxonomy and stored `commercial_segment` values stay
+    granular; this collapses several canonical segments under one reader-facing
+    header. Absent/empty/malformed config yields {} (no merge — a config-only
+    rollback). Canonical labels that are not real segments
+    (`insight.VALID_COMMERCIAL_SEGMENTS`) are ignored so a config typo cannot
+    crash delivery."""
+    raw = reporting_cfg.get("segment_display_groups")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for display_label, canonicals in raw.items():
+        if not isinstance(display_label, str) or not isinstance(canonicals, (list, tuple)):
+            continue
+        for canon in canonicals:
+            if isinstance(canon, str) and canon in VALID_COMMERCIAL_SEGMENTS:
+                out[canon] = display_label
+    return out
+
+
+def _merge_display_groups(
+    groups: dict[str, list[dict]],
+    display_map: dict[str, str],
+) -> dict[str, list[dict]]:
+    """Collapse grouped rows onto their display labels, preserving first-seen
+    order. A canonical segment absent from the map keeps its own name. Applied
+    AFTER grouping and BEFORE the per-segment cap, so the cap governs the merged
+    group (the combined section cannot balloon past the cap)."""
+    if not display_map:
+        return groups
+    merged: dict[str, list[dict]] = {}
+    for seg, arts in groups.items():
+        label = display_map.get(seg, seg)
+        merged.setdefault(label, []).extend(arts)
+    return merged
+
+
+def _with_display_segment(row: dict, display_map: dict[str, str]) -> dict:
+    """Return `row` unchanged unless its commercial_segment maps to a distinct
+    display label, in which case a shallow copy carrying the display label is
+    returned (purity: the caller's input rows are never mutated). Used to make
+    the Additional Articles appendix show the same merged header the visible
+    cards do."""
+    seg = row.get("commercial_segment")
+    if not isinstance(seg, str):
+        return row
+    label = display_map.get(seg)
+    if label is None or label == seg:
+        return row
+    return {**row, "commercial_segment": label}
+
+
+def _map_signal_segments(signal: dict, display_map: dict[str, str]) -> dict:
+    """Map a macro-outlook signal's affected_segments through the display map
+    (deduping collisions, preserving order), returning a copy only when
+    something changed. Validation stays canonical (it runs at ingestion in
+    `_validate_macro_outlook`); this is a render-consistency remap of the stored
+    row, so it never touches the validation contract."""
+    segs = signal.get("affected_segments")
+    if not isinstance(segs, list):
+        return signal
+    mapped: list = []
+    for s in segs:
+        d = display_map.get(s, s) if isinstance(s, str) else s
+        if d not in mapped:
+            mapped.append(d)
+    if mapped == segs:
+        return signal
+    return {**signal, "affected_segments": mapped}
+
+
 def _resolve_screened_count(macro_summary: Optional[dict], rows: list[dict]) -> int:
     screened = (macro_summary or {}).get("screened_count")
     return len(rows) if screened is None else screened
 
 
-def _extract_macro_outlook(macro_summary: Optional[dict]) -> Optional[dict]:
+def _extract_macro_outlook(
+    macro_summary: Optional[dict],
+    display_map: Optional[dict[str, str]] = None,
+) -> Optional[dict]:
     """Pull a renderable macro_outlook out of the macro-summary row: a dict with
     a non-empty current_condition and at least one signal. Anything else
     (missing, None, malformed, empty signals) becomes None, so the renderer
@@ -306,8 +384,13 @@ def _extract_macro_outlook(macro_summary: Optional[dict]) -> Optional[dict]:
         return None
     if not isinstance(signals, list) or not signals:
         return None
-    return {"current_condition": current,
-            "signals": signals[:MAX_MACRO_OUTLOOK_SIGNALS]}
+    signals = signals[:MAX_MACRO_OUTLOOK_SIGNALS]
+    if display_map:
+        # Remap affected_segments to display labels for render consistency with
+        # the merged section headers. Validation stayed canonical at ingestion.
+        signals = [_map_signal_segments(s if isinstance(s, dict) else {}, display_map)
+                   for s in signals]
+    return {"current_condition": current, "signals": signals}
 
 
 def assemble_report(
@@ -348,8 +431,15 @@ def assemble_report(
     visible_pool = [r for r in kept if scorer.is_visible(r)]
     below_threshold_count = len(kept) - len(visible_pool)
 
-    # 3. Group by commercial segment.
-    groups_full = _group_by_commercial_segment(visible_pool)
+    # 3. Group by commercial segment, then apply the display-only merge (e.g.
+    #    the two ground-transportation segments -> "Transportation — Vehicles").
+    #    The merge is post-grouping / pre-cap so the per-segment cap governs the
+    #    combined section; the stored taxonomy stays granular (re-splittable with
+    #    zero re-classification).
+    display_map = _segment_display_map(reporting_cfg)
+    groups_full = _merge_display_groups(
+        _group_by_commercial_segment(visible_pool), display_map
+    )
 
     # 4. Per-segment cap (highest-impact articles first within each group).
     #    Sort even when uncapped so within-segment order stays materiality-desc.
@@ -379,6 +469,12 @@ def assemble_report(
     additional_articles = _select_additional_articles(
         kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
     )
+    # Show the merged display label in the appendix segment column too, so the
+    # reader sees one consistent header for the merged segment across cards and
+    # appendix. Copy-on-write — the caller's rows are never mutated.
+    additional_articles = tuple(
+        _with_display_segment(r, display_map) for r in additional_articles
+    )
 
     # 7. weak_relevance: weak-relevance (4-5) rows shown NOWHERE — neither a
     #    visible card nor the appendix (e.g. pushed out by the appendix cap).
@@ -407,5 +503,5 @@ def assemble_report(
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
-        macro_outlook=_extract_macro_outlook(macro_summary),
+        macro_outlook=_extract_macro_outlook(macro_summary, display_map),
     )
