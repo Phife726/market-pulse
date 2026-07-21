@@ -43,10 +43,12 @@ PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside t
 # reserve floor, remaining ENTITY targets are skipped so the concept/macro groups
 # at the bottom of targets.yaml always get discovery. Entity coverage is redundant
 # day-over-day (dedup absorbs re-discoveries); concept/macro coverage is not.
-# The slot reserve is derived per-run from the configured tail demand (see
-# _tail_scrape_demand) so adding concept groups or raising results_per_entity
-# cannot silently reopen the starvation gap; only the time floor is a constant
-# (sized for ~40+ scrape attempts at the observed ~9s each).
+# The slot reserve is derived per-run and position-aware: at each entity target
+# it reserves only the concept demand still AHEAD in file order (see
+# _concept_demand_ahead), so adding concept groups or raising results_per_entity
+# cannot silently reopen the starvation gap, and front-loading priority concepts
+# (Tier 1) cannot over-reserve and finish under cap. Only the time floor is a
+# constant (sized for ~40+ scrape attempts at the observed ~9s each).
 TAIL_RESERVE_SECONDS = 360
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
@@ -821,10 +823,11 @@ def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
 
 
 def _tail_scrape_demand(targets: list[dict]) -> int:
-    """Worst-case scrape attempts the concept/macro tail can consume: every
+    """Worst-case scrape attempts *all* concept/macro targets can consume: every
     concept target yields its full results_per_entity as new scrapable URLs
     (true on any day their queries surface fresh news — dedup only absorbs
-    re-discoveries). This is the slot reserve the entity tier must not eat."""
+    re-discoveries). This is the total configured concept demand; the entity
+    gate reserves only the slice still AHEAD of it (see _concept_demand_ahead)."""
     return sum(
         int(t.get("results_per_entity", 0))
         for t in targets
@@ -832,10 +835,29 @@ def _tail_scrape_demand(targets: list[dict]) -> int:
     )
 
 
+def _concept_demand_ahead(targets: list[dict]) -> list[int]:
+    """Suffix sums of concept scrape demand: element ``i`` is the worst-case
+    demand of ``targets[i:]``. The entity gate must reserve only the concept
+    demand that still lies AHEAD of the current target — front-loaded priority
+    concepts (Tier 1) have already run, so counting them (as a single static
+    total would) over-reserves and skips entity targets the budget could still
+    afford, finishing under cap. Order-independent: reordering targets.yaml can
+    never silently reopen the starvation gap nor over-protect a run."""
+    suffix = [0] * (len(targets) + 1)
+    for i in range(len(targets) - 1, -1, -1):
+        demand = (
+            int(targets[i].get("results_per_entity", 0))
+            if targets[i].get("search_mode") == "concept"
+            else 0
+        )
+        suffix[i] = suffix[i + 1] + demand
+    return suffix
+
+
 def execute_pipeline() -> None:
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
-    tail_reserve_scrapes = _tail_scrape_demand(targets)
+    concept_demand_ahead = _concept_demand_ahead(targets)
     target_metadata = (
         relevance_gate.load_target_metadata("target_metadata.yaml")
         if _relevance_gate_enabled() else {}
@@ -856,7 +878,7 @@ def execute_pipeline() -> None:
         provider_yield.setdefault(provider, _new_provider_yield())[key] += 1
 
     tail_reserve_triggered = False
-    for target in targets:
+    for target_index, target in enumerate(targets):
         if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
             logger.warning(
                 "Pipeline deadline (%ds) reached before processing target '%s' — stopping early.",
@@ -865,10 +887,14 @@ def execute_pipeline() -> None:
             break
 
         # Protected tail budget: once either budget falls to its reserve floor,
-        # stop starting ENTITY targets so the concept/macro groups at the bottom
-        # of targets.yaml still get their discovery pass. Concept targets keep
-        # running until the hard cap/deadline above actually fires.
+        # stop starting ENTITY targets so the concept/macro groups still ahead
+        # in targets.yaml get their discovery pass. Concept targets keep running
+        # until the hard cap/deadline above actually fires. The slot reserve is
+        # position-aware — only the concept demand AHEAD of this target — so
+        # front-loaded priority concepts (Tier 1), already run, don't get
+        # double-reserved and starve the entity tier below its affordable budget.
         if target.get("search_mode", "entity") == "entity":
+            tail_reserve_scrapes = concept_demand_ahead[target_index]
             slots_low = scrapes_attempted >= MAX_DAILY_SCRAPES - tail_reserve_scrapes
             clock_low = (
                 time.monotonic() - pipeline_start
