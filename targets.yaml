@@ -604,8 +604,12 @@ building_construction:
     - "weatherable exterior compound"
   include_all: []
   exclude_any:
+    # Real-estate/home-sale listing noise (a home sale matched "composite
+    # decking" on 2026-07-20). Keep these real-estate-specific — a bare -"sold"
+    # would also drop legitimate building-products manufacturer moves.
     - "for sale"
-    - "sold"
+    - "house sold"
+    - "home sold"
     - "real estate"
     - "home listing"
     - patents

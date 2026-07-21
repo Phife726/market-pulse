@@ -442,7 +442,13 @@ def test_targets_yaml_building_construction_excludes_real_estate():
     for noise in ("for sale", "sold", "real estate", "home listing"):
         assert noise not in include_blob
     excludes = {e.lower() for e in bc.get("exclude_any", [])}
-    assert {"for sale", "sold", "real estate", "home listing"} <= excludes
+    assert {"for sale", "real estate", "home listing"} <= excludes
+    # Sale phrases must be real-estate-specific, not the standalone verb "sold":
+    # build_query() turns each exclude into -"term", and a bare -"sold" would
+    # drop legitimate building-products manufacturer moves ("sold its roofing
+    # business"). Home-sale phrasing still catches the original noise.
+    assert "sold" not in excludes
+    assert any("sold" in e for e in excludes)
     targets = load_targets("targets.yaml")
     bc_query = next(t["query"] for t in targets if t["name"] == "building_construction")
     assert bc_query.strip()
