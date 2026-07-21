@@ -12,6 +12,18 @@
 # exclude_any: Moody's platform identifiers (e.g. "source set 238658",
 #   "PR wires") are silently ignored by ingestion_engine.py —
 #   only real search terms become -"term" operators.
+#
+# ── GROUP ORDER IS THE GRACEFUL-DEGRADATION POLICY ──────────
+# load_targets() processes groups top-to-bottom and execution follows file
+# order, so a run that exhausts MAX_DAILY_SCRAPES or PIPELINE_DEADLINE_SECONDS
+# mid-list drops whatever sits lowest. Groups are therefore ordered by value in
+# four tiers — highest survives first:
+#   Tier 1  Priority commercial segments (concept)   ← processed first
+#   Tier 2  Entity groups (competitors/customers/suppliers)
+#   Tier 3  Remaining concept groups
+#   Tier 4  Macroeconomic Outlook groups             ← sacrificed first
+# When the budget runs out, macro is sacrificed first, then Tier 3, then
+# entities, then the priority segments last of all. Keep macro_* groups last.
 # ============================================================
 
 discovery:
@@ -19,7 +31,201 @@ discovery:
   lookback_hours: 24
   min_article_length: 500
 
-# ── ENTITY MODE GROUPS ────────────────────────────────────────
+# ── TIER 1 · PRIORITY COMMERCIAL SEGMENTS ─────────────────────
+# The eight priority commercial segments (healthcare, fibers,
+# building_construction, the three transportation_* groups, packaging,
+# engineered_resins) lead the file so a budget-limited run always covers them.
+# They carry results_per_entity: 4 (vs. the global 2) so each gets more
+# discovery candidates per day. Group keys mirror the commercial_segments keys
+# in market_pulse_config.yaml exactly, so the LLM's segment routing and these
+# discovery groups stay in lockstep. Do not raise above 4 without re-measuring
+# the scrape budget (MAX_DAILY_SCRAPES=180): each +1 over the eight priority
+# groups is +8 worst-case scrapes/day.
+
+healthcare:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "Beckman Coulter"
+    - "Aptar Pharma"
+    - Bespak
+    - "Companion Medical"
+    - "Credence Medsystems"
+    - "GE Healthcare"
+    - "medical grade plastics"
+    - "biocompatible plastics"
+    - "sterilizable plastics"
+    - "autoclavable plastics"
+    - "clean compounding"
+    - "medical device polymer"
+    - "medical plastics innovation"
+    - "medical grade masterbatch"
+    - "sterilization resistant polymer"
+    - "antimicrobial medical polymer"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+
+fibers:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "synthetic fiber"
+    - "performance fiber"
+    - "fiber masterbatch"
+    - "solution dyed fiber"
+    - "nonwoven additive"
+    - "nonwoven innovation"
+    - "hygiene nonwovens"
+    - "carpet fiber"
+    - "synthetic turf fiber"
+    - "textile polymer additive"
+    - "polyester fiber"
+    - "nylon fiber"
+  include_all: []
+  exclude_any: []
+
+# NOTE: Moody's spec listed "automotive industry" here — confirmed copy-paste error.
+# Replaced with building/construction-specific terms. The original narrow product
+# phrases matched retail/real-estate noise (e.g. "composite decking" matched a
+# home sale on 2026-07-20); retuned to building-products manufacturer / innovation
+# terms with real-estate excludes.
+building_construction:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "building products plastics"
+    - "building products manufacturer"
+    - "construction materials innovation"
+    - "vinyl siding manufacturer"
+    - "window and door profiles"
+    - "PVC building products"
+    - "PVC fencing manufacturer"
+    - "roofing systems innovation"
+    - "composite decking manufacturer"
+    - "weatherable exterior compound"
+  include_all: []
+  exclude_any:
+    # Real-estate/home-sale listing noise (a home sale matched "composite
+    # decking" on 2026-07-20). Keep these real-estate-specific — a bare -"sold"
+    # would also drop legitimate building-products manufacturer moves.
+    - "for sale"
+    - "house sold"
+    - "home sold"
+    - "real estate"
+    - "home listing"
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
+
+# The combined `transportation` group was split into three groups matching the
+# commercial_segments sub-segments. Term authoring is per each segment's config
+# description; terms are not duplicated across the three groups.
+transportation_automotive:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "automotive plastics"
+    - "automotive polymer materials"
+    - "automotive interior materials"
+    - "vehicle lightweighting polymers"
+    - "EV flame retardant plastics"
+    - "automotive OEM materials"
+    - "Tier 1 automotive supplier materials"
+    - "EV battery plastics"
+  include_all: []
+  exclude_any: []
+
+packaging:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "plastic packaging innovation"
+    - "packaging masterbatch"
+    - "packaging polymer additive"
+    - "barrier additive packaging"
+    - "recyclable flexible packaging"
+    - "recycled content packaging"
+    - "food contact polymer"
+    - "packaging EPR"
+  include_all: []
+  exclude_any:
+    - "Pizza Hut"
+
+transportation_aerospace:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "aircraft interior materials"
+    - "aerospace polymer materials"
+    - "aerospace composite materials"
+    - "defense aerospace materials"
+    - "eVTOL materials"
+    - "urban air mobility materials"
+    - "FAR 25.853 flame"
+  include_all: []
+  exclude_any: []
+
+transportation_non_automotive:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - "heavy truck plastics"
+    - "commercial vehicle interior materials"
+    - "bus interior materials"
+    - "agricultural equipment polymer"
+    - "construction equipment materials"
+    - "rail interior materials"
+    - "marine composite materials"
+    - "recreational vehicle materials"
+  include_all: []
+  exclude_any: []
+
+# NOTE: Moody's spec uses "acetyl" — corrected to "acetal" (polyacetal/POM polymer).
+# PPE kept per spec; include_all: polymer suppresses personal-protective-equipment noise.
+# engineered_resins  = raw material supply/pricing context (include_all: polymer)
+# performance_compounds = processing/formulation context (include_all: compounding),
+#   a Tier 3 companion group sharing this term list — see Tier 3 below.
+engineered_resins:
+  search_mode: concept
+  active: true
+  results_per_entity: 4  # priority segment
+  include_any:
+    - acetal
+    - nylon
+    - PBT
+    - polycarbonate
+    - PEEK
+    - PEI
+    - PES
+    - PET
+    - polyolefin
+    - PPE
+    - PPS
+    - PSU
+    - TPE
+    - TPU
+    - thermoplastics
+  include_all:
+    - polymer
+  exclude_any:
+    - patents
+
+# ── TIER 2 · ENTITY MODE GROUPS ───────────────────────────────
+# Competitors → customers → suppliers. Customer order is preserved as-is: no
+# authoritative priority-customer list exists in the repo, so ordering within
+# this tier is not curated. Entities are sacrificed before Tier 1 but after
+# Tier 3/macro — dedup absorbs day-over-day re-discoveries of entity news.
 
 competitors:
   search_mode: entity
@@ -403,7 +609,8 @@ suppliers:
       zoominfo_company_id: 18071933
       active: true
 
-# ── CONCEPT MODE GROUPS ───────────────────────────────────────
+# ── TIER 3 · REMAINING CONCEPT GROUPS ─────────────────────────
+# Lower-priority concept discovery. Sacrificed before entities but after macro.
 
 masterbatch_additives_innovation:
   search_mode: concept
@@ -432,6 +639,48 @@ masterbatch_additives_innovation:
     - "market report"
     - "market size"
     - "CAGR"
+
+# performance_compounds = processing/formulation context (include_all: compounding).
+# Shares the term list with the Tier 1 engineered_resins group (which uses
+# include_all: polymer for raw-material supply/pricing context) — see the NOTE
+# on engineered_resins above.
+performance_compounds:
+  search_mode: concept
+  active: true
+  include_any:
+    - acetal
+    - nylon
+    - PBT
+    - polycarbonate
+    - PEEK
+    - PEI
+    - PES
+    - PET
+    - polyolefin
+    - PPE
+    - PPS
+    - PSU
+    - TPE
+    - TPU
+    - thermoplastics
+  include_all:
+    - compounding
+  exclude_any:
+    - patents
+
+industry:
+  search_mode: concept
+  active: true
+  include_any:
+    - "masterbatch industry"
+    - "polymer additives"
+    - "thermoplastic compounding"
+    - "specialty polymer compounds"
+    - "plastics extrusion"
+    - "polymer manufacturing"
+  include_all: []
+  exclude_any:
+    - tenders
 
 # The regional groups below improve English-language international discovery.
 # They do not enforce Serper geography or language. Full locale-aware
@@ -482,179 +731,6 @@ asia_pacific_polymer_signals:
     - "market size"
     - "CAGR"
 
-industry:
-  search_mode: concept
-  active: true
-  include_any:
-    - "masterbatch industry"
-    - "polymer additives"
-    - "thermoplastic compounding"
-    - "specialty polymer compounds"
-    - "plastics extrusion"
-    - "polymer manufacturing"
-  include_all: []
-  exclude_any:
-    - tenders
-
-healthcare:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "Beckman Coulter"
-    - "Aptar Pharma"
-    - Bespak
-    - "Companion Medical"
-    - "Credence Medsystems"
-    - "GE Healthcare"
-    - "medical grade plastics"
-    - "biocompatible plastics"
-    - "sterilizable plastics"
-    - "autoclavable plastics"
-    - "clean compounding"
-    - "medical device polymer"
-    - "medical plastics innovation"
-    - "medical grade masterbatch"
-    - "sterilization resistant polymer"
-    - "antimicrobial medical polymer"
-  include_all: []
-  exclude_any:
-    - patents
-    - "securities analyst reports"
-
-# ── PRIORITY SEGMENT GROUPS ───────────────────────────────────
-# The eight priority commercial segments (healthcare, fibers,
-# building_construction, the three transportation_* groups, packaging,
-# engineered_resins) carry results_per_entity: 4 (vs. the global 2) so each
-# gets more discovery candidates per day. Group keys mirror the
-# commercial_segments keys in market_pulse_config.yaml exactly, so the LLM's
-# segment routing and these discovery groups stay in lockstep. Do not raise
-# above 4 without re-measuring the scrape budget (MAX_DAILY_SCRAPES=180): each
-# +1 over the eight priority groups is +8 worst-case scrapes/day.
-
-# The combined `transportation` group was split into three groups matching the
-# commercial_segments sub-segments. Term authoring is per each segment's config
-# description; terms are not duplicated across the three groups.
-transportation_automotive:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "automotive plastics"
-    - "automotive polymer materials"
-    - "automotive interior materials"
-    - "vehicle lightweighting polymers"
-    - "EV flame retardant plastics"
-    - "automotive OEM materials"
-    - "Tier 1 automotive supplier materials"
-    - "EV battery plastics"
-  include_all: []
-  exclude_any: []
-
-transportation_aerospace:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "aircraft interior materials"
-    - "aerospace polymer materials"
-    - "aerospace composite materials"
-    - "defense aerospace materials"
-    - "eVTOL materials"
-    - "urban air mobility materials"
-    - "FAR 25.853 flame"
-  include_all: []
-  exclude_any: []
-
-transportation_non_automotive:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "heavy truck plastics"
-    - "commercial vehicle interior materials"
-    - "bus interior materials"
-    - "agricultural equipment polymer"
-    - "construction equipment materials"
-    - "rail interior materials"
-    - "marine composite materials"
-    - "recreational vehicle materials"
-  include_all: []
-  exclude_any: []
-
-# NOTE: Moody's spec listed "automotive industry" here — confirmed copy-paste error.
-# Replaced with building/construction-specific terms. The original narrow product
-# phrases matched retail/real-estate noise (e.g. "composite decking" matched a
-# home sale on 2026-07-20); retuned to building-products manufacturer / innovation
-# terms with real-estate excludes.
-building_construction:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "building products plastics"
-    - "building products manufacturer"
-    - "construction materials innovation"
-    - "vinyl siding manufacturer"
-    - "window and door profiles"
-    - "PVC building products"
-    - "PVC fencing manufacturer"
-    - "roofing systems innovation"
-    - "composite decking manufacturer"
-    - "weatherable exterior compound"
-  include_all: []
-  exclude_any:
-    # Real-estate/home-sale listing noise (a home sale matched "composite
-    # decking" on 2026-07-20). Keep these real-estate-specific — a bare -"sold"
-    # would also drop legitimate building-products manufacturer moves.
-    - "for sale"
-    - "house sold"
-    - "home sold"
-    - "real estate"
-    - "home listing"
-    - patents
-    - "securities analyst reports"
-    - "market report"
-    - "market size"
-    - CAGR
-
-fibers:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "synthetic fiber"
-    - "performance fiber"
-    - "fiber masterbatch"
-    - "solution dyed fiber"
-    - "nonwoven additive"
-    - "nonwoven innovation"
-    - "hygiene nonwovens"
-    - "carpet fiber"
-    - "synthetic turf fiber"
-    - "textile polymer additive"
-    - "polyester fiber"
-    - "nylon fiber"
-  include_all: []
-  exclude_any: []
-
-packaging:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - "plastic packaging innovation"
-    - "packaging masterbatch"
-    - "packaging polymer additive"
-    - "barrier additive packaging"
-    - "recyclable flexible packaging"
-    - "recycled content packaging"
-    - "food contact polymer"
-    - "packaging EPR"
-  include_all: []
-  exclude_any:
-    - "Pizza Hut"
-
 electronics:
   search_mode: concept
   active: true
@@ -671,67 +747,14 @@ electronics:
     - "video game industry"
     - "video games"
 
-# NOTE: Moody's spec uses "acetyl" — corrected to "acetal" (polyacetal/POM polymer).
-# PPE kept per spec; include_all: polymer suppresses personal-protective-equipment noise.
-# engineered_resins  = raw material supply/pricing context (include_all: polymer)
-# performance_compounds = processing/formulation context (include_all: compounding)
-engineered_resins:
-  search_mode: concept
-  active: true
-  results_per_entity: 4  # priority segment
-  include_any:
-    - acetal
-    - nylon
-    - PBT
-    - polycarbonate
-    - PEEK
-    - PEI
-    - PES
-    - PET
-    - polyolefin
-    - PPE
-    - PPS
-    - PSU
-    - TPE
-    - TPU
-    - thermoplastics
-  include_all:
-    - polymer
-  exclude_any:
-    - patents
-
-performance_compounds:
-  search_mode: concept
-  active: true
-  include_any:
-    - acetal
-    - nylon
-    - PBT
-    - polycarbonate
-    - PEEK
-    - PEI
-    - PES
-    - PET
-    - polyolefin
-    - PPE
-    - PPS
-    - PSU
-    - TPE
-    - TPU
-    - thermoplastics
-  include_all:
-    - compounding
-  exclude_any:
-    - patents
-
-# ── MACROECONOMIC OUTLOOK GROUPS ──────────────────────────────
+# ── TIER 4 · MACROECONOMIC OUTLOOK GROUPS ─────────────────────
 # Dedicated macro-signal discovery feeding the Macroeconomic Outlook section
 # (see the macro-outlook design). These MUST remain the LAST groups in the
 # file: load_targets() processes groups in file order, so a deadline-limited
-# ingestion run sacrifices macro coverage before entity coverage — graceful
-# degradation by construction. Do not interleave entity/concept groups below.
-# The old generic `economic` group is intentionally absorbed here; do not
-# reintroduce it (it would duplicate discovery and dilute the source pack).
+# ingestion run sacrifices macro coverage first — graceful degradation by
+# construction. Do not interleave entity/concept groups below. The old generic
+# `economic` group is intentionally absorbed here; do not reintroduce it (it
+# would duplicate discovery and dilute the source pack).
 macro_manufacturing:
   search_mode: concept
   active: true

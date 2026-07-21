@@ -464,6 +464,76 @@ def test_targets_yaml_all_concept_queries_nonempty():
 
 
 # ---------------------------------------------------------------------------
+# Ingestion target priority order (Dispatch 2 — four-tier discovery order).
+# YAML file order IS the graceful-degradation policy: a heavy news day that
+# exhausts the scrape/time budget mid-run drops the lowest tiers first, so the
+# highest-value commercial-segment coverage survives. Pin only the relational
+# invariants below — do not snapshot the full target list.
+# ---------------------------------------------------------------------------
+
+# Tier 1 — priority commercial segments, in the exact processing order they
+# must occupy at the top of the file. (This ordering is intentionally distinct
+# from _PRIORITY_SEGMENT_KEYS, which asserts set membership + raised volume, not
+# position.)
+_TIER1_PRIORITY_ORDER = [
+    "healthcare",
+    "fibers",
+    "building_construction",
+    "transportation_automotive",
+    "packaging",
+    "transportation_aerospace",
+    "transportation_non_automotive",
+    "engineered_resins",
+]
+
+
+def test_tier1_priority_segments_are_first_eight_in_order():
+    """The first eight loaded targets are the Tier 1 priority segments in the
+    exact required order — so a budget-exhausted run keeps them first."""
+    targets = load_targets("targets.yaml")
+    first_eight = [t["name"] for t in targets[:8]]
+    assert first_eight == _TIER1_PRIORITY_ORDER
+
+
+def test_all_entity_targets_follow_every_tier1_target():
+    """Every entity target sits below every Tier 1 target — Tier 2 (entities)
+    is sacrificed before Tier 1 when the budget runs out mid-list."""
+    targets = load_targets("targets.yaml")
+    tier1_indices = [
+        i for i, t in enumerate(targets) if t["name"] in _TIER1_PRIORITY_ORDER
+    ]
+    entity_indices = [
+        i for i, t in enumerate(targets) if t["search_mode"] == "entity"
+    ]
+    assert entity_indices, "expected some entity targets"
+    assert min(entity_indices) > max(tier1_indices)
+
+
+def test_macro_groups_are_the_trailing_loaded_targets():
+    """The final loaded targets are exactly the macro_* groups (macro-last
+    invariant), so macro coverage is sacrificed first of all."""
+    targets = load_targets("targets.yaml")
+    trailing = [t["name"] for t in targets[-len(_MACRO_GROUP_KEYS):]]
+    assert trailing == _MACRO_GROUP_KEYS
+
+
+def test_known_inactive_entities_stay_absent():
+    """Reordering must not resurrect paused/duplicate entities."""
+    targets = load_targets("targets.yaml")
+    names = {t["name"] for t in targets}
+    for inactive in ("Polymax", "Performance Plastics", "Lexmark", "AdvanSix Resin"):
+        assert inactive not in names
+
+
+def test_all_loaded_queries_nonempty_after_reorder():
+    """Every loaded target (entity and concept) still produces a query."""
+    targets = load_targets("targets.yaml")
+    assert targets
+    for t in targets:
+        assert t["query"].strip(), t["name"]
+
+
+# ---------------------------------------------------------------------------
 # 5. DISCARD signal
 # ---------------------------------------------------------------------------
 
