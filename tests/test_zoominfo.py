@@ -19,8 +19,6 @@ from ingestion_engine import (
     discover_zoominfo_candidates,
     load_targets,
     normalize_url,
-    _env_int,
-    _zoominfo_news_enabled,
 )
 
 
@@ -184,41 +182,8 @@ def test_load_targets_respects_zoominfo_news_false(tmp_path):
     assert target["zoominfo_news"] is False
 
 
-# ===========================================================================
-# Feature-flag helpers
-# ===========================================================================
-
-@pytest.mark.parametrize("value", ["true", "True", "1", "yes", "on", " ON "])
-def test_zoominfo_news_enabled_truthy(monkeypatch, value):
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", value)
-    assert _zoominfo_news_enabled() is True
-
-
-@pytest.mark.parametrize("value", ["false", "0", "no", "off", "", "maybe"])
-def test_zoominfo_news_enabled_falsy(monkeypatch, value):
-    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", value)
-    assert _zoominfo_news_enabled() is False
-
-
-def test_zoominfo_news_enabled_default_off(monkeypatch):
-    monkeypatch.delenv("ZOOMINFO_NEWS_ENABLED", raising=False)
-    assert _zoominfo_news_enabled() is False
-
-
-def test_env_int_uses_default_when_unset(monkeypatch):
-    monkeypatch.delenv("ZOOMINFO_NEWS_PER_COMPANY", raising=False)
-    assert _env_int("ZOOMINFO_NEWS_PER_COMPANY", 5) == 5
-
-
-def test_env_int_parses_valid(monkeypatch):
-    monkeypatch.setenv("ZOOMINFO_NEWS_PER_COMPANY", "7")
-    assert _env_int("ZOOMINFO_NEWS_PER_COMPANY", 5) == 7
-
-
-def test_env_int_invalid_falls_back_to_default(monkeypatch, caplog):
-    monkeypatch.setenv("ZOOMINFO_NEWS_LOOKBACK_DAYS", "not-an-int")
-    with caplog.at_level("WARNING"):
-        assert _env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", 2) == 2
+# The ZoomInfo feature-flag and env-int helpers moved to config.py; their
+# behavior is covered directly in tests/test_config.py.
 
 
 # ===========================================================================
@@ -976,16 +941,6 @@ def test_cross_provider_url_dedupe_hash_matches():
 # ===========================================================================
 # Discovery-metadata payload helper + gating
 # ===========================================================================
-
-def test_store_discovery_metadata_default_off(monkeypatch):
-    monkeypatch.delenv("STORE_DISCOVERY_METADATA", raising=False)
-    assert ingestion_engine._store_discovery_metadata() is False
-
-
-def test_store_discovery_metadata_truthy(monkeypatch):
-    monkeypatch.setenv("STORE_DISCOVERY_METADATA", "true")
-    assert ingestion_engine._store_discovery_metadata() is True
-
 
 def test_discovery_metadata_shape_for_zoominfo():
     candidate = {

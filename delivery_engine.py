@@ -8,13 +8,13 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import requests
-import yaml
 
 from suppression_ledger import SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
 from llm import _llm
 import prompts
 import scoring
+import config
 from scoring import tier as _alert_tier
 # Report assembly lives in report.py (the pure decision pipeline); tests
 # exercise its internals via `report` directly.
@@ -49,26 +49,6 @@ _TEST_BANNER_ROW = (
     f'TEST RUN · Jason-only QA output — not for distribution'
     f'</td></tr>'
 )
-
-# ---------------------------------------------------------------------------
-# Config loader
-# ---------------------------------------------------------------------------
-
-_MP_CONFIG: Optional[dict] = None
-
-
-def _load_mp_config() -> dict:
-    """Load market_pulse_config.yaml once; return cached result on repeat calls."""
-    global _MP_CONFIG
-    if _MP_CONFIG is None:
-        try:
-            with open("market_pulse_config.yaml", "r") as fh:
-                _MP_CONFIG = yaml.safe_load(fh) or {}
-        except Exception as exc:
-            logger.warning("Could not load market_pulse_config.yaml — using defaults: %s", exc)
-            _MP_CONFIG = {}
-    return _MP_CONFIG
-
 
 # ---------------------------------------------------------------------------
 # Shared section header
@@ -322,14 +302,9 @@ def _render_additional_articles_section(items: list[dict]) -> str:
 # Run-mode detection
 # ---------------------------------------------------------------------------
 
-def _run_mode() -> str:
-    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
-    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
-
-
 def _is_test_mode() -> bool:
     """Return True when MARKET_PULSE_RUN_MODE=test (case-insensitive)."""
-    return _run_mode() == "test"
+    return config.run_mode() == "test"
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +466,7 @@ def fetch_macro_summary() -> dict | None:
     from datetime import date
     min_run_date = (date.today() - timedelta(days=1)).isoformat()
     summary = _repo().fetch_latest_summary(
-        run_mode=_run_mode(),
+        run_mode=config.run_mode(),
         min_date=min_run_date,
     )
     if _is_test_mode():
@@ -535,7 +510,7 @@ def _update_delivery_summary_counts(
     email-sending path resilient to transient Supabase outages."""
     from datetime import date as _date
     today = _date.today().isoformat()
-    run_mode = _run_mode()
+    run_mode = config.run_mode()
     try:
         prior_row = _repo().require_delivery_state(run_date=today, run_mode=run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
@@ -916,17 +891,17 @@ def prepare_report(
     rows: list[dict],
     macro_summary: dict | None,
     *,
-    config: dict | None = None,
+    report_config: dict | None = None,
 ) -> ReportModel:
     """Assemble the report model and perform the run's two side effects —
     the daily_summaries write-back (repo seam, same-day-retry merge) and
     thematic synthesis (LLM seam) — exactly once, in that order.
 
     Both effects are skipped for the no_news variant: that path never wrote
-    back, and there is nothing to synthesize. config=None loads
+    back, and there is nothing to synthesize. report_config=None loads
     market_pulse_config.yaml; tests pass a dict. The returned model is ready
     for render_report."""
-    cfg = config if config is not None else _load_mp_config()
+    cfg = report_config if report_config is not None else config.mp_config()
     model = assemble_report(rows, macro_summary, cfg)
     if model.variant == "daily":
         _update_delivery_summary_counts(
@@ -1230,5 +1205,11 @@ def execute_pipeline() -> None:
     send_email(html)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Cron entrypoint: fail fast on missing secrets, then run the pipeline."""
+    config.validate_environment("delivery")
     execute_pipeline()
+
+
+if __name__ == "__main__":
+    main()

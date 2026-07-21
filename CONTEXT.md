@@ -32,6 +32,23 @@ A fourth seam is data-shaped rather than Protocol-shaped: the **report model**
 It has no adapters; behaviour on either side of it is swapped by composing the
 pure functions differently, not by injection.
 
+## Config
+
+`config.py` concentrates every runtime configuration read the two engines make:
+`mp_config()` (the cached `market_pulse_config.yaml` load), `run_mode()`,
+`env_int()`, the ZoomInfo feature flags (`zoominfo_news_enabled`,
+`relevance_gate_enabled`, `store_discovery_metadata`), and
+`validate_environment(engine)` — a fail-fast startup check (driven by
+`REQUIRED_SECRETS`, raising `MissingEnvironmentError`) that each engine's
+`main()` runs before any API spend, so a misconfigured cron crashes at t=0
+instead of part-way through. It is **not** a Protocol seam: it has no adapters,
+because the three Protocol seams (`llm`, `daily_intelligence_repo`,
+`zoominfo_client`) keep reading their own secrets at use time — config only
+*validates their presence*, it does not own their values. The pure
+report/scoring/prompt modules never import it: they receive a plain config dict
+as a parameter (e.g. `prepare_report(..., report_config=...)`), so their
+zero-I/O purity is untouched.
+
 ## Domain terms
 
 - **Insight** — the structured JSON the LLM returns per article: `headline`,
