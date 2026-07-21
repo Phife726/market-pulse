@@ -233,6 +233,103 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Per-group results_per_entity override (priority-segment discovery volume)
+# ---------------------------------------------------------------------------
+
+def test_concept_group_results_per_entity_override(tmp_path):
+    """A concept group may declare its own results_per_entity; a group without
+    one inherits the global discovery value."""
+    config_yaml = textwrap.dedent(
+        """\
+        priority_segment:
+          search_mode: concept
+          active: true
+          results_per_entity: 4
+          include_any:
+            - "building products plastics"
+          include_all: []
+          exclude_any: []
+        plain_segment:
+          search_mode: concept
+          active: true
+          include_any:
+            - "polymer additives"
+          include_all: []
+          exclude_any: []
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    by_name = {t["name"]: t for t in targets}
+    assert by_name["priority_segment"]["results_per_entity"] == 4
+    assert by_name["plain_segment"]["results_per_entity"] == 2
+
+
+def test_entity_group_ignores_stray_results_per_entity(tmp_path):
+    """The override is concept-only: a stray group-level results_per_entity on
+    an entity group is ignored — entity targets keep the global value."""
+    config_yaml = textwrap.dedent(
+        """\
+        competitors:
+          search_mode: entity
+          results_per_entity: 9
+          include_all: []
+          exclude_any: []
+          entities:
+            - name: Avient
+              active: true
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    assert targets[0]["results_per_entity"] == 2
+
+
+def test_tail_scrape_demand_reflects_per_group_override(tmp_path):
+    """_tail_scrape_demand sums each concept target's own results_per_entity,
+    so a per-group override raises the derived tail reserve automatically."""
+    import ingestion_engine
+
+    config_yaml = textwrap.dedent(
+        """\
+        priority_segment:
+          search_mode: concept
+          active: true
+          results_per_entity: 4
+          include_any:
+            - "building products plastics"
+          include_all: []
+          exclude_any: []
+        plain_segment:
+          search_mode: concept
+          active: true
+          include_any:
+            - "polymer additives"
+          include_all: []
+          exclude_any: []
+        discovery:
+          results_per_entity: 2
+          lookback_hours: 24
+          min_article_length: 500
+        """
+    )
+    config_file = tmp_path / "targets.yaml"
+    config_file.write_text(config_yaml)
+    targets = load_targets(str(config_file))
+    assert ingestion_engine._tail_scrape_demand(targets) == 4 + 2
+
+
+# ---------------------------------------------------------------------------
 # Dedicated macroeconomic discovery targets (PR 2, Task 7)
 # ---------------------------------------------------------------------------
 
@@ -283,6 +380,81 @@ def test_macro_groups_are_concept_mode():
     for key in _MACRO_GROUP_KEYS:
         assert cfg[key]["search_mode"] == "concept"
         assert cfg[key]["active"] is True
+
+
+# ---------------------------------------------------------------------------
+# Priority-segment discovery: transportation split + B&C retune (real file)
+# ---------------------------------------------------------------------------
+
+_TRANSPORTATION_SPLIT_KEYS = [
+    "transportation_automotive",
+    "transportation_aerospace",
+    "transportation_non_automotive",
+]
+
+_PRIORITY_SEGMENT_KEYS = [
+    "healthcare",
+    "fibers",
+    "building_construction",
+    "transportation_automotive",
+    "transportation_aerospace",
+    "transportation_non_automotive",
+    "packaging",
+    "engineered_resins",
+]
+
+
+def test_targets_yaml_transportation_split_into_three():
+    """The combined `transportation` group is replaced by three separate active
+    concept targets whose keys mirror the commercial_segments config keys."""
+    cfg = _load_targets_yaml()
+    assert "transportation" not in cfg
+    targets = load_targets("targets.yaml")
+    concept_names = {t["name"] for t in targets if t["search_mode"] == "concept"}
+    assert set(_TRANSPORTATION_SPLIT_KEYS) <= concept_names
+
+
+def test_targets_yaml_priority_segments_have_raised_volume():
+    """Each priority-segment concept group carries results_per_entity 4; the
+    global default stays 2 for everything else."""
+    targets = load_targets("targets.yaml")
+    by_name = {t["name"]: t for t in targets}
+    for key in _PRIORITY_SEGMENT_KEYS:
+        assert by_name[key]["results_per_entity"] == 4, key
+
+
+def test_targets_yaml_macro_groups_stay_at_global_volume():
+    """Macro groups must NOT be raised — that would inflate the tail reserve
+    and shrink entity coverage."""
+    targets = load_targets("targets.yaml")
+    by_name = {t["name"]: t for t in targets}
+    for key in _MACRO_GROUP_KEYS:
+        assert by_name[key]["results_per_entity"] == 2, key
+
+
+def test_targets_yaml_building_construction_excludes_real_estate():
+    """building_construction has a non-empty query, carries no real-estate term
+    as a positive (include_any) match, and excludes real-estate noise."""
+    cfg = _load_targets_yaml()
+    bc = cfg["building_construction"]
+    include_blob = " ".join(bc.get("include_any", [])).lower()
+    assert include_blob.strip()
+    for noise in ("for sale", "sold", "real estate", "home listing"):
+        assert noise not in include_blob
+    excludes = {e.lower() for e in bc.get("exclude_any", [])}
+    assert {"for sale", "sold", "real estate", "home listing"} <= excludes
+    targets = load_targets("targets.yaml")
+    bc_query = next(t["query"] for t in targets if t["name"] == "building_construction")
+    assert bc_query.strip()
+
+
+def test_targets_yaml_all_concept_queries_nonempty():
+    """Every active concept target must produce a non-empty, well-formed query."""
+    targets = load_targets("targets.yaml")
+    for t in targets:
+        if t["search_mode"] == "concept":
+            assert t["query"].strip(), t["name"]
+            assert t["query"].count("(") == t["query"].count(")"), t["name"]
 
 
 # ---------------------------------------------------------------------------
@@ -5193,9 +5365,10 @@ def test_targets_yaml_regional_queries_have_geographic_anchors():
 def test_targets_yaml_active_concept_targets_count():
     """Concept-target count = the #38 baseline (10) + 3 innovation/regional
     groups, minus the absorbed generic `economic` group, plus the 7 dedicated
-    macro groups."""
+    macro groups, plus 2 net from the transportation split (1 combined group
+    replaced by 3)."""
     concepts = _concept_targets(_load_real_targets())
-    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS)
+    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS) + 2
 
 
 def test_targets_yaml_entity_targets_unchanged():

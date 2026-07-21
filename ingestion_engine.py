@@ -214,6 +214,15 @@ def load_targets(config_path: str) -> list[dict]:
         elif mode == "concept":
             if not group_cfg.get("active", False):
                 continue
+            # Concept groups may declare their own results_per_entity to raise
+            # discovery volume for priority segments; absent one, inherit the
+            # global discovery value. Concept-only — a stray override on an
+            # entity group is ignored (raising entity volume is not intended,
+            # and macro groups stay at the global value so the derived tail
+            # reserve — _tail_scrape_demand — is not inflated).
+            group_results_per_entity: int = group_cfg.get(
+                "results_per_entity", results_per_entity
+            )
             targets.append({
                 "name": group_name,
                 "category": group_name,
@@ -224,7 +233,7 @@ def load_targets(config_path: str) -> list[dict]:
                     include_all=include_all,
                     exclude_any=exclude_any,
                 ),
-                "results_per_entity": results_per_entity,
+                "results_per_entity": group_results_per_entity,
                 "lookback_hours": lookback_hours,
                 "min_article_length": min_article_length,
             })
