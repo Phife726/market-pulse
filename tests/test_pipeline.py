@@ -3152,8 +3152,8 @@ def _capture_summary(fake_repo) -> dict:
 
 
 def _ingestion_run_mode() -> str:
-    from ingestion_engine import _run_mode
-    return _run_mode()
+    from config import run_mode
+    return run_mode()
 
 
 def test_generate_macro_summary_writes_dominant_condition_when_valid():
@@ -3602,16 +3602,16 @@ def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
 
 
 def test_run_mode_helper(monkeypatch):
-    """_run_mode() returns 'test' when env=test; 'production' otherwise; case-insensitive."""
-    from delivery_engine import _run_mode
+    """config.run_mode() returns 'test' when env=test; 'production' otherwise; case-insensitive."""
+    from config import run_mode
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
-    assert _run_mode() == "test"
+    assert run_mode() == "test"
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "TEST")
-    assert _run_mode() == "test"
+    assert run_mode() == "test"
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "")
-    assert _run_mode() == "production"
+    assert run_mode() == "production"
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
-    assert _run_mode() == "production"
+    assert run_mode() == "production"
 
 
 # ===========================================================================
@@ -3939,7 +3939,7 @@ def test_prepare_report_surfaced_count_is_post_cap(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, config=config)
+        prepare_report(rows, None, report_config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     assert stored is not None, "Expected an update() call to daily_summaries"
@@ -3981,7 +3981,7 @@ def test_prepare_report_writes_delivery_suppression_counts_back(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, config=config)
+        prepare_report(rows, None, report_config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     breakdown = stored["suppression_breakdown"]
@@ -4022,7 +4022,7 @@ def test_prepare_report_update_filtered_by_run_date_and_run_mode(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, config={"reporting": {"visible_impact_threshold": 6}})
+        prepare_report(rows, None, report_config={"reporting": {"visible_impact_threshold": 6}})
 
     assert update_calls, f"Expected update_delivery_counts call. calls={update_calls}"
     keys = set()
@@ -4070,7 +4070,7 @@ def test_prepare_report_synthesis_sees_only_final_capped_groups(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: InMemoryIntelligenceRepo())
 
     with patch("delivery_engine._llm", return_value=fake_llm):
-        model = prepare_report(rows, None, config=config)
+        model = prepare_report(rows, None, report_config=config)
 
     assert len(fake_llm.calls) == 1
     user = fake_llm.calls[-1]["user"]
@@ -4095,7 +4095,7 @@ def test_prepare_report_no_news_skips_write_back_and_llm(monkeypatch):
     fake_llm = FakeLLM()
 
     with patch("delivery_engine._llm", return_value=fake_llm):
-        model = prepare_report([], None, config={})
+        model = prepare_report([], None, report_config={})
 
     assert model.variant == "no_news"
     assert repo_touched == []
@@ -4145,7 +4145,7 @@ def test_delivery_execute_pipeline_wires_prepare_render_and_env(monkeypatch):
 
     fake_llm = FakeLLM(returns={"Healthcare": "Wired synthesis paragraph."})
     with patch("delivery_engine._llm", return_value=fake_llm), \
-         patch("delivery_engine._load_mp_config",
+         patch("config.mp_config",
                return_value={"reporting": {"visible_impact_threshold": 6}}):
         delivery_engine.execute_pipeline()
 
@@ -4191,7 +4191,7 @@ def test_delivery_only_test_run_renders_exec_summary_without_touching_prod_row(m
                         lambda html: sent.__setitem__("html", html))
 
     with patch("delivery_engine._llm", return_value=FakeLLM(returns={})), \
-         patch("delivery_engine._load_mp_config",
+         patch("config.mp_config",
                return_value={"reporting": {"visible_impact_threshold": 6}}):
         delivery_engine.execute_pipeline()
 
@@ -4220,7 +4220,7 @@ def test_delivery_execute_pipeline_production_env_ships_unmarked_html(monkeypatc
                         lambda html: sent.__setitem__("html", html))
 
     with patch("delivery_engine._llm", return_value=FakeLLM()), \
-         patch("delivery_engine._load_mp_config",
+         patch("config.mp_config",
                return_value={"reporting": {"visible_impact_threshold": 6}}):
         delivery_engine.execute_pipeline()
 

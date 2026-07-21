@@ -24,17 +24,13 @@ from prompts import (
 )
 import zoominfo_client
 import relevance_gate
+import config
 
 import requests
 import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def _run_mode() -> str:
-    """Return 'test' when MARKET_PULSE_RUN_MODE=test (case-insensitive), else 'production'."""
-    return "test" if os.environ.get("MARKET_PULSE_RUN_MODE", "").strip().lower() == "test" else "production"
 
 
 MAX_DAILY_SCRAPES = 180
@@ -52,21 +48,6 @@ PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside t
 TAIL_RESERVE_SECONDS = 360
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
-
-_MP_CONFIG: Optional[dict] = None
-
-
-def _load_mp_config() -> dict:
-    """Load market_pulse_config.yaml once; return cached result on repeat calls."""
-    global _MP_CONFIG
-    if _MP_CONFIG is None:
-        try:
-            with open("market_pulse_config.yaml", "r") as fh:
-                _MP_CONFIG = yaml.safe_load(fh) or {}
-        except Exception as exc:
-            logger.warning("Could not load market_pulse_config.yaml — using defaults: %s", exc)
-            _MP_CONFIG = {}
-    return _MP_CONFIG
 
 
 _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
@@ -277,21 +258,8 @@ def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> l
     return results
 
 
-_TRUTHY_ENV_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "on"})
-
 ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT = 2
 ZOOMINFO_NEWS_PER_COMPANY_DEFAULT = 5
-
-
-def _zoominfo_news_enabled() -> bool:
-    """True when ZOOMINFO_NEWS_ENABLED is a recognised truthy value."""
-    return os.environ.get("ZOOMINFO_NEWS_ENABLED", "").strip().lower() in _TRUTHY_ENV_VALUES
-
-
-def _relevance_gate_enabled() -> bool:
-    """True when ZOOMINFO_RELEVANCE_GATE_ENABLED is a recognised truthy value.
-    Default off — production behavior is unchanged until explicitly enabled."""
-    return os.environ.get("ZOOMINFO_RELEVANCE_GATE_ENABLED", "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
 def _gate_zoominfo_candidate(candidate: dict, entity_name: str,
@@ -309,29 +277,6 @@ def _gate_zoominfo_candidate(candidate: dict, entity_name: str,
         description=candidate.get("description", ""),
         record=record,
     )
-
-
-def _env_int(name: str, default: int) -> int:
-    """Read an integer env var, falling back to *default* (with a warning) on
-    missing or non-integer values."""
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    try:
-        return int(raw.strip())
-    except ValueError:
-        logger.warning("Invalid integer for %s=%r — using default %d", name, raw, default)
-        return default
-
-
-def _store_discovery_metadata() -> bool:
-    """True when discovery-metadata columns should be written to Supabase.
-
-    Default OFF so production upserts keep working until migration 003 (the
-    discovery_source / external_company_id / published_at / source_metadata
-    columns) has been applied. Flip STORE_DISCOVERY_METADATA on only after the
-    migration is live."""
-    return os.environ.get("STORE_DISCOVERY_METADATA", "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
 def _discovery_metadata(candidate: dict) -> dict:
@@ -400,7 +345,7 @@ def _zoominfo_target_eligible(target: dict) -> bool:
     disabled. Concept-mode targets carry no company id, so they are ineligible.
     """
     return (
-        _zoominfo_news_enabled()
+        config.zoominfo_news_enabled()
         and bool(target.get("zoominfo_company_id"))
         and bool(target.get("zoominfo_news", True))
     )
@@ -418,8 +363,8 @@ def discover_zoominfo_candidates(target: dict) -> list[dict]:
         return []
     company_id = target["zoominfo_company_id"]
 
-    lookback_days = _env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT)
-    per_company = _env_int("ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT)
+    lookback_days = config.env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT)
+    per_company = config.env_int("ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT)
     start_date = (datetime.utcnow() - timedelta(days=lookback_days)).date().isoformat()
 
     return zoominfo_client.discover_company_news(
@@ -559,7 +504,7 @@ def scrape_article(url: str, min_length: int) -> Optional[str]:
 
 def synthesize_insight(article_text: str, source_url: str, trigger_entity: str, category: str) -> Optional[dict]:
     spec = prompts.insight_prompt(
-        _load_mp_config(),
+        config.mp_config(),
         article_text=article_text,
         source_url=source_url,
         trigger_entity=trigger_entity,
@@ -728,7 +673,7 @@ def generate_macro_summary(
     from datetime import date
     accounting_row = {
         "run_date": date.today().isoformat(),
-        "run_mode": _run_mode(),
+        "run_mode": config.run_mode(),
         "screened_count": screened_count,
         "suppression_breakdown": suppression_breakdown or {},
         "suppression_samples": suppression_samples or [],
@@ -860,7 +805,7 @@ def execute_pipeline() -> None:
     concept_demand_ahead = _concept_demand_ahead(targets)
     target_metadata = (
         relevance_gate.load_target_metadata("target_metadata.yaml")
-        if _relevance_gate_enabled() else {}
+        if config.relevance_gate_enabled() else {}
     )
     seen_headlines: set[str] = _hydrate_seen_headlines()
     scrapes_attempted = 0
@@ -1048,7 +993,7 @@ def execute_pipeline() -> None:
             }
             # Discovery provenance is gated behind STORE_DISCOVERY_METADATA so
             # production upserts keep working until migration 003 is applied.
-            if _store_discovery_metadata():
+            if config.store_discovery_metadata():
                 payload.update(_discovery_metadata(candidate))
 
             try:
@@ -1085,5 +1030,11 @@ def execute_pipeline() -> None:
     )
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Cron entrypoint: fail fast on missing secrets, then run the pipeline."""
+    config.validate_environment("ingestion")
     execute_pipeline()
+
+
+if __name__ == "__main__":
+    main()
