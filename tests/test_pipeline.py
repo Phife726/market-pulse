@@ -17,7 +17,6 @@ from ingestion_engine import (
     _validate_executive_bullets,
     build_query,
     compute_url_hash,
-    discover_urls,
     execute_pipeline,
     generate_macro_summary,
     load_targets,
@@ -1522,11 +1521,15 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
 
     monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
 
-    # Provide one discovered URL so the inner loop is entered
+    # Provide one discovered candidate so the inner loop is entered
     monkeypatch.setattr(
         ingestion_engine,
-        "discover_urls",
-        lambda *a, **kw: [("https://example.com/article", "Test Title")],
+        "discover_candidates",
+        lambda *a, **kw: [{
+            "url": "https://example.com/article",
+            "title": "Test Title",
+            "provider": "serper",
+        }],
     )
 
     mock_log_stats = MagicMock()
@@ -1568,7 +1571,7 @@ def _run_reserve_pipeline(monkeypatch, targets: list[dict]) -> list[str]:
     monkeypatch.setattr(ingestion_engine, "load_targets", lambda path: targets)
     monkeypatch.setattr(
         ingestion_engine, "discover_candidates",
-        lambda target: [{
+        lambda target, providers: [{
             "url": f"https://example.com/{target['name']}",
             "title": f"News about {target['name']}",
             "provider": "serper",
@@ -5340,33 +5343,6 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
 
 
 # ---------------------------------------------------------------------------
-# 18. discover_urls — client-side truncation to results_per_entity
-# ---------------------------------------------------------------------------
-
-def test_discover_urls_truncates_to_results_per_entity(monkeypatch):
-    """Serper's news endpoint returns pages of 10 regardless of the `num`
-    param — the client must enforce results_per_entity itself."""
-    class FakeResponse:
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"news": [
-                {"link": f"https://example.com/article-{i}", "title": f"Headline {i}"}
-                for i in range(10)
-            ]}
-
-    monkeypatch.setenv("SERPER_API_KEY", "test_key")
-    monkeypatch.setattr("ingestion_engine.requests.post", lambda *a, **k: FakeResponse())
-
-    results = discover_urls("test query", 24, 2)
-
-    assert len(results) == 2
-    assert results[0] == ("https://example.com/article-0", "Headline 0")
-    assert results[1] == ("https://example.com/article-1", "Headline 1")
-
-
-# ---------------------------------------------------------------------------
 # targets.yaml configuration contract (reads the real control file)
 # ---------------------------------------------------------------------------
 
@@ -5521,7 +5497,7 @@ def test_execute_pipeline_skips_unscrapable_domain_before_scraping(monkeypatch):
     summary_kwargs = {}
 
     monkeypatch.setattr(ie, "load_targets", lambda path: [target])
-    monkeypatch.setattr(ie, "discover_candidates", lambda t: [candidate])
+    monkeypatch.setattr(ie, "discover_candidates", lambda t, providers: [candidate])
     monkeypatch.setattr(ie, "_hydrate_seen_headlines", lambda: set())
     monkeypatch.setattr(ie, "url_already_processed", lambda h: False)
     monkeypatch.setattr(

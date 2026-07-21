@@ -3,7 +3,6 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
 from typing import Optional
@@ -22,9 +21,8 @@ from prompts import (
     MAX_EXECUTIVE_BULLET_CITATIONS,
     MAX_MACRO_OUTLOOK_SIGNALS,
 )
-import zoominfo_client
-import relevance_gate
 import config
+from discovery import _discovery_providers
 
 import requests
 import yaml
@@ -225,60 +223,6 @@ def load_targets(config_path: str) -> list[dict]:
     return targets
 
 
-def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> list[tuple[str, str]]:
-    api_key = os.environ["SERPER_API_KEY"]
-    endpoint = "https://google.serper.dev/news"
-    payload = {"q": query, "num": results_per_entity, "tbs": f"qdr:h{lookback_hours}"}
-    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-    try:
-        response = requests.post(endpoint, json=payload, headers=headers, timeout=15)
-        response.raise_for_status()
-    except requests.exceptions.Timeout:
-        logger.error("Serper.dev request timed out for query '%s'", query[:80])
-        return []
-    except requests.exceptions.HTTPError as exc:
-        logger.error("Serper.dev HTTP error for query '%s': %s", query[:80], exc.response.status_code)
-        return []
-    except requests.exceptions.RequestException as exc:
-        logger.error("Serper.dev request failed for query '%s': %s", query[:80], exc)
-        return []
-    data = response.json()
-    # Serper's news endpoint returns pages of 10 and ignores small `num`
-    # values, so results_per_entity must be enforced client-side.
-    raw_results = [
-        (item["link"], item.get("title", ""))
-        for item in data.get("news", [])
-        if "link" in item
-    ]
-    results = raw_results[:results_per_entity]
-    logger.info(
-        "Discovered %d URL(s) (kept %d) for query '%s'",
-        len(raw_results), len(results), query[:80],
-    )
-    return results
-
-
-ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT = 2
-ZOOMINFO_NEWS_PER_COMPANY_DEFAULT = 5
-
-
-def _gate_zoominfo_candidate(candidate: dict, entity_name: str,
-                             target_metadata: dict) -> Optional[relevance_gate.GateDecision]:
-    """Evaluate the relevance gate for one candidate, or return None when the
-    gate does not apply (non-ZoomInfo provider, gate disabled / empty metadata,
-    no record for the target, or a non-active record). Never raises."""
-    if candidate.get("provider") != "zoominfo" or not target_metadata:
-        return None
-    record = target_metadata.get(entity_name)
-    if not record or record.get("metadata_record_status") != "active":
-        return None
-    return relevance_gate.evaluate(
-        title=candidate.get("title", ""),
-        description=candidate.get("description", ""),
-        record=record,
-    )
-
-
 def _discovery_metadata(candidate: dict) -> dict:
     """Build the optional discovery-provenance fields for a stored row."""
     provider = candidate.get("provider", "unknown")
@@ -316,78 +260,24 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         )
 
 
-def _serper_candidate(raw_url: str, title: str) -> dict:
-    """Wrap a Serper (url, title) pair in the provider-neutral candidate shape."""
-    return {
-        "url": raw_url,
-        "title": title,
-        "provider": "serper",
-        "source_publication": "",
-        "published_at": "",
-        "description": "",
-        "categories": [],
-        "zoominfo_company_id": None,
-        "raw": {},
-    }
+def discover_candidates(target: dict, providers: list) -> list[dict]:
+    """Fan in every eligible discovery provider for a target.
 
-
-def discover_serper_candidates(target: dict) -> list[dict]:
-    """Discover Serper news URLs for a target as provider-neutral candidates."""
-    raw_results = discover_urls(
-        target["query"], target["lookback_hours"], target["results_per_entity"]
-    )
-    return [_serper_candidate(url, title) for url, title in raw_results]
-
-
-def _zoominfo_target_eligible(target: dict) -> bool:
-    """True when ZoomInfo discovery should be attempted for this target:
-    the feature flag is on, a company id is mapped, and zoominfo_news is not
-    disabled. Concept-mode targets carry no company id, so they are ineligible.
-    """
-    return (
-        config.zoominfo_news_enabled()
-        and bool(target.get("zoominfo_company_id"))
-        and bool(target.get("zoominfo_news", True))
-    )
-
-
-def discover_zoominfo_candidates(target: dict) -> list[dict]:
-    """Discover ZoomInfo company-news candidates for an entity target.
-
-    Returns [] (without touching ZoomInfo) when the feature flag is off, the
-    target has no mapped company id, or zoominfo_news is disabled for it.
-    Concept-mode targets carry no zoominfo_company_id, so they short-circuit
-    here and remain Serper-only.
-    """
-    if not _zoominfo_target_eligible(target):
-        return []
-    company_id = target["zoominfo_company_id"]
-
-    lookback_days = config.env_int("ZOOMINFO_NEWS_LOOKBACK_DAYS", ZOOMINFO_NEWS_LOOKBACK_DAYS_DEFAULT)
-    per_company = config.env_int("ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT)
-    start_date = (datetime.utcnow() - timedelta(days=lookback_days)).date().isoformat()
-
-    return zoominfo_client.discover_company_news(
-        zoominfo_company_id=company_id,
-        publishing_date_start=start_date,
-        page_size=per_company,
-    )
-
-
-def discover_candidates(target: dict) -> list[dict]:
-    """Merge Serper and ZoomInfo discovery for a target.
-
-    Each provider is isolated: a failure in one never suppresses the other.
+    Each provider is isolated: a failure in one never suppresses the others.
+    Providers are consulted in registry order (Serper before ZoomInfo), so a
+    Serper hit stores first and ZoomInfo's copy of the same article dedupes.
     """
     candidates: list[dict] = []
-    try:
-        candidates.extend(discover_serper_candidates(target))
-    except Exception as exc:
-        logger.error("Serper discovery failed for target '%s': %s", target.get("name"), exc)
-    try:
-        candidates.extend(discover_zoominfo_candidates(target))
-    except Exception as exc:
-        logger.error("ZoomInfo discovery failed for target '%s': %s", target.get("name"), exc)
+    for provider in providers:
+        if not provider.eligible(target):
+            continue
+        try:
+            candidates.extend(provider.discover(target))
+        except Exception as exc:
+            logger.error(
+                "%s discovery failed for target '%s': %s",
+                provider.name, target.get("name"), exc,
+            )
     return candidates
 
 
@@ -803,10 +693,8 @@ def execute_pipeline() -> None:
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
     concept_demand_ahead = _concept_demand_ahead(targets)
-    target_metadata = (
-        relevance_gate.load_target_metadata("target_metadata.yaml")
-        if config.relevance_gate_enabled() else {}
-    )
+    providers = _discovery_providers()
+    providers_by_name = {p.name: p for p in providers}
     seen_headlines: set[str] = _hydrate_seen_headlines()
     scrapes_attempted = 0
     stats = {
@@ -860,17 +748,17 @@ def execute_pipeline() -> None:
         min_article_length = target["min_article_length"]
         target_start = time.monotonic()
 
-        candidates = discover_candidates(target)
+        # Surface a yield line for every eligible provider, even at zero
+        # discovery, so the smoke clearly shows whether each provider ran. The
+        # seeding is provider-list-driven — no hard-coded provider names.
+        for provider_obj in providers:
+            if provider_obj.eligible(target):
+                provider_yield.setdefault(provider_obj.name, _new_provider_yield())
+
+        candidates = discover_candidates(target, providers)
         stats["urls_discovered"] += len(candidates)
         for candidate in candidates:
             _bump(candidate.get("provider", "unknown"), "discovered")
-
-        # Surface a yield line for every attempted provider, even at zero
-        # discovery, so the smoke clearly shows whether ZoomInfo ran. Serper is
-        # always attempted; ZoomInfo only when the target is eligible.
-        provider_yield.setdefault("serper", _new_provider_yield())
-        if _zoominfo_target_eligible(target):
-            provider_yield.setdefault("zoominfo", _new_provider_yield())
 
         for candidate in candidates:
             raw_url = candidate["url"]
@@ -933,7 +821,11 @@ def execute_pipeline() -> None:
                 )
                 continue
 
-            gate_decision = _gate_zoominfo_candidate(candidate, entity_name, target_metadata)
+            # The provider owns its own false-positive gate (Serper has none);
+            # the consumer applies the decision so suppression accounting stays
+            # in the ledger. No provider-name literal leaks here.
+            provider_obj = providers_by_name.get(provider)
+            gate_decision = provider_obj.gate(candidate, target) if provider_obj else None
             if gate_decision is not None and gate_decision.drop:
                 logger.info(
                     "RELEVANCE_GATE drop (%s): exclude=%r no identity rescue | %s",

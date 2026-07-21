@@ -7,8 +7,8 @@ language; domain terms are specific to the Americhem market-intelligence pipelin
 ## Seams
 
 A **seam** is where an interface lives — a place behaviour can be swapped without
-editing in place. This pipeline has three, each a pure module with a Protocol and
-two adapters (one production, one in-memory for tests):
+editing in place. This pipeline has four, each a pure module with a Protocol and
+production + in-memory adapters (tests inject the fake at the consumer):
 
 - **Repo seam** (`daily_intelligence_repo.py`, `IntelligenceRepo`) — every Supabase
   query. Adapters: `SupabaseIntelligenceRepo`, `InMemoryIntelligenceRepo`. Reads
@@ -20,6 +20,19 @@ two adapters (one production, one in-memory for tests):
   `json.loads`). Never raises — returns `None` on any failure; the caller maps
   `None` to its own sentinel and does its own domain validation. Does **not** own
   response validation.
+- **Discovery seam** (`discovery.py`, `DiscoveryProvider`) — how the ingestion
+  engine consumes article-discovery providers. Interface: `name`,
+  `eligible(target) -> bool`, `discover(target) -> list[dict]` (provider-neutral
+  candidate dicts), `gate(candidate, target) -> Optional[GateDecision]` (an
+  optional false-positive post-filter the *consumer* applies, so suppression
+  accounting stays in the ledger). Adapters: `SerperProvider` (always eligible,
+  never gates), `ZoomInfoProvider` (feature-flagged via `config`, owns the
+  ZoomInfo relevance gate — loads `target_metadata.yaml` itself), and the fake
+  `FakeDiscoveryProvider`. The consumer (`ingestion_engine.discover_candidates` +
+  `execute_pipeline`) fans in `_discovery_providers()` in registry order (Serper
+  before ZoomInfo), so provider_yield seeding, gate dispatch, and eligibility are
+  all provider-list-driven — no `"serper"` / `"zoominfo"` literal leaks into the
+  loop. Candidates stay plain dicts (like Insight).
 - **Suppression ledger** (`suppression_ledger.py`, `SuppressionLedger`) — the
   suppression reason taxonomy, `SAMPLES_CAP`, and same-day-retry merge semantics.
   Pure value type; both engines record into it.
@@ -42,9 +55,10 @@ pure functions differently, not by injection.
 `REQUIRED_SECRETS`, raising `MissingEnvironmentError`) that each engine's
 `main()` runs before any API spend, so a misconfigured cron crashes at t=0
 instead of part-way through. It is **not** a Protocol seam: it has no adapters,
-because the three Protocol seams (`llm`, `daily_intelligence_repo`,
-`zoominfo_client`) keep reading their own secrets at use time — config only
-*validates their presence*, it does not own their values. The pure
+because the Protocol seams (`llm`, `daily_intelligence_repo`, `zoominfo_client`,
+and `discovery`'s `ZoomInfoProvider`) keep reading their own secrets / feature
+flags at use time — config only *validates their presence* and owns the flag
+*values*, it does not own the seams' values. The pure
 report/scoring/prompt modules never import it: they receive a plain config dict
 as a parameter (e.g. `prepare_report(..., report_config=...)`), so their
 zero-I/O purity is untouched.
