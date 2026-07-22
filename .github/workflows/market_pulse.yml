@@ -27,7 +27,7 @@ jobs:
       - name: Install requirements.txt
         run: pip install -r requirements.txt
 
-      - name: Run pytest tests/test_pipeline.py tests/test_discovery.py
+      - name: Run pytest tests/
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -40,7 +40,7 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
-        run: pytest tests/test_pipeline.py tests/test_discovery.py
+        run: pytest tests/
 
       - name: Run ingestion_engine.py
         env:

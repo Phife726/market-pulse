@@ -13,15 +13,10 @@ from daily_intelligence_repo import _repo
 from llm import _llm
 import insight
 import prompts
-# The macro validators enforce exactly what the macro prompt promises — one
-# definition, imported from the module that renders it into the prompt text.
-from prompts import (
-    VALID_MACRO_CONDITIONS as _VALID_MACRO_CONDITIONS,
-    VALID_MACRO_DIRECTIONS as _VALID_MACRO_DIRECTIONS,
-    EXEC_BULLET_LABELS as _EXEC_BULLET_LABELS,
-    MAX_EXECUTIVE_BULLET_CITATIONS,
-    MAX_MACRO_OUTLOOK_SIGNALS,
-)
+# The macro summary's schema/validation + pure assembly live in macro_summary.py
+# (the run-level twin of insight.py); generate_macro_summary keeps only the LLM
+# call and the daily_summaries upsert.
+from macro_summary import assemble_macro_content
 import config
 from discovery import _discovery_providers
 
@@ -439,108 +434,6 @@ def store_insight(payload: dict) -> None:
     _repo().upsert_insight(payload)
 
 
-def _clean_citation_ids(raw, valid_source_ids: frozenset[int]) -> list[int]:
-    """Keep only int ids present in valid_source_ids: dedupe (order preserved),
-    cap at MAX_EXECUTIVE_BULLET_CITATIONS. bool is excluded (it subclasses int).
-    Any non-list / garbage input yields []."""
-    if not isinstance(raw, list):
-        return []
-    out: list[int] = []
-    for v in raw:
-        if isinstance(v, bool) or not isinstance(v, int):
-            continue
-        if v not in valid_source_ids or v in out:
-            continue
-        out.append(v)
-        if len(out) >= MAX_EXECUTIVE_BULLET_CITATIONS:
-            break
-    return out
-
-
-def _validate_executive_bullets(raw, valid_source_ids: frozenset[int] = frozenset()) -> Optional[list[dict]]:
-    """Return the cleaned bullets list if valid; None otherwise (delivery falls
-    back to prose).
-
-    Valid shape: exactly 3 objects, with labels matching _EXEC_BULLET_LABELS in
-    order, and non-empty string body fields. Each returned bullet carries a
-    cleaned citation_source_ids list (only ids in valid_source_ids survive;
-    invalid ids are never stored).
-    """
-    if not isinstance(raw, list) or len(raw) != 3:
-        return None
-    cleaned: list[dict] = []
-    for i, item in enumerate(raw):
-        if not isinstance(item, dict):
-            return None
-        label = item.get("label")
-        body = item.get("body")
-        if label != _EXEC_BULLET_LABELS[i]:
-            return None
-        if not isinstance(body, str) or not body.strip():
-            return None
-        cleaned.append({
-            "label": label,
-            "body": body.strip(),
-            "citation_source_ids": _clean_citation_ids(item.get("citation_source_ids"), valid_source_ids),
-        })
-    return cleaned
-
-
-def _validate_macro_outlook(raw, valid_source_ids: frozenset[int]) -> Optional[dict]:
-    """Validate the structured macro_outlook. Returns a cleaned
-    {current_condition, signals:[...]} dict, or None (delivery renders no
-    section) when the shape is invalid or no material signal survives.
-
-    A signal survives only when every field is well-formed AND it cites at
-    least one valid source id — the deterministic materiality gate that makes
-    'source-grounded, no fabricated implications' a structural guarantee. The
-    enums (VALID_MACRO_DIRECTIONS, insight.VALID_COMMERCIAL_SEGMENTS) are the
-    same definitions the prompt promises."""
-    if not isinstance(raw, dict):
-        return None
-    current = raw.get("current_condition")
-    if not isinstance(current, str) or not current.strip():
-        return None
-    signals_raw = raw.get("signals")
-    if not isinstance(signals_raw, list):
-        return None
-
-    cleaned: list[dict] = []
-    for sig in signals_raw:
-        if not isinstance(sig, dict):
-            continue
-        indicator = sig.get("indicator")
-        if not isinstance(indicator, str) or not indicator.strip():
-            continue
-        if sig.get("direction") not in _VALID_MACRO_DIRECTIONS:
-            continue
-        implication = sig.get("americhem_implication")
-        if not isinstance(implication, str) or not implication.strip():
-            continue
-        segments_raw = sig.get("affected_segments")
-        if not isinstance(segments_raw, list):
-            continue
-        segments = [s for s in segments_raw if s in insight.VALID_COMMERCIAL_SEGMENTS]
-        if not segments:
-            continue
-        citations = _clean_citation_ids(sig.get("citation_source_ids"), valid_source_ids)
-        if not citations:  # materiality gate — an uncitable signal is dropped
-            continue
-        cleaned.append({
-            "indicator": indicator.strip(),
-            "direction": sig["direction"],
-            "americhem_implication": implication.strip(),
-            "affected_segments": segments,
-            "citation_source_ids": citations,
-        })
-        if len(cleaned) >= MAX_MACRO_OUTLOOK_SIGNALS:
-            break
-
-    if not cleaned:
-        return None
-    return {"current_condition": current.strip(), "signals": cleaned}
-
-
 def generate_macro_summary(
     articles: list[dict],
     *,
@@ -583,7 +476,6 @@ def generate_macro_summary(
 
     mp = prompts.macro_prompt(articles)
     source_pack = list(mp.source_pack)
-    valid_source_ids = frozenset(s["id"] for s in source_pack)
 
     parsed = _llm().complete_json(**mp.kwargs())
     if parsed is None:
@@ -594,55 +486,9 @@ def generate_macro_summary(
         _repo().upsert_summary(accounting_row)
         return False
 
-    # Validate dominant_condition.
-    cond_raw = parsed.get("dominant_condition")
-    if cond_raw not in _VALID_MACRO_CONDITIONS:
-        cond = "Low Signal" if len(articles) < 3 else "Mixed / Watch"
-    else:
-        cond = cond_raw
-
-    # Validate executive_bullets (cleans per-bullet citation_source_ids against the pack).
-    bullets = _validate_executive_bullets(parsed.get("executive_bullets"), valid_source_ids)
-
-    # Low Signal: force the third bullet body.
-    if bullets is not None and cond == "Low Signal":
-        bullets[2] = {
-            "label": _EXEC_BULLET_LABELS[2],
-            "body": "No action required.",
-            "citation_source_ids": [],
-        }
-
-    # Validate the structured macro outlook (None -> delivery renders no section).
-    macro_outlook = _validate_macro_outlook(parsed.get("macro_outlook"), valid_source_ids)
-
-    # executive_sources: pack entries cited by at least one surviving bullet OR
-    # macro-outlook signal — the union, so every rendered citation id (in either
-    # section) resolves against one shared numbering space.
-    cited_ids: set[int] = set()
-    if bullets is not None:
-        for b in bullets:
-            cited_ids.update(b["citation_source_ids"])
-    if macro_outlook is not None:
-        for sig in macro_outlook["signals"]:
-            cited_ids.update(sig["citation_source_ids"])
-    executive_sources = [s for s in source_pack if s["id"] in cited_ids]
-
-    # Legacy executive_summary string for backward compat.
-    if bullets is not None:
-        executive_summary = " ".join(f"{b['label']}: {b['body']}" for b in bullets)
-    else:
-        executive_summary = "Macro summary unavailable today."
-
-    _repo().upsert_summary({
-        **accounting_row,
-        "dominant_condition": cond,
-        "executive_bullets": bullets,
-        "macro_outlook": macro_outlook,
-        "executive_sources": executive_sources,
-        "executive_summary": executive_summary,
-        "macro_sentiment": cond,
-    })
-    logger.info("Macro summary upserted — condition: %s", cond)
+    content = assemble_macro_content(parsed, source_pack=source_pack, article_count=len(articles))
+    _repo().upsert_summary({**accounting_row, **content})
+    logger.info("Macro summary upserted — condition: %s", content["dominant_condition"])
     return True
 
 
