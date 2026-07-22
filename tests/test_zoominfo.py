@@ -903,31 +903,15 @@ def test_discovery_metadata_serper_has_empty_company_id():
 # execute_pipeline integration — candidates flow through, metadata gating
 # ===========================================================================
 
-def _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured):
-    """Wire up execute_pipeline so exactly one candidate reaches store_insight."""
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(_entity_yaml())
-    monkeypatch.chdir(tmp_path)
-
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [candidate])
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
-    monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, mn: "Article body text.")
-    monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
-    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
-    monkeypatch.setattr(
-        ingestion_engine, "synthesize_insight",
-        lambda *a, **k: {
-            "headline": "Stored headline",
-            "americhem_impact": "Impact.",
-            "sentiment_score": 5,
-            "source_url": candidate["url"],
-            "entities_mentioned": ["Magna"],
-            "americhem_impact_score": 7,
-            "sentiment_tag": "Neutral",
-        },
-    )
-    monkeypatch.setattr(ingestion_engine, "store_insight", lambda payload: captured.append(payload))
+def _run_entity_pipeline(run_ingestion_pipeline, candidate, **overrides):
+    """Run execute_pipeline over the real load_targets so YAML-derived fields
+    (zoominfo_company_id / zoominfo_news) reach the target dict, with exactly
+    one candidate offered to store_insight."""
+    overrides.setdefault("scrape", "Article body text.")
+    overrides.setdefault(
+        "insight", {"headline": "Stored headline", "entities_mentioned": ["Magna"]})
+    return run_ingestion_pipeline(
+        targets_yaml=_entity_yaml(), candidates=[candidate], **overrides)
 
 
 def _zi_candidate() -> dict:
@@ -939,15 +923,13 @@ def _zi_candidate() -> dict:
     }
 
 
-def test_execute_pipeline_stores_candidate_with_metadata_when_enabled(monkeypatch, tmp_path):
+def test_execute_pipeline_stores_candidate_with_metadata_when_enabled(
+        monkeypatch, run_ingestion_pipeline):
     monkeypatch.setenv("STORE_DISCOVERY_METADATA", "true")
-    captured: list[dict] = []
-    _stub_pipeline_internals(monkeypatch, tmp_path, _zi_candidate(), captured)
+    run = _run_entity_pipeline(run_ingestion_pipeline, _zi_candidate())
 
-    ingestion_engine.execute_pipeline()
-
-    assert len(captured) == 1
-    payload = captured[0]
+    assert len(run.stored) == 1
+    payload = run.stored[0]
     assert payload["discovery_source"] == "zoominfo"
     assert payload["external_company_id"] == "12345678"
     assert payload["published_at"] == "2026-06-13"
@@ -974,19 +956,14 @@ def _eligible_zoominfo_targets_yaml() -> str:
     )
 
 
-def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, caplog):
+def test_zoominfo_yield_line_logged_with_zero_candidates(
+        monkeypatch, caplog, run_ingestion_pipeline):
     """An eligible ZoomInfo target must produce a yield line even when it
     discovers nothing — so the smoke clearly shows ZoomInfo ran."""
     monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(_eligible_zoominfo_targets_yaml())
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [])
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
 
     with caplog.at_level("INFO"):
-        ingestion_engine.execute_pipeline()
+        run_ingestion_pipeline(targets_yaml=_eligible_zoominfo_targets_yaml())
 
     assert (
         "Provider yield — zoominfo discovered=0 scraped=0 stored=0 "
@@ -994,31 +971,23 @@ def test_zoominfo_yield_line_logged_with_zero_candidates(monkeypatch, tmp_path, 
     )
 
 
-def test_no_zoominfo_yield_line_when_not_eligible(monkeypatch, tmp_path, caplog):
+def test_no_zoominfo_yield_line_when_not_eligible(
+        monkeypatch, caplog, run_ingestion_pipeline):
     """When ZoomInfo is disabled, no zoominfo yield line should appear."""
     monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "false")
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(_eligible_zoominfo_targets_yaml())
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(ingestion_engine, "discover_candidates", lambda target, providers: [])
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", lambda *a, **k: True)
 
     with caplog.at_level("INFO"):
-        ingestion_engine.execute_pipeline()
+        run_ingestion_pipeline(targets_yaml=_eligible_zoominfo_targets_yaml())
 
     assert "Provider yield — zoominfo" not in caplog.text
 
 
-def test_execute_pipeline_omits_metadata_when_disabled(monkeypatch, tmp_path):
+def test_execute_pipeline_omits_metadata_when_disabled(monkeypatch, run_ingestion_pipeline):
     monkeypatch.delenv("STORE_DISCOVERY_METADATA", raising=False)
-    captured: list[dict] = []
-    _stub_pipeline_internals(monkeypatch, tmp_path, _zi_candidate(), captured)
+    run = _run_entity_pipeline(run_ingestion_pipeline, _zi_candidate())
 
-    ingestion_engine.execute_pipeline()
-
-    assert len(captured) == 1
-    payload = captured[0]
+    assert len(run.stored) == 1
+    payload = run.stored[0]
     # Backwards-compatible: no new columns until the migration is applied.
     assert "discovery_source" not in payload
     assert "external_company_id" not in payload
@@ -1059,20 +1028,20 @@ def _write_gate_metadata(tmp_path):
     ))
 
 
-def test_pipeline_gate_drops_false_positive_before_scrape(monkeypatch, tmp_path, caplog):
+def test_pipeline_gate_drops_false_positive_before_scrape(
+        monkeypatch, tmp_path, caplog, run_ingestion_pipeline):
     monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
-    captured: list[dict] = []
     scraped: list[str] = []
     candidate = _zi_like("Casino jackpot hits record", "real-time payments rollout")
-    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
-    monkeypatch.setattr(ingestion_engine, "scrape_article",
-                        lambda url, mn: scraped.append(url) or "body")
     _write_gate_metadata(tmp_path)
 
     with caplog.at_level("INFO"):
-        ingestion_engine.execute_pipeline()
+        run = _run_entity_pipeline(
+            run_ingestion_pipeline, candidate,
+            scrape=lambda url, mn: scraped.append(url) or "body",
+        )
 
-    assert captured == []          # nothing stored
+    assert run.stored == []        # nothing stored
     assert scraped == []           # dropped BEFORE scrape
     assert "RELEVANCE_GATE drop" in caplog.text
     # The end-of-run yield line proves the counter incremented (and the
@@ -1080,37 +1049,31 @@ def test_pipeline_gate_drops_false_positive_before_scrape(monkeypatch, tmp_path,
     assert "relevance_dropped=1" in caplog.text
 
 
-def test_pipeline_gate_keeps_identity_rescue(monkeypatch, tmp_path):
+def test_pipeline_gate_keeps_identity_rescue(monkeypatch, tmp_path, run_ingestion_pipeline):
     monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
-    captured: list[dict] = []
     candidate = _zi_like("Magna expansion near casino district", "")
-    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
     _write_gate_metadata(tmp_path)
 
-    ingestion_engine.execute_pipeline()
+    run = _run_entity_pipeline(run_ingestion_pipeline, candidate)
 
-    assert len(captured) == 1      # identity rescue -> stored despite "casino"
+    assert len(run.stored) == 1    # identity rescue -> stored despite "casino"
 
 
-def test_pipeline_gate_off_is_noop(monkeypatch, tmp_path):
+def test_pipeline_gate_off_is_noop(monkeypatch, tmp_path, run_ingestion_pipeline):
     monkeypatch.delenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", raising=False)
-    captured: list[dict] = []
     candidate = _zi_like("Casino jackpot hits record", "real-time payments rollout")
-    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
     _write_gate_metadata(tmp_path)
 
-    ingestion_engine.execute_pipeline()
+    run = _run_entity_pipeline(run_ingestion_pipeline, candidate)
 
-    assert len(captured) == 1      # gate disabled -> false positive still stored
+    assert len(run.stored) == 1    # gate disabled -> false positive still stored
 
 
-def test_pipeline_gate_never_gates_serper(monkeypatch, tmp_path):
+def test_pipeline_gate_never_gates_serper(monkeypatch, tmp_path, run_ingestion_pipeline):
     monkeypatch.setenv("ZOOMINFO_RELEVANCE_GATE_ENABLED", "true")
-    captured: list[dict] = []
     candidate = _serper_like("Casino jackpot hits record")
-    _stub_pipeline_internals(monkeypatch, tmp_path, candidate, captured)
     _write_gate_metadata(tmp_path)
 
-    ingestion_engine.execute_pipeline()
+    run = _run_entity_pipeline(run_ingestion_pipeline, candidate)
 
-    assert len(captured) == 1      # serper is never gated
+    assert len(run.stored) == 1    # serper is never gated
