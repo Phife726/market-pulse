@@ -82,7 +82,11 @@ zero-I/O purity is untouched.
   **alert tiers** (CRITICAL ≤3 / STRATEGIC ≥8 / ROUTINE). All live in `scoring.py`
   (`Scoring.from_config`, `tier`, `is_legacy_critical`).
 - **Macro summary** — the once-per-run brief (`dominant_condition` +
-  `executive_bullets` + `macro_outlook`) written to `daily_summaries`.
+  `executive_bullets` + `macro_outlook`) written to `daily_summaries`. Its
+  schema — the validators and the pure `assemble_macro_content` transform that
+  turns the raw macro LLM dict into the storable content fields — lives in
+  `macro_summary.py` (the run-level twin of `insight.py`); the LLM call and
+  upsert stay in `ingestion_engine.generate_macro_summary`.
 - **Accounting-only summary row** — the `daily_summaries` row a run persists
   when it cannot generate a macro summary (zero stored articles, or an
   unusable LLM response): `run_date`/`run_mode` plus `screened_count` and the
@@ -94,8 +98,8 @@ zero-I/O purity is untouched.
   accounting-only row never shadows a content-full one.
 - **Macroeconomic Outlook** (`macro_outlook`) — the structured macro read:
   `{current_condition, signals:[{indicator, direction, americhem_implication,
-  affected_segments, citation_source_ids}]}`. Validated at ingestion by
-  `_validate_macro_outlook`: every signal needs a valid `direction`
+  affected_segments, citation_source_ids}]}`. Validated by
+  `macro_summary.validate_macro_outlook`: every signal needs a valid `direction`
   (`prompts.VALID_MACRO_DIRECTIONS`), canonical `affected_segments`
   (`insight.VALID_COMMERCIAL_SEGMENTS`), and **at least one valid citation**
   (the materiality gate — an uncitable signal is dropped; no surviving signal

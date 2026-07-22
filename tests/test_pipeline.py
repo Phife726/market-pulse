@@ -14,7 +14,6 @@ from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
     _scrape_fallback,
-    _validate_executive_bullets,
     build_query,
     compute_url_hash,
     execute_pipeline,
@@ -933,114 +932,6 @@ def test_generate_macro_summary_empty_articles_persists_accounting_only_row():
     for content_key in ("executive_summary", "macro_sentiment", "dominant_condition",
                         "executive_bullets", "macro_outlook", "executive_sources"):
         assert content_key not in stored, f"{content_key} must be omitted, not written"
-
-
-# ---------------------------------------------------------------------------
-# Macro-outlook validation + persistence (PR 2, Task 9)
-# ---------------------------------------------------------------------------
-
-from ingestion_engine import _validate_macro_outlook
-
-_MACRO_VALID_IDS = frozenset({1, 2, 3})
-
-
-def _macro_signal(**over) -> dict:
-    sig = {
-        "indicator": "Manufacturing PMI",
-        "direction": "Declining",
-        "americhem_implication": "Downside risk for industrial resin demand.",
-        "affected_segments": ["Industrial"],
-        "citation_source_ids": [1],
-    }
-    sig.update(over)
-    return sig
-
-
-def _macro_outlook(**over) -> dict:
-    out = {"current_condition": "Manufacturing demand mixed.", "signals": [_macro_signal()]}
-    out.update(over)
-    return out
-
-
-def test_validate_macro_outlook_accepts_material_signal():
-    result = _validate_macro_outlook(_macro_outlook(), _MACRO_VALID_IDS)
-    assert result is not None
-    assert result["current_condition"] == "Manufacturing demand mixed."
-    assert len(result["signals"]) == 1
-    assert result["signals"][0]["direction"] == "Declining"
-    assert result["signals"][0]["affected_segments"] == ["Industrial"]
-    assert result["signals"][0]["citation_source_ids"] == [1]
-
-
-def test_validate_macro_outlook_empty_signals_is_none():
-    assert _validate_macro_outlook(_macro_outlook(signals=[]), _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_non_dict_is_none():
-    assert _validate_macro_outlook(None, _MACRO_VALID_IDS) is None
-    assert _validate_macro_outlook("nope", _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_blank_current_condition_is_none():
-    assert _validate_macro_outlook(_macro_outlook(current_condition="  "), _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_drops_signal_without_citation():
-    """Materiality gate: an uncitable signal is dropped; a lone uncitable signal
-    yields no section."""
-    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[])])
-    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_drops_signal_with_only_invalid_citations():
-    out = _macro_outlook(signals=[_macro_signal(citation_source_ids=[99])])
-    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_rejects_invalid_direction():
-    out = _macro_outlook(signals=[_macro_signal(direction="Sideways")])
-    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_rejects_invalid_segment():
-    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Consumer Goods"])])
-    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_accepts_building_construction_segment():
-    out = _macro_outlook(signals=[_macro_signal(affected_segments=["Building & Construction"])])
-    assert _validate_macro_outlook(out, _MACRO_VALID_IDS) is not None
-
-
-def test_validate_macro_outlook_rejects_blank_fields():
-    assert _validate_macro_outlook(
-        _macro_outlook(signals=[_macro_signal(indicator="  ")]), _MACRO_VALID_IDS) is None
-    assert _validate_macro_outlook(
-        _macro_outlook(signals=[_macro_signal(americhem_implication="")]), _MACRO_VALID_IDS) is None
-
-
-def test_validate_macro_outlook_keeps_only_valid_signals():
-    """A mix of valid + invalid signals keeps only the valid ones."""
-    out = _macro_outlook(signals=[
-        _macro_signal(indicator="Manufacturing PMI"),
-        _macro_signal(direction="Sideways"),                       # bad direction
-        _macro_signal(indicator="Construction starts", citation_source_ids=[2]),
-    ])
-    result = _validate_macro_outlook(out, _MACRO_VALID_IDS)
-    assert [s["indicator"] for s in result["signals"]] == ["Manufacturing PMI", "Construction starts"]
-
-
-def test_validate_macro_outlook_truncates_at_cap():
-    """The validator keeps at most MAX_MACRO_OUTLOOK_SIGNALS signals, and the
-    product cap is 3 (reduced from 6 on 2026-07-17 for report density)."""
-    from prompts import MAX_MACRO_OUTLOOK_SIGNALS
-
-    assert MAX_MACRO_OUTLOOK_SIGNALS == 3
-    signals = [_macro_signal(indicator=f"Indicator {i}") for i in range(5)]
-    result = _validate_macro_outlook(_macro_outlook(signals=signals), _MACRO_VALID_IDS)
-    assert [s["indicator"] for s in result["signals"]] == [
-        "Indicator 0", "Indicator 1", "Indicator 2",
-    ]
 
 
 def _macro_articles() -> list[dict]:
@@ -4974,56 +4865,6 @@ def test_effective_impact_uses_default_when_both_scores_missing():
     row = {"headline": "test"}
     assert _effective_impact(row) == 5
     assert _alert_tier(row) == "ROUTINE"
-
-
-# ---------------------------------------------------------------------------
-# _validate_executive_bullets — citation_source_ids cleaning
-# ---------------------------------------------------------------------------
-
-def _raw_bullets(a_ids, b_ids, c_ids):
-    return [
-        {"label": "Market pressure", "body": "A.", "citation_source_ids": a_ids},
-        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": b_ids},
-        {"label": "Commercial action", "body": "C.", "citation_source_ids": c_ids},
-    ]
-
-
-def test_validate_bullets_keeps_only_in_pack_ids():
-    out = _validate_executive_bullets(_raw_bullets([1, 99], [2], []), frozenset({1, 2}))
-    assert out[0]["citation_source_ids"] == [1]   # 99 not in pack -> dropped
-    assert out[1]["citation_source_ids"] == [2]
-    assert out[2]["citation_source_ids"] == []
-
-
-def test_validate_bullets_dedupes_preserving_order():
-    out = _validate_executive_bullets(_raw_bullets([2, 1, 2, 1], [], []), frozenset({1, 2}))
-    assert out[0]["citation_source_ids"] == [2, 1]
-
-
-def test_validate_bullets_caps_citations_per_bullet():
-    out = _validate_executive_bullets(_raw_bullets([1, 2, 3, 4], [], []), frozenset({1, 2, 3, 4}))
-    assert out[0]["citation_source_ids"] == [1, 2, 3]   # MAX_EXECUTIVE_BULLET_CITATIONS
-
-
-def test_validate_bullets_garbage_citations_become_empty():
-    raw = [
-        {"label": "Market pressure", "body": "A.", "citation_source_ids": "nope"},
-        {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [None, "x", True, 1.5]},
-        {"label": "Commercial action", "body": "C."},  # key missing entirely
-    ]
-    out = _validate_executive_bullets(raw, frozenset({1, 2}))
-    assert out[0]["citation_source_ids"] == []
-    assert out[1]["citation_source_ids"] == []   # bool True excluded, non-ints excluded
-    assert out[2]["citation_source_ids"] == []
-
-
-def test_validate_bullets_rejects_wrong_label_order():
-    raw = [
-        {"label": "Supply chain watch", "body": "A.", "citation_source_ids": []},
-        {"label": "Market pressure", "body": "B.", "citation_source_ids": []},
-        {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
-    ]
-    assert _validate_executive_bullets(raw, frozenset()) is None
 
 
 from delivery_engine import (

@@ -343,8 +343,8 @@ def _map_signal_segments(signal: dict, display_map: dict[str, str]) -> dict:
     """Map a macro-outlook signal's affected_segments through the display map
     (deduping collisions, preserving order), returning a copy only when
     something changed. Validation stays canonical (it runs at ingestion in
-    `_validate_macro_outlook`); this is a render-consistency remap of the stored
-    row, so it never touches the validation contract."""
+    `macro_summary.validate_macro_outlook`); this is a render-consistency remap
+    of the stored row, so it never touches the validation contract."""
     segs = signal.get("affected_segments")
     if not isinstance(segs, list):
         return signal
@@ -371,7 +371,7 @@ def _extract_macro_outlook(
     a non-empty current_condition and at least one signal. Anything else
     (missing, None, malformed, empty signals) becomes None, so the renderer
     shows no section. Signal *contents* were validated at ingestion
-    (_validate_macro_outlook); this is the defensive read of a stored row.
+    (macro_summary.validate_macro_outlook); this is the defensive read of a stored row.
     Signals are sliced to MAX_MACRO_OUTLOOK_SIGNALS so rows stored before a
     cap reduction render at most the current cap (returns a new dict — never
     mutates the stored row)."""
