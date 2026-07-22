@@ -5116,6 +5116,84 @@ def test_sources_section_numbering_matches_inline_markers():
     assert sources_html.index("Resin prices climb") < sources_html.index("Freight rates spike")
 
 
+def test_citation_numbering_is_one_space_across_bullets_signals_and_footer():
+    """The invariant the CitationSet exists to make structural: the executive
+    bullets, the Macroeconomic Outlook and the Sources footer share ONE display
+    numbering space.
+
+    Both sides are derived from the bytes the renderer emitted — the inline
+    markers are parsed out of the superscript spans, the footer numbers out of
+    the '[n] headline &mdash; domain' rows. Nothing is hand-copied, so deleting
+    a section or renumbering either side fails this test rather than passing on
+    a stale constant.
+    """
+    import re
+
+    macro = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "Pricing firm.", "citation_source_ids": [1]},
+            {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": [2]},
+            {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
+        ],
+        "macro_outlook": {
+            "current_condition": "Demand soft, costs firm.",
+            "signals": [{
+                "indicator": "Producer prices",
+                "direction": "Rising",
+                "americhem_implication": "Cost-side pressure into Q3.",
+                "affected_segments": ["Packaging"],
+                # cites a source NO bullet cites, plus one a bullet does — so the
+                # numbering must continue across the two sections, not restart.
+                "citation_source_ids": [3, 1],
+            }],
+        },
+        "executive_sources": [
+            {"id": 1, "headline": "Resin prices climb", "url": "https://reuters.com/x",
+             "domain": "reuters.com", "segment": "Packaging", "score": 8},
+            {"id": 2, "headline": "Freight rates spike", "url": "https://icis.com/y",
+             "domain": "icis.com", "segment": "Packaging", "score": 7},
+            {"id": 3, "headline": "PPI ticks up", "url": "https://bls.example/z",
+             "domain": "bls.example", "segment": "Packaging", "score": 6},
+        ],
+    }
+    data = [{
+        "headline": "Packaging market update",
+        "source_url": "https://example.com/card",
+        "americhem_impact": "Pricing pressure on packaging.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+        "commercial_segment": "Packaging",
+        "signal_type": "Pricing",
+    }]
+    html = render_report(assemble_report(data, macro), today_str=_TODAY_STR)
+
+    def _inline_numbers(fragment: str) -> set[int]:
+        """Display numbers inside the superscript citation markers of a fragment
+        (tags stripped, so a linked '1' and a plain '1' read the same)."""
+        blocks = re.findall(r'vertical-align:super;">\[(.*?)\]</span>', fragment, re.S)
+        return {int(n) for blk in blocks
+                for n in re.findall(r"\d+", re.sub(r"<[^>]*>", "", blk))}
+
+    inline = _inline_numbers(html)
+    footer = [int(n) for n in re.findall(r"\[(\d+)\] [^<]*?&mdash;", html)]
+
+    # Guard against a vacuous pass: both sections and the footer must be present.
+    assert "MACROECONOMIC OUTLOOK" in html
+    assert inline, "no inline citation markers rendered"
+    assert footer, "no Sources footer rendered"
+
+    # The footer is exactly the inline numbering, listed 1..N in order.
+    assert inline == set(footer)
+    assert footer == list(range(1, len(footer) + 1))
+
+    # ...and it is genuinely ONE space: the outlook's signal contributes a number
+    # above every bullet number rather than restarting at 1.
+    outlook_html = html[html.index("MACROECONOMIC OUTLOOK"):html.index("COMMERCIAL SEGMENT WATCH")]
+    exec_html = html[:html.index("MACROECONOMIC OUTLOOK")]
+    assert max(_inline_numbers(outlook_html)) > max(_inline_numbers(exec_html))
+
+
 def test_report_places_sources_at_bottom():
     macro = _macro_with_citations()
     data = [{

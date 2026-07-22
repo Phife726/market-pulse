@@ -105,8 +105,25 @@ zero-I/O purity is untouched.
   (the materiality gate — an uncitable signal is dropped; no surviving signal
   → `null`). Carried on `ReportModel.macro_outlook`, rendered between the
   executive summary and Commercial Segment Watch. Its citations share one
-  numbering space with the executive bullets, and `executive_sources` is the
-  **union** of bullet- and signal-cited sources.
+  numbering space with the executive bullets (see **Citation set**), and
+  `executive_sources` is the **union** of bullet- and signal-cited sources.
+- **Citation set** (`report.py`, `CitationSet`) — the email's single citation
+  numbering space as plain frozen data: which cited sources are numbered, what
+  display number each one carries, and the order the Sources footer lists them
+  in. Numbers are assigned by first appearance, **executive bullets first, then
+  Macroeconomic Outlook signals**, and only for ids that resolve to an
+  `executive_sources` entry — so a legacy row with no cited sources yields an
+  empty set, which renders no inline markers and no footer. It numbers the
+  signals the report model says will *render*, so the footer can never list a
+  source no inline marker references. Built once during report assembly and
+  carried on `ReportModel.citations`; every renderer that shows a citation —
+  the executive summary, the Macroeconomic Outlook, the Sources footer — reads
+  that one value rather than re-deriving its own, which is what makes the three
+  agree by construction instead of by convention. The delivery-side twin of
+  `macro_summary.py`'s ingestion-side citation cleaning (which decides *whether*
+  a citation is valid and gates uncitable macro signals); the two are a matching
+  pair across the two engines, not one module — cleaning belongs to the stored
+  schema, numbering belongs to the rendered report.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
 - **Additional Articles to Explore** — the optional-discovery appendix
@@ -123,6 +140,7 @@ zero-I/O purity is untouched.
   (capped only when configured; caps default to `null` = uncapped),
   `additional_articles` (the optional-discovery appendix — see below),
   `macro_outlook` (the renderable Macroeconomic Outlook, or `None`),
+  `citations` (the **citation set** — the email's one numbering space),
   `surfaced_count` / `screened_count`, the delivery-side suppression
   ledger (including the derived `below_impact_threshold` and `weak_relevance`
   counts), the raw macro-summary row, and the thematic synthesis paragraphs.
