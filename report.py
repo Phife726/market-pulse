@@ -31,6 +31,118 @@ from suppression_ledger import SuppressionLedger
 logger = logging.getLogger(__name__)
 
 
+def structured_exec_bullets(macro_summary: Optional[dict]) -> Optional[list[dict]]:
+    """Return executive_bullets when it's a non-empty list of dict bullets; else
+    None (legacy/empty/malformed rows). The defensive read of a stored row,
+    shared by the renderer's bullets-vs-prose choice and the citation set, so
+    both agree on which bullets exist.
+
+    A legacy/malformed row whose executive_bullets is a list of strings would
+    otherwise render blank "• :" rows and skip the prose fallback.
+    """
+    bullets = (macro_summary or {}).get("executive_bullets")
+    if isinstance(bullets, list) and bullets and all(isinstance(b, dict) for b in bullets):
+        return bullets
+    return None
+
+
+def _citation_display_map(bullets: Optional[list[dict]], sources: Optional[list[dict]],
+                          signals: Optional[list[dict]] = None) -> dict[int, int]:
+    """Map raw cited source id -> sequential display number (1..N), ordered by
+    first appearance across bullets then macro-outlook signals. Only ids that
+    have a matching source entry
+    are numbered, so legacy rows (no executive_sources) yield an empty map."""
+    src_ids = {s["id"] for s in (sources or []) if isinstance(s, dict) and "id" in s}
+    order: list = []
+
+    def _collect(items):
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            for cid in it.get("citation_source_ids") or []:
+                if cid in src_ids and cid not in order:
+                    order.append(cid)
+
+    # Bullets first, then macro-outlook signals — one shared numbering space
+    # across the executive summary, the macro section, and the Sources footer.
+    _collect(bullets)
+    _collect(signals)
+    return {cid: n for n, cid in enumerate(order, start=1)}
+
+
+@dataclass(frozen=True)
+class CitationSet:
+    """The email's single citation numbering space, as plain frozen data.
+
+    Owns the bullets-then-signals ordering, the id -> display-number map, the
+    id -> source lookup, and the order the Sources footer lists sources in.
+    Built once per report (`from_summary`, via `assemble_report`) and carried on
+    `ReportModel.citations`, so the executive summary, the Macroeconomic Outlook
+    and the Sources footer share one numbering by construction rather than by
+    three renderers deriving equivalent inputs.
+
+    Falsy when nothing is numbered — the legacy identity: a row with no
+    `executive_sources` (or no resolvable citation) renders no inline markers
+    and no footer, exactly as before.
+
+    Constructing one directly from a (sources, display_map) pair is the legacy
+    door, kept for the leaf renderers whose pair-shaped signatures predate this
+    type; `from_summary` is the only place the numbering rule is applied.
+    """
+    sources: tuple[dict, ...] = ()
+    display_map: dict[int, int] = field(default_factory=dict)
+    # Derived id -> source index. Not an input: it is the one place the
+    # src_by_id lookup the renderers used to each rebuild now lives.
+    _by_id: dict = field(init=False, repr=False, compare=False, default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "_by_id",
+            {s["id"]: s for s in self.sources if isinstance(s, dict) and "id" in s},
+        )
+
+    def __bool__(self) -> bool:
+        return bool(self.display_map)
+
+    def display_number(self, cited_id) -> Optional[int]:
+        """The 1-based display number for a cited source id, or None when the id
+        resolves to no source (so the renderer omits it)."""
+        return self.display_map.get(cited_id)
+
+    def source(self, cited_id) -> dict:
+        """The source entry for a cited id, or {} when there is none."""
+        return self._by_id.get(cited_id) or {}
+
+    def ordered(self) -> list[tuple[int, dict]]:
+        """(display_number, source) pairs in footer order — 1..N."""
+        return [(n, self.source(cid))
+                for cid, n in sorted(self.display_map.items(), key=lambda kv: kv[1])]
+
+    @classmethod
+    def from_summary(cls, macro_summary: Optional[dict],
+                     macro_outlook: Optional[dict] = None) -> "CitationSet":
+        """The one numbering rule, applied to a stored daily_summaries row.
+
+        `macro_outlook` is the *renderable* outlook — pass the report model's
+        (already extracted, already segment-merged) one; omitted, it is
+        extracted from the row. Either way only signals the email actually shows
+        get numbered, so the footer can never list a source no inline marker
+        references. Display segment labels never participate in numbering, so
+        both spellings yield the same numbers — and a row with no renderable
+        outlook re-extracts to None either way, so passing an extracted None is
+        indistinguishable from omitting the argument.
+        """
+        if macro_outlook is None:
+            macro_outlook = _extract_macro_outlook(macro_summary)
+        sources = tuple((macro_summary or {}).get("executive_sources") or ())
+        signals = (macro_outlook or {}).get("signals") or []
+        bullets = structured_exec_bullets(macro_summary)
+        return cls(sources, _citation_display_map(bullets, sources, signals))
+
+
+EMPTY_CITATIONS = CitationSet()
+
+
 @dataclass(frozen=True)
 class ReportModel:
     """The assembled daily report as plain frozen data.
@@ -60,6 +172,10 @@ class ReportModel:
     # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
     # non-empty current_condition and >=1 signal, else None. None on no_news.
     macro_outlook: Optional[dict] = None
+    # The email's one citation numbering space, covering the executive bullets
+    # and the rendered macro-outlook signals. Empty on no_news and on legacy
+    # rows with no cited sources.
+    citations: CitationSet = EMPTY_CITATIONS
 
     def synthesis_candidates(self) -> dict[str, list[dict]]:
         """Final capped groups with 2+ Insights — the only legal input to
@@ -495,6 +611,12 @@ def assemble_report(
               .record_count("below_impact_threshold", below_threshold_count)
               .record_count("weak_relevance", weak_relevance_count))
 
+    # 9. The citation set: one numbering space for the executive bullets and the
+    #    outlook signals that will actually render, so every renderer reads the
+    #    same numbers instead of deriving its own.
+    macro_outlook = _extract_macro_outlook(macro_summary, display_map)
+    citations = CitationSet.from_summary(macro_summary, macro_outlook)
+
     return ReportModel(
         variant="daily",
         groups=groups,
@@ -503,5 +625,6 @@ def assemble_report(
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
-        macro_outlook=_extract_macro_outlook(macro_summary, display_map),
+        macro_outlook=macro_outlook,
+        citations=citations,
     )

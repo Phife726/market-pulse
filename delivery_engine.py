@@ -18,7 +18,15 @@ import config
 from scoring import tier as _alert_tier
 # Report assembly lives in report.py (the pure decision pipeline); tests
 # exercise its internals via `report` directly.
-from report import ReportModel, assemble_report
+from report import (
+    CitationSet,
+    ReportModel,
+    assemble_report,
+    structured_exec_bullets as _structured_exec_bullets,
+    # Not called here: re-exported so the numbering rule keeps one name in the
+    # tests that pin it. Production reads ReportModel.citations.
+    _citation_display_map,  # noqa: F401
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -568,39 +576,15 @@ def _safe_http_url(url: Optional[str]) -> str:
     return url if scheme in ("http", "https") else ""
 
 
-def _citation_display_map(bullets: list[dict], sources: Optional[list[dict]],
-                          signals: Optional[list[dict]] = None) -> dict[int, int]:
-    """Map raw cited source id -> sequential display number (1..N), ordered by
-    first appearance across bullets then macro-outlook signals. Only ids that
-    have a matching source entry
-    are numbered, so legacy rows (no executive_sources) yield an empty map."""
-    src_ids = {s["id"] for s in (sources or []) if isinstance(s, dict) and "id" in s}
-    order: list = []
-
-    def _collect(items):
-        for it in items or []:
-            if not isinstance(it, dict):
-                continue
-            for cid in it.get("citation_source_ids") or []:
-                if cid in src_ids and cid not in order:
-                    order.append(cid)
-
-    # Bullets first, then macro-outlook signals — one shared numbering space
-    # across the executive summary, the macro section, and the Sources footer.
-    _collect(bullets)
-    _collect(signals)
-    return {cid: n for n, cid in enumerate(order, start=1)}
-
-
-def _render_citation_marker(cited_ids: Optional[list], src_by_id: dict, display_map: dict) -> str:
+def _render_citation_marker(cited_ids: Optional[list], citations: CitationSet) -> str:
     """Grouped inline citation, e.g. [1, 2]. Each number links to its source URL
     (http/https only; otherwise plain text). Returns '' when nothing to show."""
     parts: list[str] = []
     for cid in cited_ids or []:
-        if cid not in display_map:
+        n = citations.display_number(cid)
+        if n is None:
             continue
-        n = display_map[cid]
-        url = _safe_http_url((src_by_id.get(cid) or {}).get("url"))
+        url = _safe_http_url(citations.source(cid).get("url"))
         if url:
             safe = html.escape(url, quote=True)
             parts.append(
@@ -618,22 +602,23 @@ def _render_citation_marker(cited_ids: Optional[list], src_by_id: dict, display_
     )
 
 
-def _render_executive_bullets(bullets: list[dict], sources=None, display_map=None) -> str:
+def _render_executive_bullets(bullets: list[dict], sources=None, display_map=None,
+                              citations: CitationSet | None = None) -> str:
     """Render the 3-bullet executive summary body, each bullet followed by its
     grouped inline citation marker when it has resolvable cited sources.
 
-    sources/display_map default to empty so legacy callers (and legacy rows with
-    no citations) render exactly as before, with no markers.
+    Pass the report's `citations`; the (sources, display_map) pair is the legacy
+    spelling of the same value. Both default to empty so legacy callers (and
+    legacy rows with no citations) render exactly as before, with no markers.
     """
-    sources = sources or []
-    display_map = display_map or {}
-    src_by_id = {s["id"]: s for s in sources if isinstance(s, dict) and "id" in s}
+    if citations is None:
+        citations = CitationSet(tuple(sources or []), display_map or {})
     items_html = ""
     for b in bullets:
         label = html.escape(b.get("label", "") if isinstance(b, dict) else "")
         body = html.escape(b.get("body", "") if isinstance(b, dict) else "")
         cited = b.get("citation_source_ids", []) if isinstance(b, dict) else []
-        marker = _render_citation_marker(cited, src_by_id, display_map)
+        marker = _render_citation_marker(cited, citations)
         items_html += (
             f'<tr><td style="padding:2px 0;font-size:13px;color:#1a2a45;'
             f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
@@ -646,16 +631,20 @@ def _render_executive_bullets(bullets: list[dict], sources=None, display_map=Non
     )
 
 
-def _render_sources_footer(sources: Optional[list[dict]], display_map: dict) -> str:
+def _render_sources_footer(sources: Optional[list[dict]] = None, display_map: Optional[dict] = None,
+                           citations: CitationSet | None = None) -> str:
     """Render the 'Sources' footer: one row per cited source, ordered by display
     number, as '[n] headline — domain' linked to the source URL. Empty string
-    when there are no cited sources."""
-    if not display_map:
+    when there are no cited sources.
+
+    Pass the report's `citations`; the (sources, display_map) pair is the legacy
+    spelling of the same value."""
+    if citations is None:
+        citations = CitationSet(tuple(sources or []), display_map or {})
+    if not citations:
         return ""
-    src_by_id = {s["id"]: s for s in (sources or []) if isinstance(s, dict) and "id" in s}
     rows = ""
-    for cid, n in sorted(display_map.items(), key=lambda kv: kv[1]):
-        src = src_by_id.get(cid) or {}
+    for n, src in citations.ordered():
         headline = html.escape(src.get("headline") or "Headline unavailable")
         domain = html.escape(src.get("domain") or "source link")
         label = f"[{n}] {headline} &mdash; {domain}"
@@ -680,33 +669,6 @@ def _render_sources_footer(sources: Optional[list[dict]], display_map: dict) -> 
     )
 
 
-def _structured_exec_bullets(macro_summary: dict | None):
-    """Return executive_bullets when it's a non-empty list of dict bullets; else
-    None (legacy/empty/malformed rows). Shared gate so the inline citation
-    markers and the bottom-of-email Sources section agree on when to render and
-    derive the same display-number map.
-
-    A legacy/malformed row whose executive_bullets is a list of strings would
-    otherwise render blank "• :" rows and skip the prose fallback.
-    """
-    bullets = (macro_summary or {}).get("executive_bullets")
-    if isinstance(bullets, list) and bullets and all(isinstance(b, dict) for b in bullets):
-        return bullets
-    return None
-
-
-def _macro_outlook_signals(macro_summary: dict | None) -> list:
-    """The macro-outlook signals list from the summary row, or [] when absent or
-    malformed. Sliced to prompts.MAX_MACRO_OUTLOOK_SIGNALS so a row stored
-    before the cap reduction numbers its footer/citations from the same signals
-    the sliced outlook body renders (no orphan Sources entries on QA re-renders).
-    Feeds the shared citation numbering (bullets then signals)."""
-    outlook = (macro_summary or {}).get("macro_outlook")
-    if isinstance(outlook, dict) and isinstance(outlook.get("signals"), list):
-        return outlook["signals"][:prompts.MAX_MACRO_OUTLOOK_SIGNALS]
-    return []
-
-
 # Direction is factual, not valenced: "Rising" is adverse for cost-side
 # indicators (inflation, energy, freight) but favorable for demand-side ones,
 # and the signal carries no good/bad field. So direction is styled neutrally —
@@ -714,12 +676,13 @@ def _macro_outlook_signals(macro_summary: dict | None) -> list:
 _MACRO_DIRECTION_COLOR = "#475569"
 
 
-def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dict | None) -> str:
+def _render_macro_outlook_section(macro_outlook: dict | None, citations: CitationSet) -> str:
     """Render the Macroeconomic Outlook section: a one-line current condition
     plus one compact row per material macro signal (indicator, direction,
     Americhem implication, affected segments, inline citation). Returns '' when
     there is no outlook or no signal. All untrusted text is escaped; citation
-    markers share the email's single numbering space (bullets then signals)."""
+    numbers come from the report's citation set — the email's one numbering
+    space, shared with the executive bullets and the Sources footer."""
     if not macro_outlook:
         return ""
     signals = macro_outlook.get("signals") or []
@@ -727,10 +690,6 @@ def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dic
         return ""
 
     current = html.escape(macro_outlook.get("current_condition") or "")
-    sources = (macro_summary or {}).get("executive_sources") or []
-    bullets = _structured_exec_bullets(macro_summary)
-    display_map = _citation_display_map(bullets, sources, signals)
-    src_by_id = {s["id"]: s for s in sources if isinstance(s, dict) and "id" in s}
 
     rows_html = ""
     for sig in signals:
@@ -740,7 +699,7 @@ def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dic
         direction = html.escape(sig.get("direction") or "")
         implication = html.escape(sig.get("americhem_implication") or "")
         segments = ", ".join(html.escape(str(s)) for s in (sig.get("affected_segments") or []))
-        marker = _render_citation_marker(sig.get("citation_source_ids"), src_by_id, display_map)
+        marker = _render_citation_marker(sig.get("citation_source_ids"), citations)
         dir_color = _MACRO_DIRECTION_COLOR
         seg_html = (
             f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>{segments}'
@@ -779,7 +738,8 @@ def _render_macro_outlook_section(macro_outlook: dict | None, macro_summary: dic
       </tr>"""
 
 
-def _render_exec_summary(macro_summary: dict | None) -> str:
+def _render_exec_summary(macro_summary: dict | None,
+                         citations: CitationSet | None = None) -> str:
     """Render the Executive Summary row.
 
     Prefers structured executive_bullets; falls back to legacy executive_summary prose.
@@ -790,7 +750,8 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
     if not macro_summary:
         return ""
 
-    sources = macro_summary.get("executive_sources") or []
+    if citations is None:
+        citations = CitationSet.from_summary(macro_summary)
     legacy_text = macro_summary.get("executive_summary") or ""
     condition = (
         macro_summary.get("dominant_condition")
@@ -800,10 +761,9 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
 
     bullets = _structured_exec_bullets(macro_summary)
     if bullets is not None:
-        # Include signals so bullet numbering shares one space with the macro
-        # section (bullets enumerate first, so their numbers are unchanged).
-        display_map = _citation_display_map(bullets, sources, _macro_outlook_signals(macro_summary))
-        body_html = _render_executive_bullets(bullets, sources, display_map)
+        # Bullets enumerate first in the shared numbering space, so their
+        # numbers are the same whether or not the macro section renders.
+        body_html = _render_executive_bullets(bullets, citations=citations)
     elif legacy_text:
         body_html = (
             f'<p style="margin:0;font-size:14px;color:#1a2a45;'
@@ -841,19 +801,18 @@ def _render_exec_summary(macro_summary: dict | None) -> str:
       </tr>"""
 
 
-def _render_sources_section(macro_summary: dict | None) -> str:
+def _render_sources_section(macro_summary: dict | None,
+                            citations: CitationSet | None = None) -> str:
     """Render the cited-source list as a full-width row at the very bottom of the
-    email. Reuses the same display-number map as the inline citation markers in
-    the executive summary AND the macro outlook, so the numbering is identical.
+    email. Numbers come from the same citation set as the inline markers in the
+    executive summary AND the macro outlook, so the numbering is identical.
     Returns '' when nothing is cited (legacy rows, or no bullet/signal cited
     anything)."""
     if not macro_summary:
         return ""
-    bullets = _structured_exec_bullets(macro_summary)
-    signals = _macro_outlook_signals(macro_summary)
-    sources = macro_summary.get("executive_sources") or []
-    display_map = _citation_display_map(bullets, sources, signals)
-    footer_html = _render_sources_footer(sources, display_map)
+    if citations is None:
+        citations = CitationSet.from_summary(macro_summary)
+    footer_html = _render_sources_footer(citations=citations)
     if not footer_html:
         return ""
     return f"""
@@ -940,12 +899,15 @@ def render_report(
 
     sections_html = _render_segment_watch_section(model.groups, model.synthesis)
     additional_html = _render_additional_articles_section(list(model.additional_articles))
-    exec_html = _render_exec_summary(macro_summary)
-    macro_outlook_html = _render_macro_outlook_section(model.macro_outlook, macro_summary)
+    # One citation set, built during assembly, read by all three citation-bearing
+    # sections — the numbering agrees by construction, not by convention.
+    citations = model.citations
+    exec_html = _render_exec_summary(macro_summary, citations)
+    macro_outlook_html = _render_macro_outlook_section(model.macro_outlook, citations)
 
     # Cited-source list, rendered at the very bottom of the email (below the
     # segment-watch content) rather than under the executive summary block.
-    sources_html = _render_sources_section(macro_summary)
+    sources_html = _render_sources_section(macro_summary, citations)
 
     dominant_condition = (macro_summary or {}).get("dominant_condition") or (
         macro_summary or {}
