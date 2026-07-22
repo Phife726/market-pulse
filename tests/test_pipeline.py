@@ -10,6 +10,8 @@ import pytest
 
 from llm import FakeLLM
 
+from tests.conftest import stub_insight
+
 from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
@@ -1454,48 +1456,23 @@ def _reserve_target(name: str, search_mode: str) -> dict:
     }
 
 
-def _run_reserve_pipeline(monkeypatch, targets: list[dict]) -> list[str]:
+def _run_reserve_pipeline(run_ingestion_pipeline, targets: list[dict]) -> list[str]:
     """Run execute_pipeline over fake targets (one candidate each, every scrape
     succeeds and stores) and return the trigger entities stored, in order."""
-    import ingestion_engine
-
-    monkeypatch.setattr(ingestion_engine, "load_targets", lambda path: targets)
-    monkeypatch.setattr(
-        ingestion_engine, "discover_candidates",
-        lambda target, providers: [{
+    run = run_ingestion_pipeline(
+        targets=targets,
+        candidates=lambda target: [{
             "url": f"https://example.com/{target['name']}",
             "title": f"News about {target['name']}",
             "provider": "serper",
         }],
+        insight=lambda text, url, entity, category: stub_insight(
+            url, headline=f"Headline {entity}"),
     )
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
-    monkeypatch.setattr(
-        ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
-    monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "text " * 200)
-    monkeypatch.setattr(
-        ingestion_engine, "synthesize_insight",
-        lambda text, url, entity, category: {
-            "headline": f"Headline {entity}",
-            "americhem_impact": "Impact.",
-            "sentiment_score": 5,
-            "source_url": url,
-            "entities_mentioned": [],
-        },
-    )
-    stored: list[str] = []
-    monkeypatch.setattr(
-        ingestion_engine, "store_insight",
-        lambda payload: stored.append(payload["trigger_entity"]),
-    )
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", MagicMock(return_value=True))
-    monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
-
-    execute_pipeline()
-    return stored
+    return [payload["trigger_entity"] for payload in run.stored]
 
 
-def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch):
+def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch, run_ingestion_pipeline):
     """When remaining scrape slots fall to the reserve, remaining ENTITY targets
     are skipped but concept targets still run — concept/macro coverage is
     protected from entity-tail starvation."""
@@ -1503,7 +1480,7 @@ def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch):
 
     # One concept target × results_per_entity=2 → derived reserve of 2.
     monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 3)
-    stored = _run_reserve_pipeline(monkeypatch, [
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
         _reserve_target("EntityA", "entity"),
         _reserve_target("EntityB", "entity"),
         _reserve_target("concept_group", "concept"),
@@ -1513,7 +1490,7 @@ def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch):
     assert stored == ["EntityA", "concept_group"]
 
 
-def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch):
+def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch, run_ingestion_pipeline):
     """The slot reserve is DERIVED from the configured tail demand
     (sum of results_per_entity over concept targets), not a fixed constant —
     so every concept/macro group gets a discovery pass even when each earlier
@@ -1523,7 +1500,7 @@ def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch):
     # Two concept targets × results_per_entity=2 → demand 4; cap 5 leaves
     # exactly one unreserved slot for the entity tier.
     monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 5)
-    stored = _run_reserve_pipeline(monkeypatch, [
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
         _reserve_target("EntityA", "entity"),
         _reserve_target("EntityB", "entity"),
         _reserve_target("concept_one", "concept"),
@@ -1532,7 +1509,7 @@ def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch):
     assert stored == ["EntityA", "concept_one", "concept_two"]
 
 
-def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch):
+def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch, run_ingestion_pipeline):
     """A concept group positioned BEFORE the entity tier (Tier 1 priority
     segments) must NOT be counted in the entity gate's reserve — it has already
     run, so counting it over-reserves and skips entity targets that the budget
@@ -1545,7 +1522,7 @@ def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch):
     # → both entities wrongly skipped. Position-aware reserve at the entities =
     # only concept_tail (2) → threshold MAX-2=2 → EntityA survives.
     monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 4)
-    stored = _run_reserve_pipeline(monkeypatch, [
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
         _reserve_target("concept_front", "concept"),
         _reserve_target("EntityA", "entity"),
         _reserve_target("EntityB", "entity"),
@@ -1554,7 +1531,7 @@ def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch):
     assert stored == ["concept_front", "EntityA", "concept_tail"]
 
 
-def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
+def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch, run_ingestion_pipeline):
     """When remaining wall-clock falls to the time reserve, remaining ENTITY
     targets are skipped but concept targets still run."""
     import ingestion_engine
@@ -1570,7 +1547,7 @@ def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch):
         return 0.0 if call_count["n"] == 1 else 60.0
 
     monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
-    stored = _run_reserve_pipeline(monkeypatch, [
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
         _reserve_target("EntityA", "entity"),
         _reserve_target("concept_group", "concept"),
     ])
@@ -5322,36 +5299,23 @@ def test_is_unscrapable_domain(url, expected):
     assert _is_unscrapable_domain(url) is expected
 
 
-def test_execute_pipeline_skips_unscrapable_domain_before_scraping(monkeypatch):
+def test_execute_pipeline_skips_unscrapable_domain_before_scraping(run_ingestion_pipeline):
     """An unscrapable-domain candidate must be suppressed pre-scrape: no
     Firecrawl attempt, and the ledger records unscrapable_domain."""
-    import ingestion_engine as ie
-
-    target = {
-        "name": "Acme", "category": "competitor", "query": '"Acme"',
-        "lookback_hours": 24, "results_per_entity": 2, "min_article_length": 500,
-    }
-    candidate = {
-        "url": "https://www.linkedin.com/posts/acme-update",
-        "title": "Acme update", "provider": "serper",
-    }
-    summary_kwargs = {}
-
-    monkeypatch.setattr(ie, "load_targets", lambda path: [target])
-    monkeypatch.setattr(ie, "discover_candidates", lambda t, providers: [candidate])
-    monkeypatch.setattr(ie, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ie, "url_already_processed", lambda h: False)
-    monkeypatch.setattr(
-        ie, "scrape_article",
-        lambda *a, **k: pytest.fail("scrape_article must not be called for an unscrapable domain"),
-    )
-    monkeypatch.setattr(
-        ie, "generate_macro_summary",
-        lambda buffer, screened_count, **kwargs: summary_kwargs.update(kwargs),
+    run = run_ingestion_pipeline(
+        targets=[{
+            "name": "Acme", "category": "competitor", "query": '"Acme"',
+            "lookback_hours": 24, "results_per_entity": 2, "min_article_length": 500,
+        }],
+        candidates=[{
+            "url": "https://www.linkedin.com/posts/acme-update",
+            "title": "Acme update", "provider": "serper",
+        }],
+        scrape=lambda *a, **k: pytest.fail(
+            "scrape_article must not be called for an unscrapable domain"),
     )
 
-    execute_pipeline()
-
+    summary_kwargs = run.macro.call_args.kwargs
     assert summary_kwargs["suppression_breakdown"] == {"unscrapable_domain": 1}
     assert summary_kwargs["suppression_samples"] == [{
         "reason": "unscrapable_domain",

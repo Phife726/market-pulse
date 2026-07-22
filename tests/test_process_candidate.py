@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ingestion_engine
+from tests.conftest import stub_insight
 from ingestion_engine import (
     RunContext,
     Stored,
@@ -173,21 +174,13 @@ def test_llm_discard_suppresses(monkeypatch):
     assert ctx.provider_yield["serper"]["discards"] == 1
 
 
-def _valid_insight(url: str) -> dict:
-    return {
-        "headline": "TestCorp expands compounding capacity",
-        "americhem_impact": "Capacity shift affects resin supply.",
-        "sentiment_score": 5,
-        "source_url": url,
-        "entities_mentioned": ["TestCorp"],
-    }
-
-
 def test_stored_persists_and_updates_run_state(monkeypatch):
     _happy_path_until_synthesis(monkeypatch)
     monkeypatch.setattr(
         ingestion_engine, "synthesize_insight",
-        lambda text, url, entity, cat: _valid_insight(url),
+        lambda text, url, entity, cat: stub_insight(
+            url, headline="TestCorp expands compounding capacity",
+            entities_mentioned=["TestCorp"]),
     )
     stored_payloads: list[dict] = []
     monkeypatch.setattr(
@@ -214,7 +207,9 @@ def test_store_failure_is_an_error_not_a_suppression(monkeypatch):
     _happy_path_until_synthesis(monkeypatch)
     monkeypatch.setattr(
         ingestion_engine, "synthesize_insight",
-        lambda text, url, entity, cat: _valid_insight(url),
+        lambda text, url, entity, cat: stub_insight(
+            url, headline="TestCorp expands compounding capacity",
+            entities_mentioned=["TestCorp"]),
     )
 
     def _boom(payload):
@@ -230,38 +225,24 @@ def test_store_failure_is_an_error_not_a_suppression(monkeypatch):
     assert ctx.seen_headlines == set()
 
 
-def test_pipeline_persists_synthesis_failed_in_breakdown(monkeypatch):
+def test_pipeline_persists_synthesis_failed_in_breakdown(run_ingestion_pipeline):
     """End-to-end: a run where every synthesis fails must carry
     synthesis_failed into the accounting handed to generate_macro_summary —
     the pre-extraction pipeline dropped these on the floor (issue: LLM-None
     gate recorded neither ledger nor yield)."""
-    monkeypatch.setattr(
-        ingestion_engine, "load_targets",
-        lambda path: [{
+    run = run_ingestion_pipeline(
+        targets=[{
             "name": "TestCorp", "category": "competitors",
             "query": '"TestCorp"', "results_per_entity": 2,
             "lookback_hours": 24, "min_article_length": 500,
             "search_mode": "entity",
         }],
+        candidates=[make_candidate()],
+        insight=None,          # unusable LLM response -> synthesis_failed
     )
-    monkeypatch.setattr(
-        ingestion_engine, "discover_candidates",
-        lambda target, providers: [make_candidate()],
-    )
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
-    monkeypatch.setattr(
-        ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
-    monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "text " * 200)
-    monkeypatch.setattr(
-        ingestion_engine, "synthesize_insight", lambda text, url, entity, cat: None)
-    macro = MagicMock(return_value=True)
-    monkeypatch.setattr(ingestion_engine, "generate_macro_summary", macro)
 
-    ingestion_engine.execute_pipeline()
-
-    macro.assert_called_once()
-    kwargs = macro.call_args.kwargs
+    run.macro.assert_called_once()
+    kwargs = run.macro.call_args.kwargs
     assert kwargs["suppression_breakdown"] == {"synthesis_failed": 1}
     assert kwargs["screened_count"] == 1
 
