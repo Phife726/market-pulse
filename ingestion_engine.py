@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
@@ -508,6 +509,40 @@ def _log_stats(stats: dict, breakdown: dict[str, int]) -> None:
     )
 
 
+#: Below this many failed synthesis calls a zero-store run is too thin a sample
+#: to suppress delivery over — one flaky LLM response on an otherwise quiet day
+#: must still send the legitimate no-news email.
+SYNTHESIS_OUTAGE_MIN_ATTEMPTS = 3
+
+
+class SynthesisOutageError(RuntimeError):
+    """Every LLM synthesis call this run failed — the run produced no
+    intelligence for an upstream reason, not because the news was quiet."""
+
+
+def is_synthesis_outage(stats: dict, breakdown: dict[str, int]) -> bool:
+    """True when this run asked the LLM for synthesis and *every* call failed
+    while nothing was stored.
+
+    The failure this catches is silent by construction: `llm.complete_json`
+    swallows transport errors to None so a provider blip cannot crash the cron,
+    the ledger records `synthesis_failed`, and the run exits green having
+    stored nothing — indistinguishable, downstream, from a genuinely quiet news
+    day (observed 2026-08-03: expired OpenAI credits, 98/98 calls rejected,
+    ~108 scrapes billed, a no-news email delivered).
+
+    A discard is a *successful* call that judged an article irrelevant, so any
+    discard proves the LLM answered and rules the outage out.
+    """
+    failed = breakdown.get("synthesis_failed", 0)
+    attempted = stats["insights_stored"] + breakdown.get("llm_discard", 0) + failed
+    return (
+        stats["insights_stored"] == 0
+        and failed >= SYNTHESIS_OUTAGE_MIN_ATTEMPTS
+        and failed == attempted
+    )
+
+
 def _tail_scrape_demand(targets: list[dict]) -> int:
     """Worst-case scrape attempts *all* concept/macro targets can consume: every
     concept target yields its full results_per_entity as new scrapable URLs
@@ -716,7 +751,11 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
 def _finalize_run(ctx: RunContext) -> None:
     """The single end-of-run teardown: flush stats and provider yield, then
     persist the macro summary (or the accounting-only row). Called at every
-    pipeline exit — mid-batch deadline, scrape cap, and normal completion."""
+    pipeline exit — mid-batch deadline, scrape cap, and normal completion.
+
+    Raises SynthesisOutageError last, so a run whose every synthesis call
+    failed still records what it screened before it fails the job.
+    """
     _log_stats(ctx.stats, ctx.ledger.breakdown)
     _log_provider_yield(ctx.provider_yield)
     generate_macro_summary(
@@ -724,6 +763,15 @@ def _finalize_run(ctx: RunContext) -> None:
         screened_count=ctx.stats["urls_discovered"],
         **ctx.ledger.to_row(),
     )
+    if is_synthesis_outage(ctx.stats, ctx.ledger.breakdown):
+        raise SynthesisOutageError(
+            f"All {ctx.ledger.breakdown.get('synthesis_failed', 0)} LLM synthesis "
+            f"call(s) failed and 0 articles were stored across "
+            f"{ctx.stats['scrapes_attempted']} scrape attempt(s). This is an "
+            "upstream LLM failure (expired credits, revoked key, provider "
+            "outage), not a quiet news day — check the [ERROR] 'LLM call failed' "
+            "lines above for the provider's reason."
+        )
 
 
 def execute_pipeline() -> None:
@@ -808,9 +856,18 @@ def execute_pipeline() -> None:
 
 
 def main() -> None:
-    """Cron entrypoint: fail fast on missing secrets, then run the pipeline."""
+    """Cron entrypoint: fail fast on missing secrets, then run the pipeline.
+
+    A synthesis outage exits non-zero rather than raising: the workflow step
+    goes red (so the run is visibly broken) and, because the delivery step runs
+    only on success, the misleading no-news email is never sent.
+    """
     config.validate_environment("ingestion")
-    execute_pipeline()
+    try:
+        execute_pipeline()
+    except SynthesisOutageError as exc:
+        logger.critical("SYNTHESIS OUTAGE — delivery suppressed: %s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

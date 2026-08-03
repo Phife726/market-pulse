@@ -96,6 +96,19 @@ zero-I/O purity is untouched.
   (no Executive Summary / Macroeconomic Outlook), and in the test-mode
   fallback `_summary_has_content` ranks content-fullness before recency so an
   accounting-only row never shadows a content-full one.
+- **Synthesis outage** (`ingestion_engine.is_synthesis_outage`) — a run that
+  stored nothing because **every** LLM synthesis call failed, as opposed to a
+  quiet news day where the LLM answered and there was simply nothing material.
+  The two are indistinguishable downstream — both end in zero rows and a
+  no-news email — because the LLM seam swallows failures to `None` by design.
+  The predicate separates them from the accounting alone: zero stored, at least
+  `SYNTHESIS_OUTAGE_MIN_ATTEMPTS` (3) `synthesis_failed` records, and zero
+  `llm_discard` (a discard is a *successful* call, so it proves the LLM was
+  up). `_finalize_run` raises `SynthesisOutageError` after writing the
+  **accounting-only summary row**, and `main()` exits 1 — failing the workflow
+  step and thereby skipping delivery, so no misleading email goes out.
+  Named for the 2026-08-03 run: expired API credits, 98/98 calls rejected, a
+  green job and a "no significant market events" email.
 - **Macroeconomic Outlook** (`macro_outlook`) — the structured macro read:
   `{current_condition, signals:[{indicator, direction, americhem_implication,
   affected_segments, citation_source_ids}]}`. Validated by

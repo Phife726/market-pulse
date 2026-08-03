@@ -99,6 +99,9 @@ jobs:
           MARKET_PULSE_RUN_MODE: test
         run: python ingestion_engine.py
 
+      # An `if:` without a status-check function implies success(), so this step
+      # is skipped when ingestion exits non-zero on a synthesis outage — the same
+      # no-misleading-email protection production gets. Keep it that way.
       - name: Run delivery_engine.py
         if: ${{ github.event.inputs.send_email == 'true' }}
         env:

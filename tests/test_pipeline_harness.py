@@ -37,10 +37,14 @@ DELIBERATELY_REAL = {
     "_new_provider_yield",
     "_discovery_metadata",
     "insight.is_discard",
+    "is_synthesis_outage",
     # Value types / outcome variants
     "RunContext",
     "Stored",
     "Error",
+    # The end-of-run guard: stubbing it would disarm the very failure the
+    # harness tests exercise (a run where every synthesis call fails).
+    "SynthesisOutageError",
     # Log-only sinks
     "_log_stats",
     "_log_provider_yield",
