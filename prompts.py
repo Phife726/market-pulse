@@ -229,8 +229,9 @@ Identify which business unit or cost line could be affected and in what directio
   those segments, write: "Adjacent market — no direct Americhem participation indicated."
 - HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
   "Limited direct exposure — [specific reason]" instead of inventing a commercial effect.
-- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Do NOT pair
-  "Adjacent market" or "Limited direct exposure" wording with an americhem_impact_score above 4.
+- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Pair
+  "Adjacent market" or "Limited direct exposure" wording with an americhem_impact_score of 3 or 4
+  — never above 4 (that would overstate it), and never below 3 (the article still passed Rule 7).
 Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
@@ -240,7 +241,7 @@ absolutely zero connection to plastics, polymers, chemicals, materials, manufact
 composites, packaging, or supply chain dynamics.
 Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
 financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 5.
+When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 6.
 
 If the article passes all rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.

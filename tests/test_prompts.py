@@ -190,11 +190,14 @@ def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
 
 
 def test_rule6_binds_the_low_exposure_templates_to_a_low_score():
-    """An honest low-exposure So-What must not ship with a high materiality
-    score — the card would read 'Impact: 8/10' next to 'no real exposure'."""
+    """An honest low-exposure So-What must land in the appendix band, not above
+    it (the card would read 'Impact: 8/10' next to 'no real exposure') and not
+    below it (the row would vanish from the email entirely)."""
     system = _insight_spec().system
     assert "SCORE MUST MATCH THE TEMPLATE" in system
-    assert "americhem_impact_score above 4" in system
+    assert "americhem_impact_score of 3 or 4" in system
+    assert "never above 4" in system
+    assert "never below 3" in system
 
 
 # ---------------------------------------------------------------------------
