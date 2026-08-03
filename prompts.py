@@ -190,6 +190,11 @@ Assign exactly one tag based on the direction of impact for Americhem:
 IMPORTANT: sentiment_tag is direction only. A barely-relevant article can be Negative.
 A neutral article can have a high impact score. Do NOT conflate tone with importance.
 
+COMPETITOR DEFAULT: A competitor's product launch, contract win, capacity expansion, or
+other success is "Negative" or "Neutral" for Americhem by default — it is a
+competitive threat, not an Americhem opportunity. Tag it "Positive" only if the article
+demonstrates growth in a market Americhem serves that outweighs the competitive threat.
+
 Also assign sentiment_score (1–10, kept for compatibility) using the same directional logic:
 1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
 

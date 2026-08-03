@@ -162,6 +162,18 @@ def test_insight_user_prompt_injects_source_url_verbatim():
 
 
 # ---------------------------------------------------------------------------
+# Insight prompt — So-What honesty rules (RULE 2 competitor default, RULE 6)
+# ---------------------------------------------------------------------------
+
+def test_rule2_carries_the_competitor_default():
+    """A competitor's success must default to Negative/Neutral for Americhem —
+    the tag is fixed at the source so RULE 6's consistency check inherits it."""
+    system = _insight_spec().system
+    assert "COMPETITOR DEFAULT" in system
+    assert "competitive threat, not an Americhem opportunity" in system
+
+
+# ---------------------------------------------------------------------------
 # Macro prompt — citation contract, constants drift guard, ranking, capping
 # ---------------------------------------------------------------------------
 
