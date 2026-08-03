@@ -187,6 +187,11 @@ def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
     system = _insight_spec().system
     assert "Limited direct exposure — [specific reason]" in system
     assert '"No direct impact. Monitoring required."' in system
+    # The business-unit identification must stay CONDITIONAL: an unconditional
+    # "identify which business unit is affected" re-creates the pressure to
+    # fabricate a commercial connection that the exits above exist to relieve.
+    assert "Where the article supports a direct effect" in system
+    assert "Where it does not, take one of the exits below" in system
 
 
 def test_rule6_binds_the_low_exposure_templates_to_a_low_score():

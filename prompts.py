@@ -221,7 +221,9 @@ Score by weighting these factors:
 
 RULE 6 — RIGOROUS, HONEST IMPACT STATEMENT:
 Write a specific So-What for Americhem, but NEVER invent impact the article does not support.
-Identify which business unit or cost line could be affected and in what direction.
+Where the article supports a direct effect, identify which business unit or cost line is
+affected and in what direction. Where it does not, take one of the exits below instead of
+naming a business unit speculatively.
 - DIRECTION CONSISTENCY: the So-What's direction must agree with sentiment_tag. Never
   describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
 - UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
