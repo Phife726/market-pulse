@@ -18,7 +18,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
 )
 _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("below_impact_threshold",              "below impact threshold"),
-    ("weak_relevance",                      "weak relevance (4-5, ungrouped)"),
+    ("weak_relevance",                      "weak relevance (below visible, ungrouped)"),
     ("duplicate_headline",                  "duplicate headline"),
     ("semantic_duplicate_headline",         "semantic duplicate headline"),
     ("product_listing",                     "product listing"),

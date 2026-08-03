@@ -10,8 +10,11 @@ reporting:
   visible_impact_threshold: 6
 
   # Articles scoring >= supporting_impact_threshold but < visible_impact_threshold
-  # are used to generate thematic summaries but are not shown as visible cards.
-  supporting_impact_threshold: 4
+  # populate the Additional Articles appendix but are not shown as visible cards.
+  # Lowered 4 -> 3 on 2026-08-03 to widen the Additional Articles appendix
+  # (recipient feedback: wants more quick-scan headlines). Raise back to 4
+  # if the appendix gets noisy.
+  supporting_impact_threshold: 3
 
   # Optional caps on visible cards. null means show EVERY article at or above
   # visible_impact_threshold. Per-segment cap re-imposed at 5 on 2026-07-17
@@ -23,7 +26,8 @@ reporting:
   # Cap on the optional "Additional Articles to Explore" appendix — the
   # near-threshold and cap-overflow rows shown compactly at the bottom of the
   # email.
-  max_additional_articles: 10
+  # Raised 10 -> 20 on 2026-08-03 alongside the threshold change above.
+  max_additional_articles: 20
 
   # Display-only segment merge. Maps a reader-facing header -> the list of
   # canonical commercial_segment labels folded under it in the email. This is a
