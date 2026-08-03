@@ -1863,6 +1863,64 @@ def test_render_card_falls_back_to_sentiment_score_for_old_rows():
     assert "Impact:" not in html
 
 
+def test_render_card_prefixes_so_what_with_direction_glyph():
+    """The So-What label carries a colored direction glyph keyed by sentiment_tag,
+    so a mis-spun sentence is visibly contradicted where the reader's eye is."""
+    base = {
+        "headline": "Plant closure disrupts supply",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Feedstock shortfall for masterbatch lines.",
+        "americhem_impact_score": 8,
+        "commercial_segment": "Raw Materials / Supply Chain",
+        "source_publication": "Chemical Week",
+        "recommended_action": "Monitor",
+        "category": "markets",
+    }
+    cases = [
+        ("Negative", "&#9660;", "#DC2626"),
+        ("Neutral", "&#9679;", "#6B7280"),
+        ("Positive", "&#9650;", "#16A34A"),
+    ]
+    for tag, glyph, color in cases:
+        html = _render_card({**base, "sentiment_tag": tag})
+        assert (
+            f'<span style="color:{color};font-family:Arial,sans-serif;">{glyph}</span> <strong'
+            in html
+        )
+
+
+def test_render_card_without_tag_renders_so_what_label_unchanged():
+    """Rows with no sentiment_tag, or an unrecognised one (e.g. a value outside the
+    Negative/Neutral/Positive vocabulary), get no glyph — the label starts the line."""
+    item = {
+        "headline": "Old Article",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Some impact.",
+        "sentiment_score": 6,
+        "source_publication": "Reuters",
+        "recommended_action": "Monitor",
+        "category": "markets",
+    }
+    html = _render_card(item)
+    assert "&#9660;" not in html
+    assert "&#9650;" not in html
+    assert 'line-height:1.55;"><strong' in html
+
+    html_bad_tag = _render_card({**item, "sentiment_tag": "Bullish"})
+    assert "&#9660;" not in html_bad_tag
+    assert "&#9650;" not in html_bad_tag
+    assert 'line-height:1.55;"><strong' in html_bad_tag
+
+
+def test_sentiment_tag_maps_cover_exactly_the_schema_vocabulary():
+    """The glyph map, the color map, and the Insight schema's tag vocabulary are
+    three definitions of one list — a fourth tag must not silently lose its cue."""
+    import delivery_engine
+    import insight
+    assert set(delivery_engine._SENTIMENT_TAG_GLYPHS) == set(delivery_engine._SENTIMENT_TAG_COLORS)
+    assert set(delivery_engine._SENTIMENT_TAG_GLYPHS) == set(insight.VALID_SENTIMENT_TAGS)
+
+
 # Note: the card no longer carries an in-card segment badge — segment is the
 # block header in _render_segment_watch_section. Grouping by commercial_segment
 # (and ignoring the legacy strategic_segment field) is covered by

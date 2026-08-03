@@ -190,6 +190,11 @@ Assign exactly one tag based on the direction of impact for Americhem:
 IMPORTANT: sentiment_tag is direction only. A barely-relevant article can be Negative.
 A neutral article can have a high impact score. Do NOT conflate tone with importance.
 
+COMPETITOR DEFAULT: A competitor's product launch, contract win, capacity expansion, or
+other success is "Negative" or "Neutral" for Americhem by default — it is a
+competitive threat, not an Americhem opportunity. Tag it "Positive" only if the article
+demonstrates growth in a market Americhem serves that outweighs the competitive threat.
+
 Also assign sentiment_score (1–10, kept for compatibility) using the same directional logic:
 1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
 
@@ -214,11 +219,22 @@ Score by weighting these factors:
 
 {rule5}
 
-RULE 6 — RIGOROUS IMPACT STATEMENT:
-Always write a specific So-What for Americhem even for routine items.
-Identify which business unit or cost line could be affected and in what direction.
-If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
-Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
+RULE 6 — RIGOROUS, HONEST IMPACT STATEMENT:
+Write a specific So-What for Americhem, but NEVER invent impact the article does not support.
+Where the article supports a direct effect, identify which business unit or cost line is
+affected and in what direction. Where it does not, take one of the exits below instead of
+naming a business unit speculatively.
+- DIRECTION CONSISTENCY: the So-What's direction must agree with sentiment_tag. Never
+  describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
+- UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
+  through one of the RULE 4 commercial segments. If the market is adjacent to but outside
+  those segments, write: "Adjacent market — no direct Americhem participation indicated."
+- HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
+  "Limited direct exposure — [specific reason]" instead of inventing a commercial effect.
+- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Pair
+  "Adjacent market" or "Limited direct exposure" wording with an americhem_impact_score of 3 or 4
+  — never above 4 (that would overstate it), and never below 3 (the article still passed Rule 7).
+Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
 RULE 7 — DOMAIN RELEVANCE FIREWALL:
@@ -227,7 +243,7 @@ absolutely zero connection to plastics, polymers, chemicals, materials, manufact
 composites, packaging, or supply chain dynamics.
 Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
 financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 5.
+When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 6.
 
 If the article passes all rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.
@@ -236,7 +252,7 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
   "headline": "<concise factual summary, max 12 words>",
   "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
   "article_summary": "<2-3 sentences, max 50 words. What happened, who is involved, key numbers. Factual only — no Americhem framing.>",
-  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 5. Never generic.>",
+  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 6. Never generic.>",
   "sentiment_score": <integer 1-10 per Rule 2 directional scale, kept for compatibility>,
   "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
   "americhem_impact_score": <integer 1-10 per Rule 3>,

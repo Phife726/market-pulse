@@ -592,7 +592,8 @@ def assemble_report(
         _with_display_segment(r, display_map) for r in additional_articles
     )
 
-    # 7. weak_relevance: weak-relevance (4-5) rows shown NOWHERE — neither a
+    # 7. weak_relevance: weak-relevance rows (supporting..visible, exclusive)
+    #    shown NOWHERE — neither a
     #    visible card nor the appendix (e.g. pushed out by the appendix cap).
     #    (below_impact_threshold above is deliberately broader: it counts every
     #    suppression-surviving below-visible row, including ones the appendix

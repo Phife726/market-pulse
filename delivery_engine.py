@@ -139,10 +139,17 @@ def _render_card(item: dict) -> str:
     headline = item.get("headline", "")
     source_url = item.get("source_url", "#")
     americhem_impact = item.get("americhem_impact", "")
+    tag = item.get("sentiment_tag") or ""
+    glyph = _SENTIMENT_TAG_GLYPHS.get(tag)
+    glyph_html = (
+        f'<span style="color:{_SENTIMENT_TAG_COLORS.get(tag, "#6B7280")};'
+        f'font-family:Arial,sans-serif;">{glyph}</span> '
+        if glyph else ""
+    )
     so_what_html = (
         f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
         f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
-        f'<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
+        f'{glyph_html}<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
         if americhem_impact else ""
     )
     return (
@@ -839,6 +846,12 @@ _SENTIMENT_TAG_COLORS: dict[str, str] = {
     "Negative": "#DC2626",
     "Neutral":  "#6B7280",
     "Positive": "#16A34A",
+}
+
+_SENTIMENT_TAG_GLYPHS: dict[str, str] = {
+    "Negative": "&#9660;",  # ▼
+    "Neutral":  "&#9679;",  # ●
+    "Positive": "&#9650;",  # ▲
 }
 
 

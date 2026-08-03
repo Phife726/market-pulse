@@ -162,6 +162,50 @@ def test_insight_user_prompt_injects_source_url_verbatim():
 
 
 # ---------------------------------------------------------------------------
+# Insight prompt — So-What honesty rules (RULE 2 competitor default, RULE 6)
+# ---------------------------------------------------------------------------
+
+def test_rule2_carries_the_competitor_default():
+    """A competitor's success must default to Negative/Neutral for Americhem —
+    the tag is fixed at the source so RULE 6's consistency check inherits it."""
+    system = _insight_spec().system
+    assert "COMPETITOR DEFAULT" in system
+    assert "competitive threat, not an Americhem opportunity" in system
+
+
+def test_rule6_requires_direction_consistency_and_taxonomy_routed_upside():
+    """The So-What may not contradict sentiment_tag, and upside claims must
+    run through a RULE 4 segment — adjacent markets get an explicit callout."""
+    system = _insight_spec().system
+    assert "must agree with sentiment_tag" in system
+    assert "Adjacent market — no direct Americhem participation indicated." in system
+
+
+def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
+    """The lazy phrase stays banned, but an honest low-exposure template is
+    explicitly legal so the model has an exit besides inventing impact."""
+    system = _insight_spec().system
+    assert "Limited direct exposure — [specific reason]" in system
+    assert '"No direct impact. Monitoring required."' in system
+    # The business-unit identification must stay CONDITIONAL: an unconditional
+    # "identify which business unit is affected" re-creates the pressure to
+    # fabricate a commercial connection that the exits above exist to relieve.
+    assert "Where the article supports a direct effect" in system
+    assert "Where it does not, take one of the exits below" in system
+
+
+def test_rule6_binds_the_low_exposure_templates_to_a_low_score():
+    """An honest low-exposure So-What must land in the appendix band, not above
+    it (the card would read 'Impact: 8/10' next to 'no real exposure') and not
+    below it (the row would vanish from the email entirely)."""
+    system = _insight_spec().system
+    assert "SCORE MUST MATCH THE TEMPLATE" in system
+    assert "americhem_impact_score of 3 or 4" in system
+    assert "never above 4" in system
+    assert "never below 3" in system
+
+
+# ---------------------------------------------------------------------------
 # Macro prompt — citation contract, constants drift guard, ranking, capping
 # ---------------------------------------------------------------------------
 
