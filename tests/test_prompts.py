@@ -173,6 +173,30 @@ def test_rule2_carries_the_competitor_default():
     assert "competitive threat, not an Americhem opportunity" in system
 
 
+def test_rule6_requires_direction_consistency_and_taxonomy_routed_upside():
+    """The So-What may not contradict sentiment_tag, and upside claims must
+    run through a RULE 4 segment — adjacent markets get an explicit callout."""
+    system = _insight_spec().system
+    assert "must agree with sentiment_tag" in system
+    assert "Adjacent market — no direct Americhem participation indicated." in system
+
+
+def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
+    """The lazy phrase stays banned, but an honest low-exposure template is
+    explicitly legal so the model has an exit besides inventing impact."""
+    system = _insight_spec().system
+    assert "Limited direct exposure — [specific reason]" in system
+    assert '"No direct impact. Monitoring required."' in system
+
+
+def test_rule6_binds_the_low_exposure_templates_to_a_low_score():
+    """An honest low-exposure So-What must not ship with a high materiality
+    score — the card would read 'Impact: 8/10' next to 'no real exposure'."""
+    system = _insight_spec().system
+    assert "SCORE MUST MATCH THE TEMPLATE" in system
+    assert "americhem_impact_score above 4" in system
+
+
 # ---------------------------------------------------------------------------
 # Macro prompt — citation contract, constants drift guard, ranking, capping
 # ---------------------------------------------------------------------------

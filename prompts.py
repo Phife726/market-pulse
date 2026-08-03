@@ -219,11 +219,19 @@ Score by weighting these factors:
 
 {rule5}
 
-RULE 6 — RIGOROUS IMPACT STATEMENT:
-Always write a specific So-What for Americhem even for routine items.
+RULE 6 — RIGOROUS, HONEST IMPACT STATEMENT:
+Write a specific So-What for Americhem, but NEVER invent impact the article does not support.
 Identify which business unit or cost line could be affected and in what direction.
-If truly no commercial connection exists, write: "Indirect exposure only — monitor for [specific reason]."
-Do NOT write "No direct impact. Monitoring required." — this phrase is banned.
+- DIRECTION CONSISTENCY: the So-What's direction must agree with sentiment_tag. Never
+  describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
+- UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
+  through one of the RULE 4 commercial segments. If the market is adjacent to but outside
+  those segments, write: "Adjacent market — no direct Americhem participation indicated."
+- HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
+  "Limited direct exposure — [specific reason]" instead of inventing a commercial effect.
+- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Do NOT pair
+  "Adjacent market" or "Limited direct exposure" wording with an americhem_impact_score above 4.
+Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
 RULE 7 — DOMAIN RELEVANCE FIREWALL:
@@ -241,7 +249,7 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
   "headline": "<concise factual summary, max 12 words>",
   "source_publication": "<name of the publisher, e.g. Reuters, Chemical Week, Plastics News>",
   "article_summary": "<2-3 sentences, max 50 words. What happened, who is involved, key numbers. Factual only — no Americhem framing.>",
-  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 5. Never generic.>",
+  "americhem_impact": "<BLUF So What for Americhem. Apply Rule 6. Never generic.>",
   "sentiment_score": <integer 1-10 per Rule 2 directional scale, kept for compatibility>,
   "sentiment_tag": "<exactly one of: Negative | Neutral | Positive per Rule 2>",
   "americhem_impact_score": <integer 1-10 per Rule 3>,
