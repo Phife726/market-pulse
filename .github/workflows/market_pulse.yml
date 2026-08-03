@@ -65,6 +65,10 @@ jobs:
           STORE_DISCOVERY_METADATA: ${{ vars.STORE_DISCOVERY_METADATA }}
         run: python ingestion_engine.py
 
+      # Runs only if ingestion succeeded (default step behaviour — do NOT add
+      # `if: always()`). Ingestion exits non-zero on a synthesis outage, and
+      # that skip is what stops a no-news email going out on a run where the
+      # LLM was simply dead. See ingestion_engine.is_synthesis_outage.
       - name: Run delivery_engine.py
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}

@@ -5659,3 +5659,157 @@ def test_macro_outlook_affected_segments_show_display_label():
     assert macro_summary["macro_outlook"]["signals"][0]["affected_segments"] == [
         "Transportation - Automotive", "Transportation - Non-Automotive",
     ]
+
+
+# ---------------------------------------------------------------------------
+# 21. Synthesis-outage guard — a dead LLM must not look like a quiet news day
+# ---------------------------------------------------------------------------
+
+import ingestion_engine
+
+
+def _outage_candidate(n: int) -> dict:
+    return {
+        "url": f"https://news.com/article-{n}",
+        "title": f"Headline {n}",
+        "provider": "serper",
+    }
+
+
+_OUTAGE_TARGET = {
+    "name": "TestCorp", "category": "competitors",
+    "query": '"TestCorp"', "results_per_entity": 10,
+    "lookback_hours": 24, "min_article_length": 500,
+    "search_mode": "entity",
+}
+
+
+def test_synthesis_outage_detected_when_every_attempt_failed():
+    """The 2026-08-03 signature: articles scraped, zero stored, every LLM call
+    rejected (expired credits). Not a quiet day — an outage."""
+    assert ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"synthesis_failed": 98},
+    )
+
+
+def test_quiet_news_day_is_not_an_outage():
+    """Nothing scraped and nothing stored is the legitimate no-news run: the
+    LLM was never asked, so there is nothing to alarm about."""
+    assert not ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"duplicate_url": 205, "semantic_duplicate": 3},
+    )
+
+
+def test_discards_prove_the_llm_answered():
+    """A discard is a *successful* LLM call that judged the article irrelevant.
+    Zero stored alongside discards is a real quiet day, not an outage."""
+    assert not ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"synthesis_failed": 4, "llm_discard": 12},
+    )
+
+
+def test_partial_synthesis_failure_is_not_an_outage():
+    """Some articles stored means the LLM is up; scattered failures are the
+    ordinary flakiness the seam already swallows."""
+    assert not ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 7}, {"synthesis_failed": 40},
+    )
+
+
+@pytest.mark.parametrize("failures", [1, 2])
+def test_below_minimum_attempts_is_not_an_outage(failures: int):
+    """One or two failed calls on an otherwise empty day is too thin a sample
+    to suppress delivery over — the guard needs a real run behind it."""
+    assert not ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"synthesis_failed": failures},
+    )
+
+
+def test_outage_minimum_is_the_declared_constant():
+    """The threshold is a named constant, not a literal buried in the predicate."""
+    n = ingestion_engine.SYNTHESIS_OUTAGE_MIN_ATTEMPTS
+    assert not ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"synthesis_failed": n - 1},
+    )
+    assert ingestion_engine.is_synthesis_outage(
+        {"insights_stored": 0}, {"synthesis_failed": n},
+    )
+
+
+def test_pipeline_raises_on_synthesis_outage_after_persisting_accounting(
+    run_ingestion_pipeline,
+):
+    """The run must still record what it screened *before* it fails: the
+    accounting-only summary row is written, then the outage is raised."""
+    n = ingestion_engine.SYNTHESIS_OUTAGE_MIN_ATTEMPTS
+    with pytest.raises(ingestion_engine.SynthesisOutageError) as excinfo:
+        run_ingestion_pipeline(
+            targets=[_OUTAGE_TARGET],
+            candidates=[_outage_candidate(i) for i in range(n)],
+            insight=None,  # unusable LLM response -> synthesis_failed
+        )
+
+    # The operator-facing message must name the counts, not just "failed".
+    assert str(n) in str(excinfo.value)
+
+
+def test_finalize_persists_accounting_before_raising(monkeypatch):
+    """Ordering guard: the accounting-only row is written BEFORE the outage is
+    raised, so a failed run still records what it screened."""
+    import ingestion_engine as ie
+
+    calls: list = []
+    monkeypatch.setattr(
+        ie, "generate_macro_summary",
+        lambda articles, **kwargs: calls.append(kwargs) or True,
+    )
+
+    ctx = ie.RunContext(providers_by_name={})
+    ctx.stats["urls_discovered"] = 40
+    for i in range(ie.SYNTHESIS_OUTAGE_MIN_ATTEMPTS):
+        ctx.suppress("synthesis_failed", "serper",
+                     url=f"https://news.com/a-{i}", title=f"H{i}")
+
+    with pytest.raises(ie.SynthesisOutageError):
+        ie._finalize_run(ctx)
+
+    assert len(calls) == 1
+    assert calls[0]["screened_count"] == 40
+    assert calls[0]["suppression_breakdown"]["synthesis_failed"] == (
+        ie.SYNTHESIS_OUTAGE_MIN_ATTEMPTS
+    )
+
+
+def test_successful_run_does_not_raise(run_ingestion_pipeline):
+    """The guard is silent on any run that stored something."""
+    run = run_ingestion_pipeline(
+        targets=[_OUTAGE_TARGET],
+        candidates=[_outage_candidate(1)],
+    )
+    assert len(run.stored) == 1
+
+
+def test_main_exits_nonzero_on_synthesis_outage(monkeypatch):
+    """The cron contract: an outage exits non-zero so the GitHub Actions job
+    goes red AND the delivery step never runs — no misleading no-news email."""
+    import ingestion_engine as ie
+
+    monkeypatch.setattr(ie.config, "validate_environment", lambda engine: None)
+
+    def _boom() -> None:
+        raise ie.SynthesisOutageError("every synthesis call failed")
+
+    monkeypatch.setattr(ie, "execute_pipeline", _boom)
+
+    with pytest.raises(SystemExit) as excinfo:
+        ie.main()
+    assert excinfo.value.code == 1
+
+
+def test_main_returns_normally_on_a_healthy_run(monkeypatch):
+    import ingestion_engine as ie
+
+    monkeypatch.setattr(ie.config, "validate_environment", lambda engine: None)
+    monkeypatch.setattr(ie, "execute_pipeline", lambda: None)
+
+    ie.main()  # no SystemExit
