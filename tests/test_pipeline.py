@@ -3209,7 +3209,9 @@ def test_config_pins_the_appendix_levers_and_the_prompt_band():
     assert rep["visible_impact_threshold"] == 6
     assert rep["max_additional_articles"] == 20
     assert rep["max_visible_articles_per_segment"] == 5
-    assert cfg["delivery_suppression"]["enable_low_exposure_template_exemption"] is True
+    # Off since 2026-08-27 (appendix cap binds daily; template rows would
+    # displace segment-specific rows) until the appendix ranks template rows last.
+    assert cfg["delivery_suppression"]["enable_low_exposure_template_exemption"] is False
 
     system = prompts.insight_prompt(
         cfg, article_text="Body.", source_url="https://news.com/a",
