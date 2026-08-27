@@ -14,6 +14,7 @@ import pytest
 from daily_intelligence_repo import (
     InMemoryIntelligenceRepo,
     SupabaseIntelligenceRepo,
+    _coerce_timestamp,
     _repo,
     _reset_repo,
 )
@@ -808,3 +809,33 @@ def test_supabase_record_delivery_raises_on_error(supabase_repo):
     with pytest.raises(Exception, match="write failed"):
         repo.record_delivery(run_date="2026-08-27", run_mode="production",
                              delivered_at=datetime(2026, 8, 27, 14, 5, 0))
+
+
+# ---------------------------------------------------------------------------
+# Timestamp coercion — the shapes Postgres/PostgREST actually emit
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw, expected", [
+    # Postgres strips trailing zeros from the microseconds; Python < 3.11's
+    # fromisoformat accepts only 3 or 6 fractional digits. CI (3.10) caught
+    # the 1-digit form parsing to None — a silent wall-clock fallback.
+    ("2026-08-26T10:44:12.5+00:00",       datetime(2026, 8, 26, 10, 44, 12, 500000)),
+    ("2026-08-26T10:44:12.12+00:00",      datetime(2026, 8, 26, 10, 44, 12, 120000)),
+    ("2026-08-26T10:44:12.123+00:00",     datetime(2026, 8, 26, 10, 44, 12, 123000)),
+    ("2026-08-26T10:44:12.123456+00:00",  datetime(2026, 8, 26, 10, 44, 12, 123456)),
+    ("2026-08-26T10:44:12+00:00",         datetime(2026, 8, 26, 10, 44, 12)),
+    ("2026-08-26T10:44:12Z",              datetime(2026, 8, 26, 10, 44, 12)),
+    ("2026-08-26T10:44:12.5Z",            datetime(2026, 8, 26, 10, 44, 12, 500000)),
+    ("2026-08-26T12:44:12.5+02:00",       datetime(2026, 8, 26, 10, 44, 12, 500000)),  # → UTC
+    ("2026-08-26T10:44:12.5",             datetime(2026, 8, 26, 10, 44, 12, 500000)),  # naive
+])
+def test_coerce_timestamp_accepts_postgres_shapes(raw, expected):
+    got = _coerce_timestamp(raw)
+    assert got == expected
+    assert got.tzinfo is None
+
+
+def test_coerce_timestamp_rejects_garbage_and_non_strings():
+    assert _coerce_timestamp("not a timestamp") is None
+    assert _coerce_timestamp(None) is None
+    assert _coerce_timestamp(1724668000) is None
