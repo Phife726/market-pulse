@@ -256,13 +256,22 @@ def _apply_delivery_suppression(
     row is counted once and contributes at most one sample (deduped).
     `scorer` supplies the visible threshold rule 1's template exemption reads;
     None resolves it from config.
+
+    Rules 6/7 keep the first row seen of a duplicate pair. Rows arrive
+    impact-desc, so a score-4 RULE 6 template row would precede — and
+    displace — a score-3 segment-specific duplicate, before the appendix gets
+    to rank templates last. Template rows are therefore processed after every
+    non-template row (a duplicate contest never goes to a template); `kept`
+    is returned in the caller's order so nothing downstream (first-seen
+    section order, samples) sees the reordering.
     """
     sup_cfg = config.get("delivery_suppression") or {}
     scorer = scorer or Scoring.from_config(config)
     exempt_templates = bool(sup_cfg.get("enable_low_exposure_template_exemption", True))
     ledger = SuppressionLedger.for_delivery()
-    kept: list[dict] = []
+    kept_indexed: list[tuple[int, dict]] = []
     kept_headlines: list[str] = []
+    ordered = sorted(enumerate(rows), key=lambda ir: _is_low_exposure_template(ir[1]))
 
     threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
     enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
@@ -274,7 +283,7 @@ def _apply_delivery_suppression(
     color_terms        = sup_cfg.get("color_terms", [])
     plastics_terms     = sup_cfg.get("plastics_relevance_terms", [])
 
-    for row in rows:
+    for index, row in ordered:
         url = row.get("source_url", "") or ""
         headline = row.get("headline", "") or ""
         entities = row.get("entities_mentioned") or []
@@ -348,10 +357,11 @@ def _apply_delivery_suppression(
                 ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
                 continue
 
-        kept.append(row)
+        kept_indexed.append((index, row))
         if headline:
             kept_headlines.append(headline)
 
+    kept = [row for _, row in sorted(kept_indexed, key=lambda ir: ir[0])]
     return kept, ledger
 
 

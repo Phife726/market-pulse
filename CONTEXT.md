@@ -178,9 +178,12 @@ zero-I/O purity is untouched.
   supporting band (`prompts.low_exposure_score_band`, derived from `Scoring`)
   on the promise that they reach the appendix; because an adjacent-market row
   is Enterprise / Cross-Segment by construction, rule 1 exempts template rows
-  below the visible threshold (issue #65). Never a visible card, and in the
-  appendix always ranked after every non-template row — last-resort reading
-  that fills the appendix only when there is room.
+  below the visible threshold (issue #65). Never a visible card; in the
+  appendix always ranked after every non-template row, and in delivery
+  dedup (rules 6/7) always processed after every non-template row so a
+  duplicate contest never goes to a template — last-resort reading that
+  fills the appendix only when there is room and can never displace a
+  segment-specific row.
 - **Report model** (`report.py`, `ReportModel`) — the assembled daily report as
   plain frozen data: `variant` (`daily` / `no_news`), the final segment groups
   (capped only when configured; caps default to `null` = uncapped),

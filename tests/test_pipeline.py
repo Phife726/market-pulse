@@ -3209,9 +3209,8 @@ def test_config_pins_the_appendix_levers_and_the_prompt_band():
     assert rep["visible_impact_threshold"] == 6
     assert rep["max_additional_articles"] == 20
     assert rep["max_visible_articles_per_segment"] == 5
-    # Off since 2026-08-27 (appendix cap binds daily; template rows would
-    # displace segment-specific rows) until the appendix ranks template rows last.
-    assert cfg["delivery_suppression"]["enable_low_exposure_template_exemption"] is False
+    # On: safe because the appendix ranks template rows last (PR #70).
+    assert cfg["delivery_suppression"]["enable_low_exposure_template_exemption"] is True
 
     system = prompts.insight_prompt(
         cfg, article_text="Body.", source_url="https://news.com/a",
@@ -3843,6 +3842,72 @@ def test_rule1_exemption_ignores_non_template_so_whats():
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert kept == []
     assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 3}
+
+
+def test_duplicate_headline_contest_never_goes_to_a_template_row():
+    """Codex review on PR #71: rows arrive impact-desc, so a score-4 template
+    row precedes a score-3 segment-specific duplicate and would win rules 6/7,
+    displacing it before the appendix ranks templates last. Dedup must prefer
+    the non-template row whatever the input order."""
+    from report import _apply_delivery_suppression
+    template = _row(url_hash="tpl", commercial_segment=_ENTERPRISE, americhem_impact_score=4,
+                    source_url="https://a.example/tpl",
+                    headline="Recycled PET bottle demand climbs in Europe",
+                    americhem_impact="Adjacent market — no direct Americhem participation indicated.")
+    real = _row(url_hash="pkg", commercial_segment="Packaging", americhem_impact_score=3,
+                source_url="https://b.example/pkg",
+                headline="Recycled PET bottle demand climbs in Europe",
+                americhem_impact="Bottle-grade rPET pull supports Packaging colorant volume.")
+    kept, ledger = _apply_delivery_suppression([template, real], _supp_config())
+    assert [r["url_hash"] for r in kept] == ["pkg"]
+    assert dict(ledger.breakdown) == {"duplicate_headline": 1}
+    assert ledger.samples[0].to_dict()["url"] == "https://a.example/tpl"
+
+
+def test_semantic_duplicate_contest_never_goes_to_a_template_row():
+    from report import _apply_delivery_suppression
+    template = _row(url_hash="tpl", commercial_segment="Packaging", americhem_impact_score=5,
+                    headline="Recycled PET bottle demand climbs across Europe in 2026",
+                    americhem_impact="Limited direct exposure — bottle-grade rPET is not a served grade.")
+    real = _row(url_hash="pkg", commercial_segment="Packaging", americhem_impact_score=3,
+                headline="Recycled PET bottle demand climbs across Europe in 2025",
+                americhem_impact="Bottle-grade rPET pull supports Packaging colorant volume.")
+    kept, ledger = _apply_delivery_suppression([template, real], _supp_config())
+    assert [r["url_hash"] for r in kept] == ["pkg"]
+    assert dict(ledger.breakdown) == {"semantic_duplicate_headline": 1}
+
+
+def test_apply_delivery_suppression_preserves_input_order_of_kept_rows():
+    """Template-aware dedup must not reorder the survivors: section order
+    downstream is first-seen, and rows arrive impact-desc."""
+    from report import _apply_delivery_suppression
+    rows = [
+        _row(url_hash="h8", commercial_segment="Healthcare", americhem_impact_score=8,
+             headline="Catheter maker qualifies a new radiopaque compound"),
+        _row(url_hash="t4", commercial_segment=_ENTERPRISE, americhem_impact_score=4,
+             headline="Bank raises passive stake in Huntsman",
+             americhem_impact="Limited direct exposure — passive shareholding change only."),
+        _row(url_hash="p3", commercial_segment="Packaging", americhem_impact_score=3,
+             headline="Barrier film converter adds a line"),
+    ]
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
+    assert [r["url_hash"] for r in kept] == ["h8", "t4", "p3"]
+    assert dict(ledger.breakdown) == {}
+
+
+def test_appendix_keeps_the_segment_row_when_a_template_duplicates_it():
+    """End to end: with the exemption on, a template duplicate never costs the
+    appendix its segment-specific row."""
+    template = {**_make_new_article("tpl", 4, commercial_segment=_ENTERPRISE,
+                                    headline="Recycled PET bottle demand climbs in Europe"),
+                "source_url": "https://a.example/tpl",
+                "americhem_impact": "Adjacent market — no direct Americhem participation indicated."}
+    real = {**_make_new_article("pkg", 3, commercial_segment="Packaging",
+                                headline="Recycled PET bottle demand climbs in Europe"),
+            "source_url": "https://b.example/pkg"}
+    config = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3}}
+    model = assemble_report([template, real], config=config)
+    assert _appendix_hashes(model) == ["pkg"]
 
 
 def test_rule1_exemption_config_switch_off_restores_the_drop():
