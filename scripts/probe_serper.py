@@ -5,9 +5,12 @@ repo change (zero-result Serper queries jumped from ~60/128 to ~98/128; big
 public companies such as Kimberly-Clark and Avient returned no news) while
 Serper kept answering HTTP 200. `discovery.discover_urls` sent the
 non-standard hour-count window ``tbs=qdr:h24``; the documented "past day"
-value is ``qdr:d``. This script issues the *exact* production query shape
-(``ingestion_engine.build_query``) for a few entities under each window and
-prints a side-by-side table plus a verdict. The 2026-08-27 run CONFIRMED it
+value is ``qdr:d``. This script issues each entity's *production* query —
+resolved from ``targets.yaml`` via ``ingestion_engine.load_targets`` so the
+group's ``include_all`` / ``exclude_any`` operators are present; a name that
+is not an active target falls back to a bare ``build_query`` and is marked
+``bare`` in the output — under each window and prints a side-by-side table
+plus a verdict. The 2026-08-27 run CONFIRMED it
 (``qdr:h24`` == past-hour ``qdr:h`` for 5/5 entities), so
 ``discovery.serper_time_filter`` now emits day forms; keep this probe for the
 next time yield collapses with no repo change.
@@ -33,7 +36,9 @@ import requests
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-from ingestion_engine import build_query  # noqa: E402
+from ingestion_engine import build_query, load_targets  # noqa: E402
+
+TARGETS_PATH = os.path.join(_REPO_ROOT, "targets.yaml")
 
 ENDPOINT = "https://google.serper.dev/news"
 
@@ -79,6 +84,23 @@ def probe(query: str, tbs: Optional[str], api_key: str, timeout: int = 15) -> di
         "sample_dates": sample_dates(body),
         "credits": body.get("credits"),
     }
+
+
+def resolve_queries(entities: list[str], targets: list[dict]) -> list[tuple[str, str, str]]:
+    """Map each entity name to the query production would send.
+
+    Returns ``(name, query, source)`` where ``source`` is ``"targets.yaml"``
+    when the name is an active entity-mode target (its stored ``query``
+    already carries the group's ``include_all`` / ``exclude_any`` operators)
+    or ``"bare"`` when it is not — a plain quoted name, so the probe still
+    runs but the table says the query shape is not production's.
+    """
+    by_name = {t["name"]: t["query"] for t in targets if t.get("search_mode") == "entity"}
+    return [
+        (name, by_name[name], "targets.yaml") if name in by_name
+        else (name, build_query("entity", name=name), "bare")
+        for name in entities
+    ]
 
 
 def verdict(rows: list[dict]) -> str:
@@ -141,15 +163,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 2
 
     filters = [None if f == "none" else f for f in args.filters]
+    resolved = resolve_queries(args.entities, load_targets(TARGETS_PATH))
     rows: list[dict] = []
-    for entity in args.entities:
-        query = build_query("entity", name=entity)
+    for name, query, source in resolved:
+        print(f"{name}: [{source}] {query}")
         for tbs in filters:
-            rows.append(probe(query, tbs, api_key))
-    # Table keys on the display name, not the quoted query string.
-    for row in rows:
-        row["query"] = row["query"].strip('"')
+            row = probe(query, tbs, api_key)
+            row["query"] = name  # table keys on the display name
+            rows.append(row)
 
+    print()
     print(format_table(rows))
     print()
     print(verdict(rows))

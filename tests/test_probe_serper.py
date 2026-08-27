@@ -55,3 +55,17 @@ def test_format_table_has_one_line_per_row_and_shows_none_filter():
     lines = [l for l in out.splitlines() if "Avient" in l]
     assert len(lines) == 2
     assert "(none)" in out
+
+
+def test_resolve_queries_uses_the_production_query_when_the_entity_is_an_active_target():
+    targets = [
+        {"name": "Chemours", "search_mode": "entity", "query": '"Chemours" -"patents" -"securities analyst reports"'},
+        {"name": "Avient", "search_mode": "entity", "query": '"Avient"'},
+        {"name": "healthcare", "search_mode": "concept", "query": '("Beckman Coulter" OR "Aptar Pharma")'},
+    ]
+    resolved = ps.resolve_queries(["Chemours", "Avient", "Nobody Inc"], targets)
+    assert resolved == [
+        ("Chemours", '"Chemours" -"patents" -"securities analyst reports"', "targets.yaml"),
+        ("Avient", '"Avient"', "targets.yaml"),
+        ("Nobody Inc", '"Nobody Inc"', "bare"),
+    ]
