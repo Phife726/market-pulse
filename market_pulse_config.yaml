@@ -29,6 +29,28 @@ reporting:
   # Raised 10 -> 20 on 2026-08-03 alongside the threshold change above.
   max_additional_articles: 20
 
+  # Discovery categories (targets.yaml group keys) whose rows never reach the
+  # Additional Articles appendix (issue #73). The macro_* concept groups exist
+  # to feed the Macroeconomic Outlook (their signal_type == "Macro" rows get
+  # reserved macro source-pack slots at ingestion), not to produce headline
+  # rows: as appendix rows they were "Limited direct exposure — macro …
+  # commentary only" noise scored 3–4 (Bitcoin futures, tanker freight rates,
+  # AI-equity valuations). APPENDIX-ONLY: a macro-group row scored at or above
+  # visible_impact_threshold is still a visible card, and ingestion is
+  # untouched (screened_count, the outlook source pack, executive_sources).
+  # Each excluded appendix-band row is counted in the delivery ledger under
+  # appendix_excluded_category. A parity test pins this list to the macro_*
+  # keys in targets.yaml — add a macro group there, add it here too.
+  # Empty or absent = no exclusion (config-only rollback).
+  appendix_exclude_categories:
+    - macro_manufacturing
+    - macro_construction
+    - macro_automotive
+    - macro_consumer_demand
+    - macro_inflation_rates
+    - macro_energy_freight
+    - macro_business_investment
+
   # Display-only segment merge. Maps a reader-facing header -> the list of
   # canonical commercial_segment labels folded under it in the email. This is a
   # RENDERING concern only: the LLM taxonomy, stored commercial_segment values,

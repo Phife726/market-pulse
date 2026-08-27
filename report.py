@@ -205,6 +205,25 @@ def _max_additional_articles(reporting_cfg: dict) -> int:
     return _config_int(reporting_cfg, "max_additional_articles", DEFAULT_MAX_ADDITIONAL_ARTICLES)
 
 
+def _appendix_exclude_categories(reporting_cfg: dict) -> frozenset[str]:
+    """Resolve reporting.appendix_exclude_categories — the discovery
+    categories (targets.yaml group keys, e.g. the macro_* groups) whose rows
+    never reach the Additional Articles appendix (issue #73). Exact,
+    case-sensitive group keys; absent / null / empty means no exclusion. A
+    malformed value (not a list) warns and excludes nothing — a bad config
+    must not silently shrink the appendix."""
+    raw = reporting_cfg.get("appendix_exclude_categories")
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        logger.warning(
+            "Invalid config value for reporting.appendix_exclude_categories "
+            "(expected a list); excluding nothing"
+        )
+        return frozenset()
+    return frozenset(str(c).strip() for c in raw if str(c).strip())
+
+
 def _config_optional_int(cfg: dict, key: str) -> Optional[int]:
     """Read an optional cap from a config sub-dict.
 
@@ -403,6 +422,35 @@ def _appendix_recency_token(row: dict) -> str:
         if isinstance(val, str) and val.strip() and _parses_as_datetime(val):
             return val.strip()
     return ""
+
+
+def _partition_appendix_exclusions(
+    kept: list[dict],
+    final_hashes: set,
+    scorer: Scoring,
+    exclude_categories: frozenset[str],
+) -> tuple[list[dict], list[dict]]:
+    """Split suppression survivors into (eligible, excluded) for the appendix.
+
+    `excluded` holds exactly the rows the appendix would otherwise have
+    considered — usable appendix-band rows not shown as cards — whose
+    `category` is in `exclude_categories` (issue #73: the macro_* groups feed
+    the Macroeconomic Outlook, not headline rows). Rows hidden for another
+    reason (below the band, a visible card) are never in `excluded`, so the
+    ledger reason names the appendix decision alone. Order is preserved."""
+    eligible: list[dict] = []
+    excluded: list[dict] = []
+    for row in kept:
+        if (
+            exclude_categories
+            and (row.get("category") or "") in exclude_categories
+            and row.get("url_hash") not in final_hashes
+            and _is_usable_additional_article(row, scorer)
+        ):
+            excluded.append(row)
+        else:
+            eligible.append(row)
+    return eligible, excluded
 
 
 def _select_additional_articles(
@@ -627,8 +675,21 @@ def assemble_report(
     # 6. Optional-discovery appendix: suppression survivors at/above the
     #    supporting threshold not shown as cards — the weak-relevance band plus
     #    rows capped out of their segment. Does NOT alter surfaced_count.
+    #    Rows from an excluded discovery category (the macro_* groups, issue
+    #    #73) are kept out of the appendix — appendix-only: they were already
+    #    a visible card if scored high enough, and they fed the outlook's
+    #    source pack at ingestion — and the drop is recorded with samples.
+    appendix_pool, appendix_excluded = _partition_appendix_exclusions(
+        kept, final_hashes, scorer, _appendix_exclude_categories(reporting_cfg),
+    )
+    for row in appendix_excluded:
+        ledger = ledger.record(
+            "appendix_excluded_category",
+            url=row.get("source_url") or "",
+            title=row.get("headline") or "",
+        )
     additional_articles = _select_additional_articles(
-        kept, final_hashes, scorer, _max_additional_articles(reporting_cfg),
+        appendix_pool, final_hashes, scorer, _max_additional_articles(reporting_cfg),
     )
     # Show the merged display label in the appendix segment column too, so the
     # reader sees one consistent header for the merged segment across cards and
