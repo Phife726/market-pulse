@@ -52,10 +52,24 @@ class DiscoveryProvider(Protocol):
 # Serper
 # ---------------------------------------------------------------------------
 
+def serper_time_filter(lookback_hours: int) -> str:
+    """Serper/Google ``tbs`` window for a lookback, expressed in whole days.
+
+    Google no longer honors the hour-count form: a live probe on 2026-08-27
+    (``scripts/probe_serper.py``, issue #63) showed ``qdr:h24`` returning
+    exactly the past-*hour* ``qdr:h`` results, which collapsed entity
+    discovery from 2026-08-26. The documented past-day value is ``qdr:d``
+    (``qdr:dN`` for N days), so hours round *up* to days and never emit an
+    ``h`` form — a sub-day lookback becomes one day rather than one hour.
+    """
+    days = max(1, -(-lookback_hours // 24))  # ceil without importing math
+    return "qdr:d" if days == 1 else f"qdr:d{days}"
+
+
 def discover_urls(query: str, lookback_hours: int, results_per_entity: int) -> list[tuple[str, str]]:
     api_key = os.environ["SERPER_API_KEY"]
     endpoint = "https://google.serper.dev/news"
-    payload = {"q": query, "num": results_per_entity, "tbs": f"qdr:h{lookback_hours}"}
+    payload = {"q": query, "num": results_per_entity, "tbs": serper_time_filter(lookback_hours)}
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
     try:
         response = requests.post(endpoint, json=payload, headers=headers, timeout=15)
