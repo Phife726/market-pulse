@@ -3,7 +3,8 @@ import logging
 import os
 import random
 import time
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -428,19 +429,71 @@ _RESEND_API_URL        = "https://api.resend.com/emails"
 _TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
 
 # ---------------------------------------------------------------------------
-# 1. Data fetch — with Monday 72-hour lookback
+# 1. Data fetch — the delivery window, anchored to the last production email
 # ---------------------------------------------------------------------------
 
-def fetch_todays_intelligence() -> list[dict]:
-    is_monday = datetime.now().weekday() == 0
-    lookback_hours = 72 if is_monday else 24
-    if is_monday:
-        logger.info("Monday detected — extending lookback to 72 hours.")
-    rows = _repo().fetch_recent(hours=lookback_hours)
-    logger.info(
-        "Fetched %d intelligence record(s) (lookback: %dh).",
-        len(rows), lookback_hours,
-    )
+#: Wall-clock lookback used ONLY when no prior production delivery is recorded
+#: (fresh database, or migration 007 not yet applied). 72 h on Mondays so a
+#: fallback run still covers the weekend.
+FALLBACK_LOOKBACK_HOURS = 24
+FALLBACK_LOOKBACK_HOURS_MONDAY = 72
+
+
+def _utcnow() -> datetime:
+    """Naive UTC 'now' — the convention every stored timestamp follows."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+@dataclass(frozen=True)
+class DeliveryWindow:
+    """The rows this email carries: everything created strictly after
+    `cutoff`. `anchored` says whether the cutoff is the last recorded
+    production delivery (exact "since the last email" semantics) or the
+    wall-clock fallback."""
+    cutoff: datetime
+    anchored: bool
+
+
+def delivery_window(now: datetime, last_delivered_at: Optional[datetime]) -> DeliveryWindow:
+    """Pure: choose the window for a delivery running at `now` (UTC).
+
+    A recorded delivery wins outright — it is exact, so neither a late
+    scheduled start (issue #64: 13:53 UTC instead of ~10:25 pushed a 24 h
+    window past every row of the previous day) nor the Monday rule needs to
+    widen it. Without one, fall back to the legacy wall-clock lookback."""
+    if last_delivered_at is not None:
+        return DeliveryWindow(cutoff=last_delivered_at, anchored=True)
+    hours = FALLBACK_LOOKBACK_HOURS_MONDAY if now.weekday() == 0 else FALLBACK_LOOKBACK_HOURS
+    return DeliveryWindow(cutoff=now - timedelta(hours=hours), anchored=False)
+
+
+def fetch_todays_intelligence(now: Optional[datetime] = None) -> list[dict]:
+    """Rows created since the last production email (see delivery_window).
+
+    The anchor is always the PRODUCTION delivery on an earlier run_date,
+    whatever mode this run is in: a QA re-render must see the rows production
+    saw, and a same-day retry re-sends the whole day's window rather than only
+    what arrived since the morning email. `now` is the run's single clock
+    reading (execute_pipeline stamps the same value after a successful send);
+    run timestamps are UTC to match created_at. Propagates a failed read —
+    a no-news email on a database outage would be wrong, and its stamp would
+    hide the rows the outage concealed."""
+    now = now or _utcnow()
+    today = now.date().isoformat()
+    anchor = _repo().fetch_last_delivery(run_mode="production", before_date=today)
+    window = delivery_window(now, anchor)
+    rows = _repo().fetch_since(window.cutoff)
+    if window.anchored:
+        logger.info(
+            "Fetched %d intelligence record(s) created after the last production "
+            "delivery at %s.", len(rows), window.cutoff.isoformat(),
+        )
+    else:
+        logger.warning(
+            "No prior production delivery recorded — fetched %d intelligence "
+            "record(s) with the wall-clock fallback window (cutoff %s).",
+            len(rows), window.cutoff.isoformat(),
+        )
     return rows
 
 
@@ -538,6 +591,30 @@ def _update_delivery_summary_counts(
         )
     except Exception as exc:
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
+
+
+def _record_delivery(*, delivered_at: datetime) -> None:
+    """Stamp delivered_at on today's daily_summaries row — the anchor the
+    next run's delivery window starts from. `delivered_at` is the instant
+    this run's fetch ran (its window's "now"), not the send time: the anchor
+    may only move past rows this email actually carried. Called only after
+    the send succeeded, so a failed send leaves the previous anchor in place
+    and the next successful email reaches back over the rows that never went
+    out; a failed fetch never gets here at all (fetch_since is a strict read
+    that raises).
+
+    Non-critical: the email has already gone out, so a failure here is a
+    warning, not a red job (which would invite a manual re-run and a
+    duplicate email). In test mode this keys on run_mode='test' and is a
+    silent no-op on production accounting."""
+    try:
+        _repo().record_delivery(
+            run_date=delivered_at.date().isoformat(),
+            run_mode=config.run_mode(),
+            delivered_at=delivered_at,
+        )
+    except Exception as exc:
+        logger.warning("Failed to stamp delivered_at on daily_summaries: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1157,7 +1234,13 @@ def send_email(html_content: str) -> None:
 # ---------------------------------------------------------------------------
 
 def execute_pipeline() -> None:
-    data          = fetch_todays_intelligence()
+    # One clock reading per run. It is both the window's "now" and, after a
+    # successful send, the stamp the next run anchors on — so a row written by
+    # a concurrent ingestion between this fetch and the send (created_at after
+    # `now`, absent from this email) is still inside tomorrow's window. Stamping
+    # the send time instead would put such a row before the anchor for good.
+    now           = _utcnow()
+    data          = fetch_todays_intelligence(now=now)
     macro_summary = fetch_macro_summary()
 
     if not data:
@@ -1178,6 +1261,7 @@ def execute_pipeline() -> None:
         test_mode=_is_test_mode(),
     )
     send_email(html)
+    _record_delivery(delivered_at=now)
 
 
 def main() -> None:

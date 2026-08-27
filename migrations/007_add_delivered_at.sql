@@ -1,0 +1,29 @@
+-- Migration 007: Record when each daily email actually went out (issue #64).
+-- Apply via Supabase SQL editor or psql. Safe to run multiple times.
+--
+-- WHY:
+--   Delivery used to fetch "rows created in the last 24 h" by its own wall
+--   clock. On 2026-08-27 GitHub started the scheduled run at 13:53 UTC instead
+--   of ~10:25, so that window closed AFTER every row from the 08-26 run and the
+--   email silently dropped the whole previous day. The window is now anchored
+--   to the last recorded production delivery: rows created strictly after it
+--   are delivered — exact "since the last email" semantics, no double delivery
+--   on a normal day, no gap on a late one.
+--
+-- ROLLOUT ORDER (degrades gracefully, but apply first for the fix to take effect):
+--   Until this column exists, delivery's anchor read fails and is swallowed
+--   (reads return None), so the engine falls back to the legacy wall-clock
+--   window; the post-send stamp fails and is logged as a warning. Nothing
+--   crashes — but the late-start gap stays open until the column is added.
+--
+-- CONTRACT:
+--   delivered_at is stamped by delivery_engine AFTER the Resend call succeeds,
+--   on the (run_date, run_mode) row ingestion wrote that day, with the instant
+--   that run's fetch ran (not the send time — a row written mid-run must stay
+--   inside the next window). A failed send leaves it NULL, so the next
+--   successful delivery's window reaches back over the rows that never went
+--   out; a failed fetch raises before any email or stamp. Test-mode runs stamp only their own
+--   run_mode='test' row (a silent no-op when none exists) and are never read
+--   as an anchor: the anchor query is production-only.
+
+alter table daily_summaries add column if not exists delivered_at timestamptz;

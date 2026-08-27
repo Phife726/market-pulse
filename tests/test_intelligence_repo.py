@@ -14,6 +14,7 @@ import pytest
 from daily_intelligence_repo import (
     InMemoryIntelligenceRepo,
     SupabaseIntelligenceRepo,
+    _coerce_timestamp,
     _repo,
     _reset_repo,
 )
@@ -48,18 +49,18 @@ def test_upsert_insight_enforces_url_hash_uniqueness():
     repo = InMemoryIntelligenceRepo()
     repo.upsert_insight({"url_hash": "abc123", "headline": "First"})
     repo.upsert_insight({"url_hash": "abc123", "headline": "Second"})
-    rows = repo.fetch_recent(hours=24)
+    rows = repo.fetch_since(datetime(2000, 1, 1))  # any past cutoff
     assert len(rows) == 1
     assert rows[0]["headline"] == "Second"
 
 
 def test_upsert_insight_sets_created_at_when_missing():
-    """If payload omits created_at, the fake injects 'now' so fetch_recent
+    """If payload omits created_at, the fake injects 'now' so fetch_since
     can filter on it deterministically."""
     fixed_now = datetime(2026, 5, 26, 12, 0, 0)
     repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
     repo.upsert_insight({"url_hash": "abc123", "headline": "Test"})
-    rows = repo.fetch_recent(hours=24)
+    rows = repo.fetch_since(fixed_now - timedelta(hours=24))
     assert rows[0]["created_at"] == fixed_now.isoformat()
 
 
@@ -68,12 +69,12 @@ def test_upsert_insight_preserves_explicit_created_at():
     repo = InMemoryIntelligenceRepo()
     explicit = "2026-05-20T10:30:00"
     repo.upsert_insight({"url_hash": "abc123", "headline": "Test", "created_at": explicit})
-    rows = repo.fetch_recent(hours=24 * 365)  # very wide window
+    rows = repo.fetch_since(datetime(2000, 1, 1))  # very wide window
     assert rows[0]["created_at"] == explicit
 
 
-def test_fetch_recent_filters_by_created_at():
-    """Rows older than `hours` must not be returned."""
+def test_fetch_since_filters_by_created_at():
+    """Rows created at or before the cutoff must not be returned."""
     fixed_now = datetime(2026, 5, 26, 12, 0, 0)
     repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
 
@@ -90,24 +91,25 @@ def test_fetch_recent_filters_by_created_at():
         "created_at": (fixed_now - timedelta(hours=5)).isoformat(),
     })
 
-    rows_24 = repo.fetch_recent(hours=24)
+    rows_24 = repo.fetch_since(fixed_now - timedelta(hours=24))
     assert {r["url_hash"] for r in rows_24} == {"fresh"}
 
-    rows_72 = repo.fetch_recent(hours=72)
+    rows_72 = repo.fetch_since(fixed_now - timedelta(hours=72))
     assert {r["url_hash"] for r in rows_72} == {"old", "fresh"}
 
 
-def test_fetch_recent_returns_independent_copies():
+def test_fetch_since_returns_independent_copies():
     """Mutating a returned row must not affect repo state."""
     repo = InMemoryIntelligenceRepo()
     repo.upsert_insight({"url_hash": "abc", "headline": "Original"})
-    rows = repo.fetch_recent(hours=24)
+    cutoff = datetime(2000, 1, 1)  # any past cutoff
+    rows = repo.fetch_since(cutoff)
     rows[0]["headline"] = "Mutated"
-    again = repo.fetch_recent(hours=24)
+    again = repo.fetch_since(cutoff)
     assert again[0]["headline"] == "Original"
 
 
-def test_in_memory_fetch_recent_accepts_timezone_aware_created_at_strings():
+def test_in_memory_fetch_since_accepts_timezone_aware_created_at_strings():
     """Supabase returns ISO timestamps with an explicit UTC offset
     (`...+00:00`). The fake must compare them against its naive cutoff
     without raising TypeError on aware/naive mismatch."""
@@ -122,12 +124,12 @@ def test_in_memory_fetch_recent_accepts_timezone_aware_created_at_strings():
         }
     )
 
-    rows = repo.fetch_recent(hours=3)
+    rows = repo.fetch_since(now - timedelta(hours=3))
 
     assert [row["url_hash"] for row in rows] == ["aware-recent"]
 
 
-def test_in_memory_fetch_recent_excludes_old_timezone_aware_created_at_strings():
+def test_in_memory_fetch_since_excludes_old_timezone_aware_created_at_strings():
     """An aware timestamp outside the lookback window must still filter out
     cleanly (i.e. comparison happens, no TypeError)."""
     now = datetime(2026, 5, 26, 12, 0, 0)
@@ -141,7 +143,7 @@ def test_in_memory_fetch_recent_excludes_old_timezone_aware_created_at_strings()
         }
     )
 
-    assert repo.fetch_recent(hours=3) == []
+    assert repo.fetch_since(now - timedelta(hours=3)) == []
 
 
 def test_recent_headlines_returns_set_of_headlines():
@@ -402,24 +404,31 @@ def test_supabase_recent_headlines_swallows_errors(supabase_repo):
     assert repo.recent_headlines(hours=72) == set()
 
 
-def test_supabase_fetch_recent_orders_by_impact(supabase_repo):
+def test_supabase_fetch_since_filters_strictly_after_cutoff_and_orders_by_impact(supabase_repo):
     repo, mock_client = supabase_repo
-    mock_client.table.return_value.select.return_value.gte.return_value.order.return_value.execute.return_value.data = [
+    select = mock_client.table.return_value.select
+    select.return_value.gt.return_value.order.return_value.execute.return_value.data = [
         {"url_hash": "a", "headline": "x"},
     ]
-    rows = repo.fetch_recent(hours=24)
+    rows = repo.fetch_since(datetime(2026, 8, 26, 10, 44, 12))
     assert rows == [{"url_hash": "a", "headline": "x"}]
     mock_client.table.assert_called_with("daily_intelligence")
-    mock_client.table.return_value.select.assert_called_with("*")
-    mock_client.table.return_value.select.return_value.gte.return_value.order.assert_called_with(
+    select.assert_called_with("*")
+    # Strictly after the cutoff (rows AT the last delivery were in that email).
+    select.return_value.gt.assert_called_with("created_at", "2026-08-26T10:44:12")
+    select.return_value.gt.return_value.order.assert_called_with(
         "americhem_impact_score", desc=True,
     )
 
 
-def test_supabase_fetch_recent_swallows_errors(supabase_repo):
+def test_supabase_fetch_since_is_a_strict_read(supabase_repo):
+    """Unlike most reads, fetch_since raises: delivery stamps the anchor after
+    the email goes out, and a swallowed outage ([]) would become a no-news
+    email whose stamp hides every row that existed at the time."""
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
-    assert repo.fetch_recent(hours=24) == []
+    with pytest.raises(Exception, match="read failed"):
+        repo.fetch_since(datetime(2026, 8, 26))
 
 
 def test_supabase_upsert_summary_uses_compound_on_conflict(supabase_repo):
@@ -678,3 +687,159 @@ def test_fetch_latest_summary_selects_executive_sources(monkeypatch):
     monkeypatch.setattr(repo, "_supabase", lambda: rec)
     repo.fetch_latest_summary(run_mode="production", min_date="2026-01-01")
     assert "executive_sources" in rec.table_obj.select_arg
+
+
+# ---------------------------------------------------------------------------
+# Delivery anchor (issue #64): fetch_last_delivery / record_delivery
+# ---------------------------------------------------------------------------
+
+def _summary_row(run_date: str, run_mode: str = "production") -> dict:
+    return {
+        "run_date": run_date, "run_mode": run_mode,
+        "executive_summary": "x", "macro_sentiment": "x",
+    }
+
+
+def test_in_memory_fetch_since_is_strict():
+    """A row created exactly at the cutoff was in the email the cutoff came
+    from — it must not be fetched again."""
+    cutoff = datetime(2026, 8, 26, 10, 44, 12)
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_insight({"url_hash": "at", "created_at": cutoff.isoformat()})
+    repo.upsert_insight({"url_hash": "after",
+                         "created_at": (cutoff + timedelta(seconds=1)).isoformat()})
+    assert [r["url_hash"] for r in repo.fetch_since(cutoff)] == ["after"]
+
+
+def test_in_memory_record_delivery_patches_only_delivered_at():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary({**_summary_row("2026-08-26"), "surfaced_count": 4})
+    repo.record_delivery(run_date="2026-08-26", run_mode="production",
+                         delivered_at=datetime(2026, 8, 26, 10, 44, 12))
+    got = repo.get_delivery_state(run_date="2026-08-26", run_mode="production")
+    assert got["executive_summary"] == "x"      # untouched
+    assert got["surfaced_count"] == 4           # untouched
+    assert got["delivered_at"] == "2026-08-26T10:44:12+00:00"   # stored as explicit UTC
+
+
+def test_in_memory_record_delivery_silent_when_row_missing():
+    """Matches Supabase UPDATE-WHERE-no-match semantics: silent no-op (the
+    delivery-only test run has no test-mode row to stamp)."""
+    repo = InMemoryIntelligenceRepo()
+    repo.record_delivery(run_date="2026-08-26", run_mode="test",
+                         delivered_at=datetime(2026, 8, 26, 10, 44, 12))
+    assert repo.get_delivery_state(run_date="2026-08-26", run_mode="test") is None
+
+
+def test_in_memory_fetch_last_delivery_returns_latest_before_date():
+    repo = InMemoryIntelligenceRepo()
+    for rd, hour in (("2026-08-24", 10), ("2026-08-25", 11), ("2026-08-26", 10)):
+        repo.upsert_summary(_summary_row(rd))
+        repo.record_delivery(run_date=rd, run_mode="production",
+                             delivered_at=datetime(2026, 8, int(rd[-2:]), hour, 44))
+    repo.upsert_summary(_summary_row("2026-08-27"))
+    repo.record_delivery(run_date="2026-08-27", run_mode="production",
+                         delivered_at=datetime(2026, 8, 27, 14, 5))   # today: excluded
+
+    got = repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27")
+
+    assert got == datetime(2026, 8, 26, 10, 44)
+    assert got.tzinfo is None                    # naive UTC, like created_at coercion
+
+
+def test_in_memory_fetch_last_delivery_ignores_other_run_modes_and_unstamped_rows():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_summary(_summary_row("2026-08-26", "test"))
+    repo.record_delivery(run_date="2026-08-26", run_mode="test",
+                         delivered_at=datetime(2026, 8, 26, 15, 0))
+    repo.upsert_summary(_summary_row("2026-08-26", "production"))   # never delivered
+    assert repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27") is None
+
+
+def test_in_memory_fetch_last_delivery_none_when_empty():
+    repo = InMemoryIntelligenceRepo()
+    assert repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27") is None
+
+
+def test_supabase_fetch_last_delivery_wiring(supabase_repo):
+    repo, mock_client = supabase_repo
+    q = mock_client.table.return_value.select.return_value
+    chain = q.eq.return_value.lt.return_value.not_.is_.return_value.order.return_value.limit.return_value
+    chain.execute.return_value.data = [{"delivered_at": "2026-08-26T10:44:12.5+00:00"}]
+
+    got = repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27")
+
+    assert got == datetime(2026, 8, 26, 10, 44, 12, 500000)
+    mock_client.table.assert_called_with("daily_summaries")
+    mock_client.table.return_value.select.assert_called_with("delivered_at")
+    q.eq.assert_called_with("run_mode", "production")
+    q.eq.return_value.lt.assert_called_with("run_date", "2026-08-27")
+    q.eq.return_value.lt.return_value.not_.is_.assert_called_with("delivered_at", "null")
+    q.eq.return_value.lt.return_value.not_.is_.return_value.order.assert_called_with(
+        "delivered_at", desc=True,
+    )
+
+
+def test_supabase_fetch_last_delivery_returns_none_when_no_row(supabase_repo):
+    repo, mock_client = supabase_repo
+    q = mock_client.table.return_value.select.return_value
+    chain = q.eq.return_value.lt.return_value.not_.is_.return_value.order.return_value.limit.return_value
+    chain.execute.return_value.data = []
+    assert repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27") is None
+
+
+def test_supabase_fetch_last_delivery_swallows_errors(supabase_repo):
+    """A read failure (including 'column does not exist' before migration 007
+    is applied) degrades to the wall-clock fallback, never a crash."""
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("column delivered_at does not exist")
+    assert repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27") is None
+
+
+def test_supabase_record_delivery_targets_compound_key(supabase_repo):
+    repo, mock_client = supabase_repo
+    repo.record_delivery(run_date="2026-08-27", run_mode="production",
+                         delivered_at=datetime(2026, 8, 27, 14, 5, 0))
+    mock_client.table.assert_called_with("daily_summaries")
+    update = mock_client.table.return_value.update
+    update.assert_called_with({"delivered_at": "2026-08-27T14:05:00+00:00"})
+    update.return_value.eq.assert_called_with("run_date", "2026-08-27")
+    update.return_value.eq.return_value.eq.assert_called_with("run_mode", "production")
+
+
+def test_supabase_record_delivery_raises_on_error(supabase_repo):
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("write failed")
+    with pytest.raises(Exception, match="write failed"):
+        repo.record_delivery(run_date="2026-08-27", run_mode="production",
+                             delivered_at=datetime(2026, 8, 27, 14, 5, 0))
+
+
+# ---------------------------------------------------------------------------
+# Timestamp coercion — the shapes Postgres/PostgREST actually emit
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw, expected", [
+    # Postgres strips trailing zeros from the microseconds; Python < 3.11's
+    # fromisoformat accepts only 3 or 6 fractional digits. CI (3.10) caught
+    # the 1-digit form parsing to None — a silent wall-clock fallback.
+    ("2026-08-26T10:44:12.5+00:00",       datetime(2026, 8, 26, 10, 44, 12, 500000)),
+    ("2026-08-26T10:44:12.12+00:00",      datetime(2026, 8, 26, 10, 44, 12, 120000)),
+    ("2026-08-26T10:44:12.123+00:00",     datetime(2026, 8, 26, 10, 44, 12, 123000)),
+    ("2026-08-26T10:44:12.123456+00:00",  datetime(2026, 8, 26, 10, 44, 12, 123456)),
+    ("2026-08-26T10:44:12+00:00",         datetime(2026, 8, 26, 10, 44, 12)),
+    ("2026-08-26T10:44:12Z",              datetime(2026, 8, 26, 10, 44, 12)),
+    ("2026-08-26T10:44:12.5Z",            datetime(2026, 8, 26, 10, 44, 12, 500000)),
+    ("2026-08-26T12:44:12.5+02:00",       datetime(2026, 8, 26, 10, 44, 12, 500000)),  # → UTC
+    ("2026-08-26T10:44:12.5",             datetime(2026, 8, 26, 10, 44, 12, 500000)),  # naive
+])
+def test_coerce_timestamp_accepts_postgres_shapes(raw, expected):
+    got = _coerce_timestamp(raw)
+    assert got == expected
+    assert got.tzinfo is None
+
+
+def test_coerce_timestamp_rejects_garbage_and_non_strings():
+    assert _coerce_timestamp("not a timestamp") is None
+    assert _coerce_timestamp(None) is None
+    assert _coerce_timestamp(1724668000) is None
