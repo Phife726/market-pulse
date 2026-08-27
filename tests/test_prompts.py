@@ -404,3 +404,44 @@ def test_thematic_user_contains_category_blocks_and_impact_lines():
     assert "Device approvals accelerating." in spec.user
     assert "exactly one synthesis sentence" in spec.system
     assert "maximum 30 words" in spec.system
+
+
+# ---------------------------------------------------------------------------
+# Insight prompt — RULE 1 precedence over the RULE 6 / RULE 7 exits (issue #72)
+# ---------------------------------------------------------------------------
+
+def _rule_section(system: str, start: str, end: str) -> str:
+    """The slice of the system prompt between two rule headers."""
+    i, j = system.index(start), system.index(end)
+    assert i < j, f"{start!r} must precede {end!r}"
+    return system[i:j]
+
+
+def test_rule1_verdict_precedes_the_rule6_and_rule7_exits():
+    """Issue #72: a false entity match ('Dow' the index, not Dow Chemical) was
+    being stored as a RULE 6 'Limited direct exposure' row because RULE 7's
+    'do not discard when uncertain' read as overriding RULE 1. RULE 1 must
+    say its verdict comes first: a false match is DISCARD, never a template."""
+    rule1 = _rule_section(_insight_spec().system, "RULE 1 —", "RULE 2 —")
+    assert "PRECEDENCE" in rule1
+    assert "never a RULE 6" in rule1
+    assert "RULE 7" in rule1
+    assert "correct entity" in rule1
+
+
+def test_rule6_template_is_not_a_substitute_for_rule1_discard():
+    """The SCORE MUST MATCH sub-rule must scope the templates to articles that
+    ARE about the right entity but matter little — not to false matches."""
+    rule6 = _rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —")
+    assert "SCORE MUST MATCH THE TEMPLATE" in rule6
+    assert "about the right entity but matter little" in rule6
+    assert "not a substitute for RULE 1" in rule6
+
+
+def test_rule7_uncertainty_exit_is_scoped_to_the_correct_entity():
+    """RULE 7's 'do NOT discard when uncertain' applies only to articles about
+    the correct entity — it never rescues a RULE 1 false match. The scored
+    instruction itself keeps its Scoring-derived wording."""
+    rule7 = _rule_section(_insight_spec(_PROD_STYLE_CFG).system, "RULE 7 —", "If the article passes all rules")
+    assert "correct entity" in rule7
+    assert "Set americhem_impact_score to 4 and apply Rule 6" in rule7

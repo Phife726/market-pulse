@@ -150,7 +150,9 @@ def _build_low_exposure_score_rule(scorer: Scoring) -> str:
         "- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Pair\n"
         f"  {names} wording with an americhem_impact_score of {band}\n"
         f"  — never above {high} (that would overstate it), and never below {low} "
-        "(the article still passed Rule 7)."
+        "(the article still passed Rule 7).\n"
+        "  A template is for articles that are about the right entity but matter little; it is\n"
+        "  not a substitute for RULE 1's DISCARD."
     )
 
 
@@ -213,6 +215,11 @@ Before scoring, verify that the named entity in this article is the correct one.
 - If the article mentions "Celanese" verify it is the chemical company, not an unrelated brand.
 - If the entity is a false match (wrong Dow, wrong Magna, unrelated brand), output ONLY this JSON:
   {"americhem_impact": "DISCARD"}
+- PRECEDENCE: this verdict comes first and is final. A false entity match is DISCARD —
+  never a RULE 6 low-exposure template ("Limited direct exposure — Dow here is the stock
+  index" is a RULE 1 failure, not low exposure) and never a RULE 7 uncertain-relevance
+  score. RULE 7's "do NOT discard when uncertain" applies only to articles that ARE about
+  the correct entity.
 
 RULE 2 — SENTIMENT TAG (directional tone only — NOT importance):
 Assign exactly one tag based on the direction of impact for Americhem:
@@ -274,7 +281,9 @@ absolutely zero connection to plastics, polymers, chemicals, materials, manufact
 composites, packaging, or supply chain dynamics.
 Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
 financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set americhem_impact_score to {uncertain_relevance_score} and apply Rule 6.
+When relevance is uncertain for an article that IS about the correct entity (RULE 1), do NOT
+discard. Set americhem_impact_score to {uncertain_relevance_score} and apply Rule 6. This
+never rescues a RULE 1 false match — that is DISCARD regardless of domain.
 
 If the article passes all rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.
