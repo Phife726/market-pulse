@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Protocol
 
 from supabase import create_client, Client
+from run_instant import naive_utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ class SupabaseIntelligenceRepo:
 
     def recent_headlines(self, hours: int) -> set[str]:
         try:
-            cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+            cutoff = (naive_utcnow() - timedelta(hours=hours)).isoformat()
             result = (
                 self._supabase().table("daily_intelligence")
                 .select("headline")
@@ -270,7 +271,7 @@ def _coerce_timestamp(value: object) -> Optional[datetime]:
     Supabase returns ISO strings with an explicit UTC offset (e.g.
     "2026-05-26T10:00:00+00:00"). datetime.fromisoformat() parses those
     as timezone-aware, but the fake's _now()/cutoff are naive (from
-    datetime.utcnow()). Comparing aware to naive raises TypeError.
+    naive_utcnow()). Comparing aware to naive raises TypeError.
 
     Strategy: parse, then if the result is tz-aware, convert to UTC and
     strip tzinfo so all comparisons stay naive-UTC. Return None on
@@ -298,7 +299,7 @@ class InMemoryIntelligenceRepo:
     """
 
     def __init__(self, *, now: Optional[Callable[[], datetime]] = None) -> None:
-        self._now: Callable[[], datetime] = now or datetime.utcnow
+        self._now: Callable[[], datetime] = now or naive_utcnow
         self._articles: dict[str, dict] = {}                 # url_hash -> row
         self._summaries: dict[tuple[str, str], dict] = {}    # (run_date, run_mode) -> row
 

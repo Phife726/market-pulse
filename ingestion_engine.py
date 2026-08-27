@@ -12,6 +12,7 @@ from typing import Optional
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
+from run_instant import RunInstant
 import insight
 import prompts
 # The macro summary's schema/validation + pure assembly live in macro_summary.py
@@ -438,17 +439,20 @@ def store_insight(payload: dict) -> None:
 def generate_macro_summary(
     articles: list[dict],
     *,
+    run: RunInstant,
     screened_count: Optional[int] = None,
     suppression_breakdown: Optional[dict] = None,
     suppression_samples: Optional[list] = None,
 ) -> bool:
-    """Generate a structured macro summary from today's stored articles.
+    """Generate a structured macro summary from the run's stored articles.
 
     Writes dominant_condition (constrained enum) and executive_bullets (3-bullet
     JSON) to daily_summaries. Also populates legacy executive_summary and
     macro_sentiment columns for backward compatibility.
 
-    The optional keyword args persist ingestion-side suppression accounting:
+    `run` is the run instant: its run_date + run_mode key the daily_summaries
+    row this run writes. The optional keyword args persist ingestion-side
+    suppression accounting:
     - screened_count: total URLs discovered (stats["urls_discovered"])
     - suppression_breakdown: reason-code counters dict
     - suppression_samples: list of up to 10 suppressed-item samples
@@ -459,10 +463,9 @@ def generate_macro_summary(
     that payload — Supabase upsert only updates provided columns, so a
     same-day retry never wipes an earlier full summary.
     """
-    from datetime import date
     accounting_row = {
-        "run_date": date.today().isoformat(),
-        "run_mode": config.run_mode(),
+        "run_date": run.run_date,
+        "run_mode": run.run_mode,
         "screened_count": screened_count,
         "suppression_breakdown": suppression_breakdown or {},
         "suppression_samples": suppression_samples or [],
@@ -748,10 +751,11 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
         time.sleep(1.5)
 
 
-def _finalize_run(ctx: RunContext) -> None:
+def _finalize_run(ctx: RunContext, run: RunInstant) -> None:
     """The single end-of-run teardown: flush stats and provider yield, then
-    persist the macro summary (or the accounting-only row). Called at every
-    pipeline exit — mid-batch deadline, scrape cap, and normal completion.
+    persist the macro summary (or the accounting-only row) on the row `run`
+    keys. Called at every pipeline exit — mid-batch deadline, scrape cap, and
+    normal completion.
 
     Raises SynthesisOutageError last, so a run whose every synthesis call
     failed still records what it screened before it fails the job.
@@ -760,6 +764,7 @@ def _finalize_run(ctx: RunContext) -> None:
     _log_provider_yield(ctx.provider_yield)
     generate_macro_summary(
         ctx.stored_articles_buffer,
+        run=run,
         screened_count=ctx.stats["urls_discovered"],
         **ctx.ledger.to_row(),
     )
@@ -774,7 +779,7 @@ def _finalize_run(ctx: RunContext) -> None:
         )
 
 
-def execute_pipeline() -> None:
+def execute_pipeline(run: RunInstant) -> None:
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
     concept_demand_ahead = _concept_demand_ahead(targets)
@@ -837,12 +842,12 @@ def execute_pipeline() -> None:
                     "Pipeline deadline (%ds) reached mid-batch — stopping early.",
                     PIPELINE_DEADLINE_SECONDS,
                 )
-                _finalize_run(ctx)
+                _finalize_run(ctx, run)
                 return
 
             if ctx.scrapes_attempted >= MAX_DAILY_SCRAPES:
                 logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
-                _finalize_run(ctx)
+                _finalize_run(ctx, run)
                 return
 
             process_candidate(candidate, target, ctx)
@@ -852,11 +857,12 @@ def execute_pipeline() -> None:
             target["name"], time.monotonic() - target_start, len(candidates),
         )
 
-    _finalize_run(ctx)
+    _finalize_run(ctx, run)
 
 
 def main() -> None:
-    """Cron entrypoint: fail fast on missing secrets, then run the pipeline.
+    """Cron entrypoint: fail fast on missing secrets, read the run instant
+    once, then run the pipeline.
 
     A synthesis outage exits non-zero rather than raising: the workflow step
     goes red (so the run is visibly broken) and, because the delivery step runs
@@ -864,7 +870,7 @@ def main() -> None:
     """
     config.validate_environment("ingestion")
     try:
-        execute_pipeline()
+        execute_pipeline(RunInstant.current())
     except SynthesisOutageError as exc:
         logger.critical("SYNTHESIS OUTAGE — delivery suppressed: %s", exc)
         sys.exit(1)

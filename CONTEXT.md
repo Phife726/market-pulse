@@ -114,6 +114,28 @@ zero-I/O purity is untouched.
   old "rows created in the last 24 h" window was relative to the delivery
   step's own clock, so a late scheduled start (13:53 UTC on 2026-08-27) closed
   it after every row of the previous day and silently dropped them.
+- **Run instant** (`run_instant.py`, `RunInstant`) — the one clock reading a
+  pipeline run makes, plus the run mode, as a frozen value: `now` (naive UTC —
+  the convention every stored timestamp follows) and `run_mode`. Together they
+  are the `daily_summaries` row this run belongs to (`run_date` + `run_mode`
+  is that table's key) and everything else a run derives from "today" —
+  `min_summary_date` (the macro-summary lookback floor), `header_date` /
+  `subject_date` (the email's display dates), `test_mode`. `RunInstant.current()`
+  is the single effectful line (clock + `config.run_mode()`); each engine's
+  `main()` reads one and hands it to `execute_pipeline(run)`, which threads it,
+  so the row key is spelled once per run instead of once per function. The
+  email's date is the **UTC** run date by construction. Ingestion hands it to
+  `_finalize_run` (the gauntlet never reads it); delivery to every fetch,
+  write-back, send and stamp. The rule: effectful functions take the value,
+  pure functions take the one field they need — `delivery_window(now, …)` and
+  `render_report(today_str, test_mode)` never see it, the caller derives the
+  field. The instant is per process: ingestion and delivery each read their
+  own, so a workflow that straddles 00:00 UTC keys the two on different
+  days (never the 10:00 UTC cron; see the Key Invariants entry in
+  `CLAUDE.md`). Named to end the five independent clock reads (two time
+  zones) one delivery run used to make, which spelled the summary-row key
+  four different ways.
+  *Avoid*: run clock, run context (that is ingestion's mutable gauntlet state).
 - **Synthesis outage** (`ingestion_engine.is_synthesis_outage`) — a run that
   stored nothing because **every** LLM synthesis call failed, as opposed to a
   quiet news day where the LLM answered and there was simply nothing material.
@@ -203,7 +225,7 @@ zero-I/O purity is untouched.
   visibility filter → segment grouping → optional per-segment cap → optional
   total cap → appendix selection → weak-relevance accounting). Consumed by the pure renderer
   (`delivery_engine.render_report`) and the `daily_summaries` write-back.
-  `delivery_engine.prepare_report(rows, macro_summary)` runs assembly itself
+  `delivery_engine.prepare_report(rows, macro_summary, run=run)` runs assembly itself
   (there is no model-in/model-out effectful call), then performs the run's two
   side effects — write-back + thematic synthesis — exactly once, after
   assembly and before rendering; both are skipped for `no_news`. Rendering a

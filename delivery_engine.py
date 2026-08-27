@@ -4,7 +4,7 @@ import os
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -13,6 +13,7 @@ import requests
 from suppression_ledger import ALL_CODES, SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
 from llm import _llm
+from run_instant import RunInstant
 import prompts
 import scoring
 import config
@@ -324,15 +325,6 @@ def _render_additional_articles_section(items: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Run-mode detection
-# ---------------------------------------------------------------------------
-
-def _is_test_mode() -> bool:
-    """Return True when MARKET_PULSE_RUN_MODE=test (case-insensitive)."""
-    return config.run_mode() == "test"
-
-
-# ---------------------------------------------------------------------------
 # QA suppression-summary (test-mode only)
 # ---------------------------------------------------------------------------
 
@@ -443,11 +435,6 @@ FALLBACK_LOOKBACK_HOURS = 24
 FALLBACK_LOOKBACK_HOURS_MONDAY = 72
 
 
-def _utcnow() -> datetime:
-    """Naive UTC 'now' — the convention every stored timestamp follows."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
 @dataclass(frozen=True)
 class DeliveryWindow:
     """The rows this email carries: everything created strictly after
@@ -471,21 +458,19 @@ def delivery_window(now: datetime, last_delivered_at: Optional[datetime]) -> Del
     return DeliveryWindow(cutoff=now - timedelta(hours=hours), anchored=False)
 
 
-def fetch_todays_intelligence(now: Optional[datetime] = None) -> list[dict]:
+def fetch_todays_intelligence(run: RunInstant) -> list[dict]:
     """Rows created since the last production email (see delivery_window).
 
     The anchor is always the PRODUCTION delivery on an earlier run_date,
     whatever mode this run is in: a QA re-render must see the rows production
     saw, and a same-day retry re-sends the whole day's window rather than only
-    what arrived since the morning email. `now` is the run's single clock
-    reading (execute_pipeline stamps the same value after a successful send);
-    run timestamps are UTC to match created_at. Propagates a failed read —
+    what arrived since the morning email. `run` is the run instant — the one
+    clock reading this run makes (execute_pipeline stamps `run.now` after a
+    successful send); it is naive UTC to match created_at. Propagates a failed read —
     a no-news email on a database outage would be wrong, and its stamp would
     hide the rows the outage concealed."""
-    now = now or _utcnow()
-    today = now.date().isoformat()
-    anchor = _repo().fetch_last_delivery(run_mode="production", before_date=today)
-    window = delivery_window(now, anchor)
+    anchor = _repo().fetch_last_delivery(run_mode="production", before_date=run.run_date)
+    window = delivery_window(run.now, anchor)
     rows = _repo().fetch_since(window.cutoff)
     if window.anchored:
         logger.info(
@@ -534,14 +519,14 @@ def _prefer_production_summary(test_row: Optional[dict], production_row: Optiona
     )
 
 
-def fetch_macro_summary() -> dict | None:
-    from datetime import date
-    min_run_date = (date.today() - timedelta(days=1)).isoformat()
+def fetch_macro_summary(run: RunInstant) -> dict | None:
+    """The macro-summary row for this run: the latest row in the run's mode
+    dated on or after the run instant's yesterday (the date-rollover grace)."""
     summary = _repo().fetch_latest_summary(
-        run_mode=config.run_mode(),
-        min_date=min_run_date,
+        run_mode=run.run_mode,
+        min_date=run.min_summary_date,
     )
-    if _is_test_mode():
+    if run.test_mode:
         # Delivery-only test runs (run_ingestion=false) have no same-day
         # test-mode macro row — ingestion is what writes it — and a leftover
         # test row from yesterday's QA run would be stale against today's
@@ -555,7 +540,7 @@ def fetch_macro_summary() -> dict | None:
         # falls back — it must not read test rows.
         production_row = _repo().fetch_latest_summary(
             run_mode="production",
-            min_date=min_run_date,
+            min_date=run.min_summary_date,
         )
         if _prefer_production_summary(summary, production_row):
             logger.info(
@@ -565,31 +550,30 @@ def fetch_macro_summary() -> dict | None:
             )
             summary = production_row
     if summary is None:
-        logger.warning("No macro summary found for run_date >= %s.", min_run_date)
+        logger.warning("No macro summary found for run_date >= %s.", run.min_summary_date)
     return summary
 
 
 def _update_delivery_summary_counts(
     *,
+    run: RunInstant,
     surfaced_count: int,
     ledger: SuppressionLedger,
 ) -> None:
-    """Update today's daily_summaries row with delivery-side surfaced count
+    """Update the run's daily_summaries row (keyed on the run instant's
+    run_date + run_mode) with the delivery-side surfaced count
     and merged suppression accounting. Idempotent on same-day retry — the
     merge semantics live in SuppressionLedger.merge_with().
 
     Non-critical: a failed write is logged but does not raise. Keeps the
     email-sending path resilient to transient Supabase outages."""
-    from datetime import date as _date
-    today = _date.today().isoformat()
-    run_mode = config.run_mode()
     try:
-        prior_row = _repo().require_delivery_state(run_date=today, run_mode=run_mode)
+        prior_row = _repo().require_delivery_state(run_date=run.run_date, run_mode=run.run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
         merged = ledger.merge_with(prior)
         _repo().update_delivery_counts(
-            run_date=today,
-            run_mode=run_mode,
+            run_date=run.run_date,
+            run_mode=run.run_mode,
             surfaced_count=surfaced_count,
             ledger_row=merged.to_row(),
         )
@@ -597,10 +581,10 @@ def _update_delivery_summary_counts(
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
 
 
-def _record_delivery(*, delivered_at: datetime) -> None:
-    """Stamp delivered_at on today's daily_summaries row — the anchor the
-    next run's delivery window starts from. `delivered_at` is the instant
-    this run's fetch ran (its window's "now"), not the send time: the anchor
+def _record_delivery(run: RunInstant) -> None:
+    """Stamp delivered_at on the run's daily_summaries row — the anchor the
+    next run's delivery window starts from. The stamp is `run.now`, the
+    instant this run's fetch ran (its window's "now"), not the send time: the anchor
     may only move past rows this email actually carried. Called only after
     the send succeeded, so a failed send leaves the previous anchor in place
     and the next successful email reaches back over the rows that never went
@@ -613,9 +597,9 @@ def _record_delivery(*, delivered_at: datetime) -> None:
     silent no-op on production accounting."""
     try:
         _repo().record_delivery(
-            run_date=delivered_at.date().isoformat(),
-            run_mode=config.run_mode(),
-            delivered_at=delivered_at,
+            run_date=run.run_date,
+            run_mode=run.run_mode,
+            delivered_at=run.now,
         )
     except Exception as exc:
         logger.warning("Failed to stamp delivered_at on daily_summaries: %s", exc)
@@ -944,6 +928,7 @@ def prepare_report(
     rows: list[dict],
     macro_summary: dict | None,
     *,
+    run: RunInstant,
     report_config: dict | None = None,
 ) -> ReportModel:
     """Assemble the report model and perform the run's two side effects —
@@ -951,13 +936,15 @@ def prepare_report(
     thematic synthesis (LLM seam) — exactly once, in that order.
 
     Both effects are skipped for the no_news variant: that path never wrote
-    back, and there is nothing to synthesize. report_config=None loads
+    back, and there is nothing to synthesize. `run` keys the write-back on
+    the run instant's run_date + run_mode. report_config=None loads
     market_pulse_config.yaml; tests pass a dict. The returned model is ready
     for render_report."""
     cfg = report_config if report_config is not None else config.mp_config()
     model = assemble_report(rows, macro_summary, cfg)
     if model.variant == "daily":
         _update_delivery_summary_counts(
+            run=run,
             surfaced_count=model.surfaced_count,
             ledger=model.ledger,
         )
@@ -1148,10 +1135,11 @@ def _render_no_news_email(
 # 5. Email delivery
 # ---------------------------------------------------------------------------
 
-def send_email(html_content: str) -> None:
+def send_email(html_content: str, *, run: RunInstant) -> None:
     """Send the HTML digest via the Resend HTTP API with exponential backoff retry.
 
     Uses ``SMTP_PASS`` as the Resend API key so no secret changes are required.
+    The subject's date and its ``[TEST]`` marker come from the run instant.
 
     Raises:
         requests.HTTPError: On a permanent (non-transient) HTTP error response.
@@ -1166,11 +1154,8 @@ def send_email(html_content: str) -> None:
         if e.strip()
     ]
 
-    subject = (
-        f"Americhem Market-Pulse \u2014 "
-        f"{datetime.now().strftime('%B %d, %Y')}"
-    )
-    if _is_test_mode():
+    subject = f"Americhem Market-Pulse \u2014 {run.subject_date}"
+    if run.test_mode:
         subject = f"[TEST] {subject}"
 
     payload = {
@@ -1237,15 +1222,12 @@ def send_email(html_content: str) -> None:
 # 6. Entrypoint
 # ---------------------------------------------------------------------------
 
-def execute_pipeline() -> None:
-    # One clock reading per run. It is both the window's "now" and, after a
-    # successful send, the stamp the next run anchors on — so a row written by
-    # a concurrent ingestion between this fetch and the send (created_at after
-    # `now`, absent from this email) is still inside tomorrow's window. Stamping
-    # the send time instead would put such a row before the anchor for good.
-    now           = _utcnow()
-    data          = fetch_todays_intelligence(now=now)
-    macro_summary = fetch_macro_summary()
+def execute_pipeline(run: RunInstant) -> None:
+    # `run` is the run instant main() read once (see CONTEXT.md): its `now` is
+    # the window's "now" and the delivered_at stamp (see _record_delivery);
+    # its run_mode keys every daily_summaries read and write.
+    data          = fetch_todays_intelligence(run)
+    macro_summary = fetch_macro_summary(run)
 
     if not data:
         logger.warning("No intelligence records for today — sending no-news notification.")
@@ -1258,20 +1240,17 @@ def execute_pipeline() -> None:
             critical_count, strategic_count, routine_count,
         )
 
-    model = prepare_report(data, macro_summary)
-    html = render_report(
-        model,
-        today_str=datetime.now().strftime("%A, %B %d, %Y"),
-        test_mode=_is_test_mode(),
-    )
-    send_email(html)
-    _record_delivery(delivered_at=now)
+    model = prepare_report(data, macro_summary, run=run)
+    html = render_report(model, today_str=run.header_date, test_mode=run.test_mode)
+    send_email(html, run=run)
+    _record_delivery(run)
 
 
 def main() -> None:
-    """Cron entrypoint: fail fast on missing secrets, then run the pipeline."""
+    """Cron entrypoint: fail fast on missing secrets, read the run instant
+    once, then run the pipeline."""
     config.validate_environment("delivery")
-    execute_pipeline()
+    execute_pipeline(RunInstant.current())
 
 
 if __name__ == "__main__":
