@@ -29,10 +29,12 @@ class IntelligenceRepo(Protocol):
     def exists_by_hash(self, url_hash: str) -> bool: ...
     def upsert_insight(self, payload: dict) -> None: ...
     def recent_headlines(self, hours: int) -> set[str]: ...
-    def fetch_recent(self, hours: int) -> list[dict]: ...
+    def fetch_since(self, cutoff: datetime) -> list[dict]: ...
     # daily_summaries (one row per (run_date, run_mode))
     def upsert_summary(self, row: dict) -> None: ...
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]: ...
+    def fetch_last_delivery(self, *, run_mode: str, before_date: str) -> Optional[datetime]: ...
+    def record_delivery(self, *, run_date: str, run_mode: str, delivered_at: datetime) -> None: ...
     def get_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]: ...
     def require_delivery_state(self, run_date: str, run_mode: str) -> Optional[dict]: ...
     def update_delivery_counts(
@@ -92,19 +94,22 @@ class SupabaseIntelligenceRepo:
             logger.error("Supabase recent_headlines failed: %s", exc)
             return set()
 
-    def fetch_recent(self, hours: int) -> list[dict]:
+    def fetch_since(self, cutoff: datetime) -> list[dict]:
+        """Rows created strictly after `cutoff` (naive datetimes are UTC).
+
+        Strict so a row stored at the instant of the last delivery — which
+        that email already carried — is not delivered twice."""
         try:
-            cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
             result = (
                 self._supabase().table("daily_intelligence")
                 .select("*")
-                .gte("created_at", cutoff)
+                .gt("created_at", cutoff.isoformat())
                 .order("americhem_impact_score", desc=True)
                 .execute()
             )
             return list(result.data or [])
         except Exception as exc:
-            logger.error("Supabase fetch_recent failed: %s", exc)
+            logger.error("Supabase fetch_since failed: %s", exc)
             return []
 
     def upsert_summary(self, row: dict) -> None:
@@ -187,9 +192,52 @@ class SupabaseIntelligenceRepo:
             .execute()
         )
 
+    def fetch_last_delivery(self, *, run_mode: str, before_date: str) -> Optional[datetime]:
+        """delivered_at of the most recent `run_mode` delivery on a run_date
+        strictly before `before_date`, as a naive UTC datetime; None when no
+        such delivery is recorded (or the read fails — including the
+        pre-migration-007 'column does not exist', which degrades the caller
+        to its wall-clock fallback)."""
+        try:
+            result = (
+                self._supabase().table("daily_summaries")
+                .select("delivered_at")
+                .eq("run_mode", run_mode)
+                .lt("run_date", before_date)
+                .not_.is_("delivered_at", "null")
+                .order("delivered_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            return _coerce_timestamp(rows[0].get("delivered_at")) if rows else None
+        except Exception as exc:
+            logger.error("Supabase fetch_last_delivery failed: %s", exc)
+            return None
 
-def _coerce_created_at(value: object) -> Optional[datetime]:
-    """Normalize a stored created_at value into a naive UTC datetime.
+    def record_delivery(self, *, run_date: str, run_mode: str, delivered_at: datetime) -> None:
+        """Stamp delivered_at on the (run_date, run_mode) summary row. UPDATE
+        semantics: a silent no-op when no row matches."""
+        (
+            self._supabase().table("daily_summaries")
+            .update({"delivered_at": _utc_isoformat(delivered_at)})
+            .eq("run_date", run_date)
+            .eq("run_mode", run_mode)
+            .execute()
+        )
+
+
+def _utc_isoformat(value: datetime) -> str:
+    """ISO-8601 with an explicit UTC offset; naive input is taken as UTC (the
+    convention every timestamp in this module follows)."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
+def _coerce_timestamp(value: object) -> Optional[datetime]:
+    """Normalize a stored timestamp (created_at, delivered_at) into a naive
+    UTC datetime.
 
     Supabase returns ISO strings with an explicit UTC offset (e.g.
     "2026-05-26T10:00:00+00:00"). datetime.fromisoformat() parses those
@@ -238,17 +286,22 @@ class InMemoryIntelligenceRepo:
         self._articles[url_hash] = row
 
     def recent_headlines(self, hours: int) -> set[str]:
-        return {row.get("headline", "") for row in self.fetch_recent(hours)
-                if row.get("headline")}
-
-    def fetch_recent(self, hours: int) -> list[dict]:
         cutoff = self._now() - timedelta(hours=hours)
+        return {
+            row["headline"] for row in self._articles.values()
+            if row.get("headline")
+            and (ts := _coerce_timestamp(row.get("created_at"))) is not None
+            and ts >= cutoff
+        }
+
+    def fetch_since(self, cutoff: datetime) -> list[dict]:
+        cutoff = _coerce_timestamp(cutoff)
         rows: list[dict] = []
         for row in self._articles.values():
-            ts = _coerce_created_at(row.get("created_at"))
+            ts = _coerce_timestamp(row.get("created_at"))
             if ts is None:
                 continue
-            if ts >= cutoff:
+            if ts > cutoff:
                 rows.append(dict(row))
         return rows
 
@@ -302,6 +355,21 @@ class InMemoryIntelligenceRepo:
         existing["surfaced_count"] = surfaced_count
         for k, v in ledger_row.items():
             existing[k] = v
+
+    def fetch_last_delivery(self, *, run_mode: str, before_date: str) -> Optional[datetime]:
+        stamps = [
+            ts for (rd, rm), row in self._summaries.items()
+            if rm == run_mode and rd < before_date
+            and (ts := _coerce_timestamp(row.get("delivered_at"))) is not None
+        ]
+        return max(stamps) if stamps else None
+
+    def record_delivery(self, *, run_date: str, run_mode: str, delivered_at: datetime) -> None:
+        row = self._summaries.get((run_date, run_mode))
+        if row is None:
+            # Matches Supabase: UPDATE on no matching row is a silent no-op.
+            return
+        row["delivered_at"] = _utc_isoformat(delivered_at)
 
 
 # Module-level lazy singleton. Tests monkeypatch this function.

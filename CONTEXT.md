@@ -96,6 +96,20 @@ zero-I/O purity is untouched.
   (no Executive Summary / Macroeconomic Outlook), and in the test-mode
   fallback `_summary_has_content` ranks content-fullness before recency so an
   accounting-only row never shadows a content-full one.
+- **Delivery window** (`delivery_engine.delivery_window`, `DeliveryWindow`) —
+  the set of `daily_intelligence` rows one email carries: everything created
+  **strictly after** the last recorded production delivery
+  (`daily_summaries.delivered_at` on the most recent *earlier* `run_date`). The
+  anchor is production-only in every run mode (a QA re-render sees what
+  production saw) and strictly-earlier-day (a same-day retry re-sends the whole
+  day's window). `delivered_at` is stamped by `_record_delivery` only **after**
+  the send succeeds, so a failed send widens the next window over the rows that
+  never went out. Without any recorded delivery — fresh DB, or migration 007 not
+  applied — the window falls back to the legacy wall-clock lookback
+  (`FALLBACK_LOOKBACK_HOURS` 24; 72 on Mondays). Named after issue #64: the
+  old "rows created in the last 24 h" window was relative to the delivery
+  step's own clock, so a late scheduled start (13:53 UTC on 2026-08-27) closed
+  it after every row of the previous day and silently dropped them.
 - **Synthesis outage** (`ingestion_engine.is_synthesis_outage`) — a run that
   stored nothing because **every** LLM synthesis call failed, as opposed to a
   quiet news day where the LLM answered and there was simply nothing material.

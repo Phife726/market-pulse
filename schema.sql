@@ -68,7 +68,10 @@ create table if not exists daily_summaries (
     screened_count integer,
     surfaced_count integer,
     suppression_breakdown jsonb,
-    suppression_samples jsonb
+    suppression_samples jsonb,
+    -- When the email for this run actually went out; the next delivery's
+    -- window starts here (migration 007). NULL until a send succeeds.
+    delivered_at timestamptz
 );
 
 create unique index if not exists idx_daily_summaries_run_date_mode_unique
