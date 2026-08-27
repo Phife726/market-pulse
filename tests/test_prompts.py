@@ -194,15 +194,56 @@ def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
     assert "Where it does not, take one of the exits below" in system
 
 
+_PROD_STYLE_CFG = {"reporting": {"supporting_impact_threshold": 3,
+                                 "visible_impact_threshold": 6}}
+
+
 def test_rule6_binds_the_low_exposure_templates_to_a_low_score():
     """An honest low-exposure So-What must land in the appendix band, not above
     it (the card would read 'Impact: 8/10' next to 'no real exposure') and not
-    below it (the row would vanish from the email entirely)."""
-    system = _insight_spec().system
+    below it (the row would vanish from the email entirely). With the
+    production thresholds (3 / 6) the band is 3–4."""
+    system = _insight_spec(_PROD_STYLE_CFG).system
     assert "SCORE MUST MATCH THE TEMPLATE" in system
     assert "americhem_impact_score of 3 or 4" in system
     assert "never above 4" in system
     assert "never below 3" in system
+
+
+def test_rule6_band_is_derived_from_scoring_not_a_literal():
+    """Issue #65: the band follows Scoring.from_config — with the code
+    defaults (supporting 4 / visible 6) it is 4–5, so a
+    supporting_impact_threshold rollback can no longer strand template rows
+    below the appendix floor."""
+    system = _insight_spec().system
+    assert "americhem_impact_score of 4 or 5" in system
+    assert "never above 5" in system
+    assert "never below 4" in system
+    assert "3 or 4" not in system
+
+
+def test_rule7_uncertain_score_is_the_top_of_the_rule6_band():
+    """RULE 7's 'set americhem_impact_score to N and apply Rule 6' must name a
+    score inside the RULE 6 band, whatever the config — one derivation."""
+    assert "Set americhem_impact_score to 4 and apply Rule 6" in _insight_spec(_PROD_STYLE_CFG).system
+    assert "Set americhem_impact_score to 5 and apply Rule 6" in _insight_spec().system
+
+
+def test_rule6_band_collapses_to_one_score_when_supporting_abuts_visible():
+    system = _insight_spec({"reporting": {"supporting_impact_threshold": 5,
+                                          "visible_impact_threshold": 6}}).system
+    assert "americhem_impact_score of exactly 5" in system
+    assert "5 or 6" not in system
+    assert "Set americhem_impact_score to 5 and apply Rule 6" in system
+
+
+def test_rule6_template_prefixes_are_one_definition_with_the_suppression_exemption():
+    """report.py exempts rows whose So-What opens with one of these prefixes
+    from delivery suppression rule 1; the prompt must promise exactly them."""
+    assert prompts.LOW_EXPOSURE_TEMPLATE_PREFIXES == ("Adjacent market", "Limited direct exposure")
+    system = _insight_spec().system
+    for prefix in prompts.LOW_EXPOSURE_TEMPLATE_PREFIXES:
+        assert f'"{prefix}' in system
 
 
 # ---------------------------------------------------------------------------

@@ -135,11 +135,13 @@ def _render_card(item: dict) -> str:
     This is the card the email actually ships (per the 2026-05-21 commercial-brief
     redesign). The segment is the block header, so it is not repeated in the card;
     `recommended_action` and `impact_rationale` are deliberately not shown here —
-    the action is consumed by the suppression policy, not the reader."""
+    the action is consumed by the suppression policy, not the reader.
+    Untrusted values are HTML-escaped and the href passes through
+    _safe_http_url (an unsafe URL renders the headline unlinked)."""
     meta = _render_meta_strip(item)
-    headline = item.get("headline", "")
-    source_url = item.get("source_url", "#")
-    americhem_impact = item.get("americhem_impact", "")
+    headline = html.escape(item.get("headline", "") or "")
+    url = _safe_http_url(item.get("source_url"))
+    americhem_impact = html.escape(item.get("americhem_impact", "") or "")
     tag = item.get("sentiment_tag") or ""
     glyph = _SENTIMENT_TAG_GLYPHS.get(tag)
     glyph_html = (
@@ -153,13 +155,20 @@ def _render_card(item: dict) -> str:
         f'{glyph_html}<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
         if americhem_impact else ""
     )
+    headline_style = (
+        f'font-size:14px;font-weight:700;color:{_BRAND_NAVY};'
+        f'font-family:Arial,sans-serif;text-decoration:none;line-height:1.35;'
+    )
+    if url:
+        safe = html.escape(url, quote=True)
+        headline_html = f'<a href="{safe}" style="{headline_style}">{headline}</a>'
+    else:
+        headline_html = f'<span style="{headline_style}">{headline}</span>'
     return (
         f'<tr><td style="padding:6px 0 10px 0;">'
         f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
         f'font-family:Arial,sans-serif;">{meta}</p>'
-        f'<a href="{source_url}" style="font-size:14px;font-weight:700;'
-        f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
-        f'text-decoration:none;line-height:1.35;">{headline}</a>'
+        f'{headline_html}'
         f'{so_what_html}'
         f'</td></tr>'
     )

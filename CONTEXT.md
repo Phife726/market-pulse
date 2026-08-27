@@ -166,7 +166,18 @@ zero-I/O purity is untouched.
   compactly below Commercial Segment Watch, without the "So what" narrative.
   Never affects `surfaced_count`. Rows shown here are excluded from the
   `weak_relevance` count (but still counted in the broader
-  `below_impact_threshold`).
+  `below_impact_threshold`). Enterprise / Cross-Segment rows below
+  `enterprise_min_impact` never reach it (delivery suppression rule 1) — except
+  **low-exposure template** rows (below), which rule 1 exempts while they are
+  below the visible threshold.
+- **Low-exposure template** — one of the two honest RULE 6 So-What openers,
+  `Adjacent market — …` / `Limited direct exposure — …`
+  (`prompts.LOW_EXPOSURE_TEMPLATE_PREFIXES`, one definition shared by the
+  prompt and `report._is_low_exposure_template`). The prompt binds them to the
+  supporting band (`prompts.low_exposure_score_band`, derived from `Scoring`)
+  on the promise that they reach the appendix; because an adjacent-market row
+  is Enterprise / Cross-Segment by construction, rule 1 exempts template rows
+  below the visible threshold (issue #65). Never a visible card.
 - **Report model** (`report.py`, `ReportModel`) — the assembled daily report as
   plain frozen data: `variant` (`daily` / `no_news`), the final segment groups
   (capped only when configured; caps default to `null` = uncapped),

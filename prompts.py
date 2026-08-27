@@ -3,7 +3,7 @@
 Text assembly only: callers keep validation, the LLM seam (`llm.py`) keeps
 transport. Config enters as a dict (same discipline as `report.py`); no I/O,
 no clock, no env reads — purity is enforced by the import graph (this module
-imports only `insight` and stdlib).
+imports only `insight`, `scoring`, and stdlib).
 
 The unit of exchange is the **prompt spec** (`PromptSpec` / `MacroPrompt`) —
 a fully-assembled call as plain frozen data, splatted into the LLM seam via
@@ -23,6 +23,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import insight
+from scoring import Scoring
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,38 @@ _FALLBACK_SIGNAL_TYPE_LIST = (
     "Competitive | Customer | Regulatory | Sustainability | "
     "Supply Chain | Technology | Macro | Other"
 )
+
+
+# The RULE 6 honest low-exposure So-What openers. One definition: RULE 6 is
+# assembled from this tuple, and report._apply_delivery_suppression exempts a
+# row whose americhem_impact opens with one of them from rule 1 (the
+# Enterprise / Cross-Segment low-impact drop) while it sits below the visible
+# threshold — issue #65. Change the wording here and both sides move together.
+LOW_EXPOSURE_TEMPLATE_PREFIXES: tuple[str, ...] = ("Adjacent market", "Limited direct exposure")
+
+
+def low_exposure_score_band(scorer: Scoring) -> tuple[int, int]:
+    """The americhem_impact_score band RULE 6 binds the low-exposure templates
+    to: (low, high). low is the supporting threshold — the appendix floor, so a
+    template row is never stranded below the email; high is one above it but
+    always below the visible threshold, so a template row never becomes a card.
+    Production (3 / 6) gives (3, 4); the code defaults (4 / 6) give (4, 5)."""
+    low = scorer.supporting
+    high = max(low, min(low + 1, scorer.visible - 1))
+    return low, high
+
+
+def _build_low_exposure_score_rule(scorer: Scoring) -> str:
+    """RULE 6's 'SCORE MUST MATCH THE TEMPLATE' sub-rule, band from Scoring."""
+    low, high = low_exposure_score_band(scorer)
+    band = f"{low} or {high}" if low != high else f"exactly {low}"
+    names = " or ".join(f'"{prefix}"' for prefix in LOW_EXPOSURE_TEMPLATE_PREFIXES)
+    return (
+        "- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Pair\n"
+        f"  {names} wording with an americhem_impact_score of {band}\n"
+        f"  — never above {high} (that would overstate it), and never below {low} "
+        "(the article still passed Rule 7)."
+    )
 
 
 def _taxonomy_block(config_block: dict, fallback: str) -> str:
@@ -228,12 +261,10 @@ naming a business unit speculatively.
   describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
 - UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
   through one of the RULE 4 commercial segments. If the market is adjacent to but outside
-  those segments, write: "Adjacent market — no direct Americhem participation indicated."
+  those segments, write: "{adjacent_market_template} — no direct Americhem participation indicated."
 - HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
-  "Limited direct exposure — [specific reason]" instead of inventing a commercial effect.
-- SCORE MUST MATCH THE TEMPLATE: either template implies low materiality. Pair
-  "Adjacent market" or "Limited direct exposure" wording with an americhem_impact_score of 3 or 4
-  — never above 4 (that would overstate it), and never below 3 (the article still passed Rule 7).
+  "{limited_exposure_template} — [specific reason]" instead of inventing a commercial effect.
+{low_exposure_score_rule}
 Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
 Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
 
@@ -243,7 +274,7 @@ absolutely zero connection to plastics, polymers, chemicals, materials, manufact
 composites, packaging, or supply chain dynamics.
 Examples of noise to DISCARD: sports results, political news, celebrity stories, unrelated
 financial instruments (stock tips, crypto), or general HR policy.
-When relevance is uncertain, do NOT discard. Set americhem_impact_score to 4 and apply Rule 6.
+When relevance is uncertain, do NOT discard. Set americhem_impact_score to {uncertain_relevance_score} and apply Rule 6.
 
 If the article passes all rules, extract data into this strict JSON schema.
 Output ONLY the JSON object — no preamble, no markdown, no explanation.
@@ -272,11 +303,18 @@ def _insight_system_prompt(config: dict) -> str:
     .format() — _SYSTEM_PROMPT_BASE's literal JSON braces are load-bearing."""
     rule4 = _build_commercial_segment_rule(config)
     rule5 = _build_signal_type_rule(config)
+    scorer = Scoring.from_config(config)
+    adjacent, limited = LOW_EXPOSURE_TEMPLATE_PREFIXES
+    _, uncertain_score = low_exposure_score_band(scorer)
     return (
         _SYSTEM_PROMPT_BASE
         .replace("{english_output_rule}", ENGLISH_OUTPUT_RULE)
         .replace("{rule4}", rule4)
         .replace("{rule5}", rule5)
+        .replace("{adjacent_market_template}", adjacent)
+        .replace("{limited_exposure_template}", limited)
+        .replace("{low_exposure_score_rule}", _build_low_exposure_score_rule(scorer))
+        .replace("{uncertain_relevance_score}", str(uncertain_score))
     )
 
 
