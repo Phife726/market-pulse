@@ -243,3 +243,44 @@ def test_discovery_providers_registry_order_and_singleton():
     assert discovery._discovery_providers() is providers
     discovery._reset_discovery_providers()
     assert discovery._discovery_providers() is not providers
+
+
+# ── Serper time window ────────────────────────────────────────────────────────
+# Google stopped honoring the hour-count form: on 2026-08-27 a live probe
+# (scripts/probe_serper.py) showed `tbs=qdr:h24` returning exactly the
+# past-hour `qdr:h` results for five large companies while the documented
+# past-day `qdr:d` returned 2–9 each — the 2026-08-26 yield collapse (#63).
+# The window must therefore be expressed in days, never hours.
+
+@pytest.mark.parametrize("hours, expected", [
+    (24, "qdr:d"),
+    (48, "qdr:d2"),
+    (72, "qdr:d3"),
+    (1, "qdr:d"),    # sub-day lookbacks round *up* to a day — never an hour form
+    (25, "qdr:d2"),
+])
+def test_serper_time_filter_is_expressed_in_whole_days(hours, expected):
+    assert discovery.serper_time_filter(hours) == expected
+
+
+def test_discover_urls_sends_a_day_window_not_an_hour_count(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"news": []}
+
+    def fake_post(url, json, headers, timeout):
+        captured.update(json)
+        return FakeResponse()
+
+    monkeypatch.setenv("SERPER_API_KEY", "test_key")
+    monkeypatch.setattr("discovery.requests.post", fake_post)
+
+    discovery.discover_urls("test query", 24, 2)
+
+    assert captured["tbs"] == "qdr:d"
+    assert not captured["tbs"].startswith("qdr:h")
