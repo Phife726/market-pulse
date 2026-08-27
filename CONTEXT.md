@@ -170,7 +170,13 @@ zero-I/O purity is untouched.
   `below_impact_threshold`). Enterprise / Cross-Segment rows below
   `enterprise_min_impact` never reach it (delivery suppression rule 1) — except
   **low-exposure template** rows (below), which rule 1 exempts while they are
-  below the visible threshold.
+  below the visible threshold. Rows from an **appendix-excluded category**
+  (`reporting.appendix_exclude_categories` — production: the `macro_*`
+  discovery groups, issue #73) never reach it either, whatever their score in
+  the band: those groups feed the Macroeconomic Outlook's source pack, not
+  headline rows. Appendix-only — a macro-group row at or above the visible
+  threshold is still a card, and ingestion is untouched; each excluded
+  appendix-band row is ledgered as `appendix_excluded_category`.
 - **Low-exposure template** — one of the two honest RULE 6 So-What openers,
   `Adjacent market — …` / `Limited direct exposure — …`
   (`prompts.LOW_EXPOSURE_TEMPLATE_PREFIXES`, one definition shared by the

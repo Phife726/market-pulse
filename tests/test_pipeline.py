@@ -2465,6 +2465,130 @@ _VALID_MACRO_OUTLOOK = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Issue #73 — appendix-only category exclusion (macro-group rows)
+# ---------------------------------------------------------------------------
+
+_EXCLUDE_CFG = {"reporting": {"visible_impact_threshold": 6,
+                              "supporting_impact_threshold": 3,
+                              "appendix_exclude_categories": ["macro_inflation_rates",
+                                                              "macro_energy_freight"]}}
+
+
+def _macro_row(url_hash, score, *, category="macro_inflation_rates", headline,
+               segment="Enterprise / Cross-Segment"):
+    return {**_make_new_article(url_hash, score, commercial_segment=segment, headline=headline),
+            "category": category,
+            "americhem_impact": f"Limited direct exposure — {headline.lower()} commentary only."}
+
+
+def test_appendix_excludes_configured_categories():
+    """Issue #73: rows discovered by a configured category (the macro_* groups)
+    never reach Additional Articles, whatever their score in the band — they
+    exist to feed the Macroeconomic Outlook, not to be headline rows."""
+    macro = _macro_row("macro", 4, headline="Lower energy prices fail to fix inflation pressures")
+    keep = _make_new_article("keep", 3, commercial_segment="Packaging",
+                             headline="Barrier film converter adds a line")
+    model = assemble_report([macro, keep], config=_EXCLUDE_CFG)
+    assert _appendix_hashes(model) == ["keep"]
+
+
+def test_appendix_exclusion_matches_category_exactly_not_by_prefix():
+    """The list is exact group keys: an unlisted macro_* group (or a
+    look-alike) is not excluded — the config↔targets parity test is what
+    keeps the list complete."""
+    listed = _macro_row("listed", 4, category="macro_energy_freight",
+                        headline="Russian tanker freight rates surge")
+    unlisted = _macro_row("unlisted", 4, category="macro_automotive",
+                          headline="Light-vehicle sales pace slows in July")
+    model = assemble_report([listed, unlisted], config=_EXCLUDE_CFG)
+    assert _appendix_hashes(model) == ["unlisted"]
+
+
+def test_appendix_exclusion_is_recorded_in_the_ledger_with_samples():
+    """The drop is accounted for: one count per excluded appendix-band row,
+    with samples, under the delivery-owned reason — so the
+    daily_summaries.suppression_breakdown write-back shows it."""
+    m1 = _macro_row("m1", 4, headline="Lower energy prices fail to fix inflation pressures")
+    m2 = _macro_row("m2", 3, category="macro_energy_freight",
+                    headline="Russian tanker freight rates surge")
+    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+                             headline="Packaging-specific near-threshold signal kept")
+    model = assemble_report([m1, m2, keep], config=_EXCLUDE_CFG)
+    assert dict(model.ledger.breakdown).get("appendix_excluded_category") == 2
+    sampled = {s.url for s in model.ledger.samples if s.reason == "appendix_excluded_category"}
+    assert sampled == {m1["source_url"]}  # both rows share the fixture URL; deduped by (reason, url, title)
+    titles = {s.title for s in model.ledger.samples if s.reason == "appendix_excluded_category"}
+    assert titles == {m1["headline"], m2["headline"]}
+
+
+def test_appendix_exclusion_never_touches_visible_cards():
+    """Appendix-only: a macro-group row scored at/above the visible threshold
+    is still a visible card and is not counted under the new reason."""
+    macro6 = {**_macro_row("macro6", 7, headline="Fed cuts rates; resin buyers expect cheaper credit",
+                           segment="Building & Construction"),
+              "americhem_impact": "Cheaper credit lifts housing starts and construction resin pull-through."}
+    model = assemble_report([macro6], config=_EXCLUDE_CFG)
+    group_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert group_hashes == {"macro6"}
+    assert "appendix_excluded_category" not in dict(model.ledger.breakdown)
+
+
+def test_appendix_exclusion_only_counts_rows_that_would_have_been_appendix_rows():
+    """A macro-group row already hidden for another reason (below the
+    supporting band, or dropped by delivery suppression) is not double-counted
+    under the new reason — the reason names the appendix decision only."""
+    below_band = _macro_row("low", 2, headline="Crypto index drifts lower on thin volume")
+    non_template_cross = {**_macro_row("cross", 4, headline="Bitcoin futures top eighty thousand"),
+                          "americhem_impact": "Ordinary So-What, so rule 1 drops it first."}
+    model = assemble_report([below_band, non_template_cross], config=_EXCLUDE_CFG)
+    assert "appendix_excluded_category" not in dict(model.ledger.breakdown)
+    assert dict(model.ledger.breakdown).get("enterprise_cross_segment_low_impact") == 1
+
+
+def test_appendix_exclusion_absent_or_malformed_config_excludes_nothing():
+    """Config-only rollback: no key, an empty list, or a malformed value means
+    no exclusion (a bad config must not silently shrink the appendix)."""
+    macro = _macro_row("macro", 4, headline="Lower energy prices fail to fix inflation pressures")
+    for reporting in ({}, {"appendix_exclude_categories": None},
+                      {"appendix_exclude_categories": []},
+                      {"appendix_exclude_categories": "macro_inflation_rates"},
+                      {"appendix_exclude_categories": 42}):
+        cfg = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
+                             **reporting}}
+        model = assemble_report([macro], config=cfg)
+        assert _appendix_hashes(model) == ["macro"], reporting
+        assert "appendix_excluded_category" not in dict(model.ledger.breakdown)
+
+
+def test_appendix_excluded_rows_still_count_as_weak_relevance():
+    """An excluded weak-band row is shown nowhere, so it stays inside the
+    broader weak_relevance / below_impact_threshold counts — the new reason
+    explains the hiding, it does not replace the existing accounting."""
+    macro = _macro_row("macro", 4, headline="Lower energy prices fail to fix inflation pressures")
+    model = assemble_report([macro], config=_EXCLUDE_CFG)
+    breakdown = dict(model.ledger.breakdown)
+    assert breakdown.get("weak_relevance") == 1
+    assert breakdown.get("below_impact_threshold") == 1
+    assert breakdown.get("appendix_excluded_category") == 1
+
+
+def test_config_appendix_exclusions_match_the_macro_groups_in_targets():
+    """Parity guard (issue #73): the production exclusion list is exactly the
+    set of macro_* concept groups in targets.yaml, so adding a macro group
+    without listing it here fails CI instead of leaking its rows into the
+    appendix — and a stale entry for a removed group is caught too."""
+    import yaml
+    with open("market_pulse_config.yaml") as fh:
+        cfg = yaml.safe_load(fh)
+    with open("targets.yaml") as fh:
+        targets = yaml.safe_load(fh)
+    macro_groups = {k for k in targets if k.startswith("macro_")}
+    assert macro_groups, "targets.yaml has no macro_* groups"
+    assert set(cfg["reporting"]["appendix_exclude_categories"]) == macro_groups
+
+
+
 def test_report_model_carries_macro_outlook():
     row = _make_new_article("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card to make a daily model")
@@ -5785,6 +5909,48 @@ def test_render_qa_debug_section_includes_unscrapable_domain():
     html = _render_qa_debug_section(macro)
     assert "unscrapable domain" in html
     assert ">4</td>" in html
+
+
+def test_render_qa_debug_section_lists_every_ledger_code():
+    """The QA breakdown's display order is derived from the ledger taxonomy,
+    so a code added to suppression_ledger (issue #73's
+    appendix_excluded_category, and synthesis_failed before it) gets a labeled
+    row automatically instead of silently folding into the suppressed total.
+    Both sides of the comparison are derived — nothing hand-listed."""
+    from delivery_engine import _render_qa_debug_section
+    from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, label_for
+    codes = sorted(INGESTION_CODES | DELIVERY_CODES)
+    macro = {
+        "screened_count": 200,
+        "surfaced_count": 5,
+        "suppression_breakdown": {code: i + 1 for i, code in enumerate(codes)},
+        "suppression_samples": [],
+    }
+    html = _render_qa_debug_section(macro)
+    for i, code in enumerate(codes):
+        assert f"{label_for(code)}</td>" in html, code
+        assert f">{i + 1}</td>" in html, code
+
+
+def test_render_qa_debug_section_orders_ingestion_codes_before_delivery_codes():
+    """Stable reading order for the QA strip: ingestion-side rows first, then
+    delivery-side, each in taxonomy order."""
+    from delivery_engine import _render_qa_debug_section
+    from suppression_ledger import label_for
+    macro = {
+        "screened_count": 10,
+        "surfaced_count": 1,
+        "suppression_breakdown": {
+            "appendix_excluded_category": 2,   # delivery (last in taxonomy)
+            "below_impact_threshold": 3,       # delivery (first in taxonomy)
+            "synthesis_failed": 1,             # ingestion
+        },
+        "suppression_samples": [],
+    }
+    html = _render_qa_debug_section(macro)
+    positions = [html.index(label_for(c)) for c in
+                 ("synthesis_failed", "below_impact_threshold", "appendix_excluded_category")]
+    assert positions == sorted(positions)
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from suppression_ledger import SuppressionLedger, label_for
+from suppression_ledger import ALL_CODES, SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
 from llm import _llm
 import prompts
@@ -359,16 +359,11 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     suppressed_total = sum(int(v) for v in breakdown.values())
 
     rows_html = ""
-    # Stable display order: ingestion-side first, then delivery-side.
-    display_order = [
-        "duplicate_url", "semantic_duplicate", "llm_discard", "scrape_failed",
-        "unscrapable_domain", "zoominfo_company_mismatch",
-        "below_impact_threshold", "weak_relevance",
-        "duplicate_headline", "semantic_duplicate_headline",
-        "product_listing", "job_posting", "generic_market_report",
-        "unrelated_color_result", "enterprise_cross_segment_low_impact",
-    ]
-    for code in display_order:
+    # Stable display order — ingestion-side first, then delivery-side — derived
+    # from the ledger taxonomy so a new reason code gets its labeled row without
+    # a hand-copied list to forget (the old copy here had already drifted:
+    # synthesis_failed was folded into the total but never listed).
+    for code in ALL_CODES:
         if code in breakdown:
             label = label_for(code)
             rows_html += (

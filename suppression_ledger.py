@@ -26,10 +26,16 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("generic_market_report",               "generic market report"),
     ("unrelated_color_result",              "unrelated color result"),
     ("enterprise_cross_segment_low_impact", "Enterprise / Cross-Segment, low impact"),
+    ("appendix_excluded_category",          "appendix-excluded category (macro group)"),
 )
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)
 DELIVERY_CODES:  frozenset[str] = frozenset(c for c, _ in _DELIVERY_REASONS)
+# Every code in stable reading order: ingestion-side first, then delivery-side,
+# each in taxonomy order. The one ordered view of the taxonomy — anything that
+# enumerates reasons for display (the QA breakdown strip) iterates this instead
+# of keeping its own copy, so a new code cannot be left off a hand-copied list.
+ALL_CODES: tuple[str, ...] = tuple(c for c, _ in _INGESTION_REASONS + _DELIVERY_REASONS)
 
 _LABELS: dict[str, str] = dict(_INGESTION_REASONS + _DELIVERY_REASONS)
 _SIDE_OF: dict[str, Side] = (

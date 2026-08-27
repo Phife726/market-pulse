@@ -3,6 +3,7 @@ from suppression_ledger import (
     SAMPLES_CAP,
     INGESTION_CODES,
     DELIVERY_CODES,
+    ALL_CODES,
     side_of,
     label_for,
     SuppressionLedger,
@@ -15,7 +16,7 @@ def test_taxonomy_partitions():
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
     assert len(INGESTION_CODES) == 7
-    assert len(DELIVERY_CODES) == 9
+    assert len(DELIVERY_CODES) == 10
 
 
 def test_samples_cap_is_ten():
@@ -30,6 +31,24 @@ def test_side_of_returns_correct_side():
 def test_label_for_returns_human_label():
     assert label_for("duplicate_url") == "duplicate URL"
     assert label_for("enterprise_cross_segment_low_impact") == "Enterprise / Cross-Segment, low impact"
+
+
+def test_all_codes_is_the_ordered_union_ingestion_first():
+    """ALL_CODES is the one ordered view of the taxonomy (the QA breakdown
+    strip iterates it): every code exactly once, ingestion-side before
+    delivery-side."""
+    assert set(ALL_CODES) == INGESTION_CODES | DELIVERY_CODES
+    assert len(ALL_CODES) == len(INGESTION_CODES) + len(DELIVERY_CODES)
+    sides = [side_of(c) for c in ALL_CODES]
+    assert sides == ["ingestion"] * len(INGESTION_CODES) + ["delivery"] * len(DELIVERY_CODES)
+
+
+def test_appendix_excluded_category_is_a_delivery_reason():
+    """Issue #73: the appendix-only category exclusion (macro-group rows kept
+    out of Additional Articles) is delivery-owned accounting."""
+    assert "appendix_excluded_category" in DELIVERY_CODES
+    assert side_of("appendix_excluded_category") == "delivery"
+    assert label_for("appendix_excluded_category") == "appendix-excluded category (macro group)"
 
 
 def test_ledger_for_ingestion_starts_empty():
