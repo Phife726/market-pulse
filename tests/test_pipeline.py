@@ -2217,6 +2217,77 @@ def test_appendix_includes_low_exposure_template_enterprise_rows():
     assert dict(model.ledger.breakdown).get("enterprise_cross_segment_low_impact", 0) == 0
 
 
+_TEMPLATE_CFG = {"reporting": {"visible_impact_threshold": 6,
+                               "supporting_impact_threshold": 3}}
+
+
+def _template_row(url_hash, score, *, segment="Enterprise / Cross-Segment",
+                  headline, created_at=None, opener="Limited direct exposure"):
+    row = {**_make_new_article(url_hash, score, commercial_segment=segment, headline=headline),
+           "americhem_impact": f"{opener} — {headline.lower()} only."}
+    if created_at:
+        row["created_at"] = created_at
+    return row
+
+
+def test_appendix_ranks_low_exposure_template_rows_after_every_non_template_row():
+    """Template rows are optional reading of last resort: a score-4 template
+    row ranks below a score-3 segment-specific row, whatever the segment or
+    recency. (Production data: the cap binds daily and is decided within the
+    score-4 tier by recency, where macro-group template rows — stored last,
+    so newest — would otherwise win.)"""
+    packaging3 = {**_make_new_article("pkg3", 3, commercial_segment="Packaging",
+                                      headline="Barrier film converter adds a line"),
+                  "created_at": "2026-08-27T10:30:00+00:00"}
+    template4 = _template_row("tpl4", 4, headline="Bitcoin futures top eighty thousand",
+                              created_at="2026-08-27T10:45:00+00:00")
+    model = assemble_report([template4, packaging3], config=_TEMPLATE_CFG)
+    assert _appendix_hashes(model) == ["pkg3", "tpl4"]
+
+
+def test_appendix_ranks_template_rows_last_regardless_of_segment():
+    """The rule keys on the So-What, not the segment: a Packaging row that
+    admits limited exposure is also last-resort reading."""
+    pkg_template = _template_row("pkgtpl", 5, segment="Packaging",
+                                 headline="Pouch maker names a new regional director")
+    industrial3 = _make_new_article("ind3", 3, commercial_segment="Industrial",
+                                    headline="Rotomolder books winter capacity")
+    model = assemble_report([pkg_template, industrial3], config=_TEMPLATE_CFG)
+    assert _appendix_hashes(model) == ["ind3", "pkgtpl"]
+
+
+def test_appendix_cap_pushes_template_rows_out_first():
+    """On a full day the cap drops template rows before any non-template row —
+    they fill the appendix only when there is room."""
+    real = [
+        {**_make_new_article("r1", 4, commercial_segment="Packaging",
+                             headline="Recycled content mandate reshapes film sourcing"),
+         "created_at": "2026-08-27T10:20:00+00:00"},
+        {**_make_new_article("r2", 4, commercial_segment="Healthcare",
+                             headline="Medical tubing extruder wins device contract"),
+         "created_at": "2026-08-27T10:25:00+00:00"},
+    ]
+    template = _template_row("tpl", 4, headline="Dow edges lower as Nasdaq rises",
+                             created_at="2026-08-27T10:50:00+00:00")
+    config = {"reporting": {**_TEMPLATE_CFG["reporting"], "max_additional_articles": 2}}
+    model = assemble_report([template, *real], config=config)
+    assert _appendix_hashes(model) == ["r2", "r1"]
+    assert dict(model.ledger.breakdown)["weak_relevance"] == 1
+
+
+def test_appendix_template_rows_keep_impact_then_recency_order_among_themselves():
+    rows = [
+        _template_row("t3old", 3, headline="Zinzino chief sells shares",
+                      created_at="2026-08-27T10:10:00+00:00"),
+        _template_row("t4old", 4, headline="Honeywell leadership changes spark views",
+                      created_at="2026-08-27T10:10:00+00:00"),
+        _template_row("t4new", 4, headline="Tanker freight rates surge on tightness",
+                      created_at="2026-08-27T10:50:00+00:00", opener="Adjacent market"),
+    ]
+    model = assemble_report(rows, config=_TEMPLATE_CFG)
+    assert _appendix_hashes(model) == ["t4new", "t4old", "t3old"]
+
+
 def test_appendix_capped_at_max():
     """No more than max_additional_articles rows enter the appendix."""
     headlines = [
