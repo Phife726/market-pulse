@@ -161,8 +161,9 @@ zero-I/O purity is untouched.
   (`ReportModel.additional_articles`): suppression-surviving rows scoring at
   or above the supporting threshold (code default 4; production 3) that are
   not visible cards — the
-  weak-relevance band plus cap overflow — ranked deterministically and
-  capped at `reporting.max_additional_articles` (default 10). Rendered
+  weak-relevance band plus cap overflow — ranked deterministically
+  (non-template rows before **low-exposure template** rows, then impact,
+  then recency) and capped at `reporting.max_additional_articles` (default 10). Rendered
   compactly below Commercial Segment Watch, without the "So what" narrative.
   Never affects `surfaced_count`. Rows shown here are excluded from the
   `weak_relevance` count (but still counted in the broader
@@ -177,7 +178,9 @@ zero-I/O purity is untouched.
   supporting band (`prompts.low_exposure_score_band`, derived from `Scoring`)
   on the promise that they reach the appendix; because an adjacent-market row
   is Enterprise / Cross-Segment by construction, rule 1 exempts template rows
-  below the visible threshold (issue #65). Never a visible card.
+  below the visible threshold (issue #65). Never a visible card, and in the
+  appendix always ranked after every non-template row — last-resort reading
+  that fills the appendix only when there is room.
 - **Report model** (`report.py`, `ReportModel`) — the assembled daily report as
   plain frozen data: `variant` (`daily` / `no_news`), the final segment groups
   (capped only when configured; caps default to `null` = uncapped),

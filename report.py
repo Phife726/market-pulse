@@ -405,9 +405,15 @@ def _select_additional_articles(
 
     Deterministic order (applied as stable sorts, least-significant first):
     url_hash asc -> normalized headline asc -> recency desc -> effective impact
-    desc. So cap overflow (score 6+) precedes every score-5, which precedes
-    every score-4; ties break by recency then headline then hash. Capped at
-    `cap`."""
+    desc -> non-template before template. So cap overflow (score 6+) precedes
+    every score-5, which precedes every score-4; ties break by recency then
+    headline then hash — and every RULE 6 low-exposure template row
+    (`_is_low_exposure_template`) ranks after every non-template row whatever
+    its score, so template rows fill the appendix only when there is room and
+    are the first the cap pushes out. Production data (2026-08-27) showed the
+    cap binds daily and is decided within the score-4 tier by recency, where
+    macro-group template rows — stored last, so newest — would otherwise
+    displace segment-specific rows. Capped at `cap`."""
     pool = [
         r for r in kept
         if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
@@ -416,6 +422,7 @@ def _select_additional_articles(
                              r.get("url_hash") or ""))
     pool.sort(key=_appendix_recency_token, reverse=True)
     pool.sort(key=lambda r: _effective_impact(r), reverse=True)
+    pool.sort(key=_is_low_exposure_template)
     return tuple(pool[:cap])
 
 
