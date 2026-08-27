@@ -1912,6 +1912,50 @@ def test_render_card_without_tag_renders_so_what_label_unchanged():
     assert 'line-height:1.55;"><strong' in html_bad_tag
 
 
+def test_render_card_escapes_headline_and_so_what():
+    """Scraped text is untrusted: a stray tag or ampersand in the headline or
+    So-What must render as text, like every neighbouring renderer (issue #65)."""
+    item = {
+        "headline": "Resin <script>alert(1)</script> & co",
+        "source_url": "https://news.com/article",
+        "americhem_impact": "Margin <b>hit</b> on TiO2 & carbon black",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+        "signal_type": "Supply Chain",
+    }
+    html = _render_card(item)
+    assert "<script>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; co" in html
+    assert "<b>hit</b>" not in html
+    assert "Margin &lt;b&gt;hit&lt;/b&gt; on TiO2 &amp; carbon black" in html
+
+
+def test_render_card_drops_unsafe_href_but_keeps_the_headline():
+    item = {
+        "headline": "Plant closure disrupts supply",
+        "source_url": "javascript:alert(1)",
+        "americhem_impact": "Effect.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+    }
+    html = _render_card(item)
+    assert "href=" not in html
+    assert "javascript:" not in html
+    assert "Plant closure disrupts supply" in html
+
+
+def test_render_card_links_a_well_formed_url_unchanged():
+    item = {
+        "headline": "Plant closure disrupts supply",
+        "source_url": "https://news.com/article?id=1&x=2",
+        "americhem_impact": "Effect.",
+        "americhem_impact_score": 8,
+        "sentiment_tag": "Negative",
+    }
+    html = _render_card(item)
+    assert 'href="https://news.com/article?id=1&amp;x=2"' in html
+
+
 def test_sentiment_tag_maps_cover_exactly_the_schema_vocabulary():
     """The glyph map, the color map, and the Insight schema's tag vocabulary are
     three definitions of one list — a fourth tag must not silently lose its cue."""
@@ -2135,10 +2179,12 @@ def test_appendix_excludes_delivery_suppressed_rows():
     assert _appendix_hashes(model) == ["real"]
 
 
-def test_appendix_never_includes_enterprise_cross_segment_low_impact():
+def test_appendix_never_includes_non_template_enterprise_cross_segment_low_impact():
     """Pinned deliberate consequence: delivery suppression rule 1 drops
     Enterprise / Cross-Segment rows below enterprise_min_impact (7), so a
-    score-5 cross-segment row can never appear in the appendix."""
+    score-5 cross-segment row with an ordinary So-What can never appear in
+    the appendix. (The RULE 6 low-exposure templates are the one exemption —
+    see the mirror test below.)"""
     cross = _make_new_article("cross", 5,
                               commercial_segment="Enterprise / Cross-Segment",
                               headline="Cross-segment corporate note below the bar")
@@ -2146,6 +2192,29 @@ def test_appendix_never_includes_enterprise_cross_segment_low_impact():
                              headline="Packaging-specific near-threshold signal kept")
     model = assemble_report([cross, keep], config=_APPENDIX_CFG)
     assert _appendix_hashes(model) == ["keep"]
+
+
+def test_appendix_includes_low_exposure_template_enterprise_rows():
+    """Issue #65: a RULE 6 template row ('Adjacent market — …' / 'Limited
+    direct exposure — …') is by construction Enterprise / Cross-Segment and
+    scored in the supporting band; the prompt promises it reaches the
+    appendix, so rule 1 must not drop it. It ranks below every higher-scoring
+    row and never becomes a visible card."""
+    adjacent = {**_make_new_article("adjacent", 3,
+                                    commercial_segment="Enterprise / Cross-Segment",
+                                    headline="Recycled PET bottle demand climbs in Europe"),
+                "americhem_impact": "Adjacent market — no direct Americhem participation indicated."}
+    limited = {**_make_new_article("limited", 4,
+                                   commercial_segment="Enterprise / Cross-Segment",
+                                   headline="Bank raises passive stake in Huntsman"),
+               "americhem_impact": "Limited direct exposure — passive shareholding change only."}
+    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+                             headline="Packaging-specific near-threshold signal kept")
+    config = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3}}
+    model = assemble_report([adjacent, limited, keep], config=config)
+    assert _appendix_hashes(model) == ["keep", "limited", "adjacent"]
+    assert model.surfaced_count == 0
+    assert dict(model.ledger.breakdown).get("enterprise_cross_segment_low_impact", 0) == 0
 
 
 def test_appendix_capped_at_max():
@@ -3053,6 +3122,33 @@ def test_config_has_commercial_segments_and_signal_types():
     assert "masterbatch" in sup["plastics_relevance_terms"]
 
 
+def test_config_pins_the_appendix_levers_and_the_prompt_band():
+    """The production YAML is the only lever for appendix breadth (PR #62) and
+    the RULE 6 template band is derived from it (issue #65): pin both so a
+    silent edit or a rollback to the code defaults is visible in CI, and
+    prove the assembled production prompt binds the templates to 3–4."""
+    import yaml
+
+    import prompts
+    with open("market_pulse_config.yaml") as fh:
+        cfg = yaml.safe_load(fh)
+
+    rep = cfg["reporting"]
+    assert rep["supporting_impact_threshold"] == 3
+    assert rep["visible_impact_threshold"] == 6
+    assert rep["max_additional_articles"] == 20
+    assert rep["max_visible_articles_per_segment"] == 5
+    assert cfg["delivery_suppression"]["enable_low_exposure_template_exemption"] is True
+
+    system = prompts.insight_prompt(
+        cfg, article_text="Body.", source_url="https://news.com/a",
+        trigger_entity="Dow", category="competitors",
+    ).system
+    assert "americhem_impact_score of 3 or 4" in system
+    assert "never below 3" in system
+    assert "Set americhem_impact_score to 4" in system
+
+
 # ===========================================================================
 # Task 5 — structured macro summary (dominant_condition + executive_bullets)
 # ===========================================================================
@@ -3602,6 +3698,88 @@ def test_apply_delivery_suppression_keeps_enterprise_high_impact():
     kept, ledger = _apply_delivery_suppression(rows, _supp_config())
     assert len(kept) == 1
     assert dict(ledger.breakdown) == {}
+
+
+_ENTERPRISE = "Enterprise / Cross-Segment"
+
+
+def test_rule1_exempts_low_exposure_template_rows_below_visible():
+    """Issue #65: both RULE 6 templates skip rule 1 while below the visible
+    threshold, so the 3–4 band the prompt promises actually reaches the appendix."""
+    from report import _apply_delivery_suppression
+    rows = [
+        _row(url_hash="a", commercial_segment=_ENTERPRISE, americhem_impact_score=3,
+             headline="Recycled PET bottle demand climbs in Europe",
+             americhem_impact="Adjacent market — no direct Americhem participation indicated."),
+        _row(url_hash="b", commercial_segment=_ENTERPRISE, americhem_impact_score=4,
+             headline="Bank raises passive stake in Huntsman",
+             americhem_impact="Limited direct exposure — passive shareholding change only."),
+    ]
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
+    assert [r["url_hash"] for r in kept] == ["a", "b"]
+    assert dict(ledger.breakdown) == {}
+
+
+def test_rule1_still_drops_template_rows_at_or_above_visible():
+    """The exemption can add appendix rows but must never mint a visible card:
+    an over-scored template row (the model ignored 'never above 4') is still
+    rule-1 noise."""
+    from report import _apply_delivery_suppression
+    rows = [_row(commercial_segment=_ENTERPRISE, americhem_impact_score=6,
+                 americhem_impact="Limited direct exposure — one plant, one grade.")]
+    config = {**_supp_config(), "reporting": {"visible_impact_threshold": 6}}
+    kept, ledger = _apply_delivery_suppression(rows, config)
+    assert kept == []
+    assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 1}
+
+
+def test_rule1_exemption_follows_the_configured_visible_threshold():
+    """Raise visible_impact_threshold to 7 and the score-6 template row is
+    below visible again, so it is exempt (it lands in the appendix)."""
+    from report import _apply_delivery_suppression
+    rows = [_row(commercial_segment=_ENTERPRISE, americhem_impact_score=6,
+                 americhem_impact="Limited direct exposure — one plant, one grade.")]
+    config = {**_supp_config(), "reporting": {"visible_impact_threshold": 7}}
+    kept, _ = _apply_delivery_suppression(rows, config)
+    assert len(kept) == 1
+
+
+def test_rule1_exemption_matches_prefix_case_insensitively_past_leading_quote():
+    from report import _apply_delivery_suppression
+    rows = [_row(commercial_segment=_ENTERPRISE, americhem_impact_score=3,
+                 americhem_impact=' "adjacent market: outside every served segment."')]
+    kept, _ = _apply_delivery_suppression(rows, _supp_config())
+    assert len(kept) == 1
+
+
+def test_rule1_exemption_ignores_non_template_so_whats():
+    """A So-What that merely *contains* template words, or starts with a
+    near-miss, is not a template — rule 1 still applies."""
+    from report import _apply_delivery_suppression
+    rows = [
+        _row(url_hash="a", commercial_segment=_ENTERPRISE, americhem_impact_score=3,
+             headline="Naphtha cracker margins narrow in Asia",
+             americhem_impact="Adjacent to Americhem's feedstock chain — no direct effect."),
+        _row(url_hash="b", commercial_segment=_ENTERPRISE, americhem_impact_score=4,
+             headline="Chemical distributor reports flat quarter",
+             americhem_impact="Margin pressure; limited direct exposure otherwise."),
+        _row(url_hash="c", commercial_segment=_ENTERPRISE, americhem_impact_score=4,
+             headline="Regional resin trader opens new warehouse",
+             americhem_impact=""),
+    ]
+    kept, ledger = _apply_delivery_suppression(rows, _supp_config())
+    assert kept == []
+    assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 3}
+
+
+def test_rule1_exemption_config_switch_off_restores_the_drop():
+    from report import _apply_delivery_suppression
+    rows = [_row(commercial_segment=_ENTERPRISE, americhem_impact_score=3,
+                 americhem_impact="Adjacent market — no direct Americhem participation indicated.")]
+    kept, ledger = _apply_delivery_suppression(
+        rows, _supp_config(enable_low_exposure_template_exemption=False))
+    assert kept == []
+    assert dict(ledger.breakdown) == {"enterprise_cross_segment_low_impact": 1}
 
 
 def test_apply_delivery_suppression_drops_product_listing():

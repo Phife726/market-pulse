@@ -267,6 +267,13 @@ delivery_suppression:
   enable_unrelated_color_result: true
   enable_enterprise_low_impact: true
   enterprise_min_impact: 7
+  # Rows whose So-What opens with a RULE 6 low-exposure template ("Adjacent
+  # market — …" / "Limited direct exposure — …") skip the enterprise rule above
+  # while they score below visible_impact_threshold, so the 3–4 band the prompt
+  # binds them to reaches the Additional Articles appendix (issue #65). Only
+  # ever adds appendix rows — never a visible card. Set false to restore the
+  # unconditional drop.
+  enable_low_exposure_template_exemption: true
   url_patterns_product_listing:
     - "/product/"
     - "/shop/"

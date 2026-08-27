@@ -25,7 +25,7 @@ from insight import (
     VALID_COMMERCIAL_SEGMENTS,
 )
 from scoring import Scoring
-from prompts import MAX_MACRO_OUTLOOK_SIGNALS
+from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES, MAX_MACRO_OUTLOOK_SIGNALS
 from suppression_ledger import SuppressionLedger
 
 logger = logging.getLogger(__name__)
@@ -233,16 +233,33 @@ def _contains_any_term(text: str, terms: list[str]) -> bool:
     return any(term.lower() in t for term in terms or [])
 
 
+def _is_low_exposure_template(row: dict) -> bool:
+    """True when the So-What opens with one of the RULE 6 honest low-exposure
+    templates (`prompts.LOW_EXPOSURE_TEMPLATE_PREFIXES`). Case-insensitive,
+    tolerant of leading whitespace/quotes; a So-What that merely contains the
+    words is not a template."""
+    text = row.get("americhem_impact") or ""
+    if not isinstance(text, str):
+        return False
+    opener = text.lstrip().lstrip("\"'\u201c\u2018").casefold()
+    return any(opener.startswith(prefix.casefold()) for prefix in LOW_EXPOSURE_TEMPLATE_PREFIXES)
+
+
 def _apply_delivery_suppression(
     rows: list[dict],
     config: dict,
+    scorer: Optional[Scoring] = None,
 ) -> tuple[list[dict], SuppressionLedger]:
     """Run the deterministic seven-rule guardrail over fetched rows.
 
     Returns (kept_rows, ledger). First matching rule wins; each suppressed
     row is counted once and contributes at most one sample (deduped).
+    `scorer` supplies the visible threshold rule 1's template exemption reads;
+    None resolves it from config.
     """
     sup_cfg = config.get("delivery_suppression") or {}
+    scorer = scorer or Scoring.from_config(config)
+    exempt_templates = bool(sup_cfg.get("enable_low_exposure_template_exemption", True))
     ledger = SuppressionLedger.for_delivery()
     kept: list[dict] = []
     kept_headlines: list[str] = []
@@ -264,11 +281,22 @@ def _apply_delivery_suppression(
         entities_text = " ".join(str(e) for e in entities)
         action = row.get("recommended_action", "")
 
-        # Rule 1: Enterprise / Cross-Segment with low impact
+        # Rule 1: Enterprise / Cross-Segment with low impact. A RULE 6
+        # low-exposure template row is exempt while it is below the visible
+        # threshold (issue #65): the prompt binds those templates to the
+        # supporting band on the promise that they reach the appendix, and an
+        # adjacent-market row is Enterprise by construction. The exemption can
+        # only ever add appendix rows — an over-scored template row at or
+        # above visible is still rule-1 noise, never a card.
         if sup_cfg.get("enable_enterprise_low_impact", True):
             segment = _commercial_segment_of(row)
             score = int(row.get("americhem_impact_score") or 0)
-            if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact:
+            exempt = (
+                exempt_templates
+                and not scorer.is_visible(row)
+                and _is_low_exposure_template(row)
+            )
+            if segment == "Enterprise / Cross-Segment" and score < enterprise_min_impact and not exempt:
                 ledger = ledger.record(
                     "enterprise_cross_segment_low_impact",
                     url=url,
@@ -541,7 +569,7 @@ def assemble_report(
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, ledger = _apply_delivery_suppression(rows, config)
+    kept, ledger = _apply_delivery_suppression(rows, config, scorer)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if scorer.is_visible(r)]
