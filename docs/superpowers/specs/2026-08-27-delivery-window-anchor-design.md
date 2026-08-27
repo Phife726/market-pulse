@@ -41,6 +41,13 @@ Degrades gracefully if the code ships before the migration: the anchor read fail
 - **`fetch_todays_intelligence(now=None)`** reads the anchor with `run_mode="production"` and `before_date=today` in **every** run mode, then `fetch_since(window.cutoff)`. Logs at INFO when anchored, WARNING when falling back (the fallback should be rare after rollout — a warning makes a silently-unapplied migration visible in the job log).
 - **`_record_delivery(delivered_at)`** wraps `record_delivery` on `(today, config.run_mode())`. Called from `execute_pipeline` after `send_email` returns — for the no-news variant too (a no-news email is still an email). Failure is a logged warning: the email is already out, and a red job would invite a manual re-run and a duplicate email.
 
+### Review hardening (Codex on PR #67)
+
+Two ways the anchor could move past rows nobody received, both closed:
+
+- **A failed fetch.** `fetch_since` was a swallow-to-`[]` read, so a Supabase outage would have produced a no-news email and then a stamp hiding every row that existed. It is now a **strict read** (raises), the second such read after `require_delivery_state` and for the same reason — a write depends on it. A database outage is a red job with no email and no stamp.
+- **A row written mid-run.** A concurrent ingestion (QA workflow with `run_ingestion=true`, or a manual dispatch) can land a row between the fetch and the send; stamping the send time would put it before the anchor forever. `execute_pipeline` now reads the clock **once**, uses it as the window's `now`, and stamps that same instant after the send — so the row is inside the next window.
+
 ### Two deliberate choices
 
 **The anchor is the last delivery on a strictly *earlier* run_date, not simply the latest.** A same-day retry (manual re-dispatch after a bad or failed morning email) therefore re-sends the whole day's window plus anything new, instead of only what arrived since the morning email. The same rule is what makes the QA path work: a `run_ingestion=false` test re-render at 14:00 sees the rows the 10:38 production email saw.

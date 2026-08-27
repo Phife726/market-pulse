@@ -291,3 +291,64 @@ def test_record_delivery_failure_is_logged_not_raised(monkeypatch, caplog):
         delivery_engine._record_delivery(delivered_at=T)
 
     assert any("delivered_at" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Codex review on PR #67: the anchor must only ever move past rows that
+# actually went out.
+# ---------------------------------------------------------------------------
+
+def test_fetch_failure_sends_nothing_and_leaves_the_anchor_alone(monkeypatch):
+    """A Supabase outage must not become a no-news email whose stamp then
+    hides every row that existed at the time. fetch_since is a STRICT read:
+    the error propagates, no email is sent, no stamp is written — the red job
+    is the alarm, and the next successful run reaches back over the gap."""
+    from datetime import date
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    today = date.today().isoformat()
+    fake = _seed(today=today)
+
+    def outage(cutoff):
+        raise RuntimeError("supabase unreachable")
+    monkeypatch.setattr(fake, "fetch_since", outage)
+
+    sent: list = []
+    with pytest.raises(RuntimeError, match="supabase unreachable"):
+        _run_pipeline(monkeypatch, fake, send=lambda html: sent.append(html))
+
+    assert sent == []
+    assert "delivered_at" not in fake.get_delivery_state(run_date=today, run_mode="production")
+
+
+def test_stamp_is_the_fetch_instant_so_rows_arriving_mid_run_are_not_lost(monkeypatch):
+    """A row written by a concurrent ingestion between the fetch and the send
+    is absent from this email. Stamping the SEND time would put it before the
+    anchor and drop it forever; stamping the fetch instant leaves it for the
+    next run."""
+    from datetime import date
+    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
+    fetch_instant = datetime.combine(date.today(), datetime.min.time()) + timedelta(hours=10)
+    # A clock that advances: the first reading is the fetch instant, any later
+    # reading (e.g. a second call at send time) is a minute on — later than
+    # the mid-run row, so stamping it would lose that row.
+    readings = iter([fetch_instant] + [fetch_instant + timedelta(minutes=1)] * 10)
+    monkeypatch.setattr(delivery_engine, "_utcnow", lambda: next(readings))
+    today = date.today().isoformat()
+    fake = _seed(today=today)
+
+    real_fetch = fake.fetch_since
+    def fetch_then_concurrent_write(cutoff):
+        rows = real_fetch(cutoff)
+        # Simulates the QA/manual ingestion landing a row after the fetch,
+        # before Resend returns.
+        fake.upsert_insight(_row("mid-run", fetch_instant + timedelta(seconds=30)))
+        return rows
+    monkeypatch.setattr(fake, "fetch_since", fetch_then_concurrent_write)
+
+    _run_pipeline(monkeypatch, fake)
+
+    stamped = fake.fetch_last_delivery(run_mode="production", before_date="2999-01-01")
+    assert stamped == fetch_instant
+    tomorrow = fetch_instant + timedelta(days=1)
+    monkeypatch.setattr(fake, "fetch_since", real_fetch)
+    assert "mid-run" in {r["url_hash"] for r in fetch_todays_intelligence(now=tomorrow)}

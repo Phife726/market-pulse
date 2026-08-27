@@ -421,10 +421,14 @@ def test_supabase_fetch_since_filters_strictly_after_cutoff_and_orders_by_impact
     )
 
 
-def test_supabase_fetch_since_swallows_errors(supabase_repo):
+def test_supabase_fetch_since_is_a_strict_read(supabase_repo):
+    """Unlike most reads, fetch_since raises: delivery stamps the anchor after
+    the email goes out, and a swallowed outage ([]) would become a no-news
+    email whose stamp hides every row that existed at the time."""
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
-    assert repo.fetch_since(datetime(2026, 8, 26)) == []
+    with pytest.raises(Exception, match="read failed"):
+        repo.fetch_since(datetime(2026, 8, 26))
 
 
 def test_supabase_upsert_summary_uses_compound_on_conflict(supabase_repo):

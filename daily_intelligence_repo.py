@@ -8,6 +8,12 @@ Error policy:
 - Reads swallow exceptions and return an empty sentinel
   (False / set() / [] / None) so a transient Supabase blip
   degrades the run instead of crashing it.
+- Two STRICT reads raise instead, because a write depends on what they
+  return and "nothing there" must stay distinguishable from "read failed":
+  require_delivery_state (the same-day-retry merge would otherwise
+  overwrite prior accounting) and fetch_since (delivery stamps the
+  window anchor after sending; a swallowed outage would become a
+  no-news email whose stamp hides every row that existed at the time).
 
 The repo does NOT import SuppressionLedger. Same-day-retry merge
 semantics live in the caller (delivery_engine._update_delivery_summary_counts).
@@ -98,20 +104,22 @@ class SupabaseIntelligenceRepo:
     def fetch_since(self, cutoff: datetime) -> list[dict]:
         """Rows created strictly after `cutoff` (naive datetimes are UTC).
 
-        Strict so a row stored at the instant of the last delivery — which
-        that email already carried — is not delivered twice."""
-        try:
-            result = (
-                self._supabase().table("daily_intelligence")
-                .select("*")
-                .gt("created_at", cutoff.isoformat())
-                .order("americhem_impact_score", desc=True)
-                .execute()
-            )
-            return list(result.data or [])
-        except Exception as exc:
-            logger.error("Supabase fetch_since failed: %s", exc)
-            return []
+        Strict comparison so a row stored at the instant of the last
+        delivery — which that email already carried — is not delivered twice.
+
+        STRICT READ — does NOT swallow. Delivery records `cutoff`'s successor
+        as the next anchor once the email is out; if this read failed
+        silently to [], the run would send a no-news email and then stamp an
+        anchor past rows nobody received. Raising leaves the anchor alone and
+        turns the job red instead (see module docstring)."""
+        result = (
+            self._supabase().table("daily_intelligence")
+            .select("*")
+            .gt("created_at", cutoff.isoformat())
+            .order("americhem_impact_score", desc=True)
+            .execute()
+        )
+        return list(result.data or [])
 
     def upsert_summary(self, row: dict) -> None:
         self._supabase().table("daily_summaries").upsert(

@@ -18,9 +18,11 @@
 --
 -- CONTRACT:
 --   delivered_at is stamped by delivery_engine AFTER the Resend call succeeds,
---   on the (run_date, run_mode) row ingestion wrote that day. A failed send
---   leaves it NULL, so the next successful delivery's window reaches back over
---   the rows that never went out. Test-mode runs stamp only their own
+--   on the (run_date, run_mode) row ingestion wrote that day, with the instant
+--   that run's fetch ran (not the send time — a row written mid-run must stay
+--   inside the next window). A failed send leaves it NULL, so the next
+--   successful delivery's window reaches back over the rows that never went
+--   out; a failed fetch raises before any email or stamp. Test-mode runs stamp only their own
 --   run_mode='test' row (a silent no-op when none exists) and are never read
 --   as an anchor: the anchor query is production-only.
 

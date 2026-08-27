@@ -473,8 +473,11 @@ def fetch_todays_intelligence(now: Optional[datetime] = None) -> list[dict]:
     The anchor is always the PRODUCTION delivery on an earlier run_date,
     whatever mode this run is in: a QA re-render must see the rows production
     saw, and a same-day retry re-sends the whole day's window rather than only
-    what arrived since the morning email. `now` is injectable for tests; run
-    timestamps are UTC to match created_at."""
+    what arrived since the morning email. `now` is the run's single clock
+    reading (execute_pipeline stamps the same value after a successful send);
+    run timestamps are UTC to match created_at. Propagates a failed read —
+    a no-news email on a database outage would be wrong, and its stamp would
+    hide the rows the outage concealed."""
     now = now or _utcnow()
     today = now.date().isoformat()
     anchor = _repo().fetch_last_delivery(run_mode="production", before_date=today)
@@ -592,9 +595,13 @@ def _update_delivery_summary_counts(
 
 def _record_delivery(*, delivered_at: datetime) -> None:
     """Stamp delivered_at on today's daily_summaries row — the anchor the
-    next run's delivery window starts from. Called only after the send
-    succeeded, so a failed send leaves the previous anchor in place and the
-    next successful email reaches back over the rows that never went out.
+    next run's delivery window starts from. `delivered_at` is the instant
+    this run's fetch ran (its window's "now"), not the send time: the anchor
+    may only move past rows this email actually carried. Called only after
+    the send succeeded, so a failed send leaves the previous anchor in place
+    and the next successful email reaches back over the rows that never went
+    out; a failed fetch never gets here at all (fetch_since is a strict read
+    that raises).
 
     Non-critical: the email has already gone out, so a failure here is a
     warning, not a red job (which would invite a manual re-run and a
@@ -1227,7 +1234,13 @@ def send_email(html_content: str) -> None:
 # ---------------------------------------------------------------------------
 
 def execute_pipeline() -> None:
-    data          = fetch_todays_intelligence()
+    # One clock reading per run. It is both the window's "now" and, after a
+    # successful send, the stamp the next run anchors on — so a row written by
+    # a concurrent ingestion between this fetch and the send (created_at after
+    # `now`, absent from this email) is still inside tomorrow's window. Stamping
+    # the send time instead would put such a row before the anchor for good.
+    now           = _utcnow()
+    data          = fetch_todays_intelligence(now=now)
     macro_summary = fetch_macro_summary()
 
     if not data:
@@ -1248,7 +1261,7 @@ def execute_pipeline() -> None:
         test_mode=_is_test_mode(),
     )
     send_email(html)
-    _record_delivery(delivered_at=_utcnow())
+    _record_delivery(delivered_at=now)
 
 
 def main() -> None:
