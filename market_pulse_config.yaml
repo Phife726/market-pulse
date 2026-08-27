@@ -273,12 +273,12 @@ delivery_suppression:
   # binds them to reaches the Additional Articles appendix (issue #65). Only
   # ever adds appendix rows — never a visible card. Set false to restore the
   # unconditional drop.
-  # OFF since 2026-08-27: production data showed the appendix cap (20) binds
-  # every day and template rows are mostly RULE 7 uncertain-relevance noise
-  # (index false-matches, crypto, macro commentary); exempted score-4 template
-  # rows would displace segment-specific score-4 rows on the recency tiebreak.
-  # Re-enable once the appendix ranks template rows last.
-  enable_low_exposure_template_exemption: false
+  # Safe to leave on: the appendix ranks template rows after every
+  # non-template row (PR #70), so exempted rows fill it only when there is
+  # room and are the first the cap pushes out — they can never displace a
+  # segment-specific row. (Switched off 2026-08-27 in #69 while that ranking
+  # shipped; back on the same day.)
+  enable_low_exposure_template_exemption: true
   url_patterns_product_listing:
     - "/product/"
     - "/shop/"
