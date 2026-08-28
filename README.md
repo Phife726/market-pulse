@@ -98,7 +98,7 @@ These are GitHub **repository variables** (Settings â†’ Secrets and variables â†
 The pipeline is orchestrated by `.github/workflows/market_pulse.yml`.
 
 - **Execution Time:** Monday through Friday at 10:00 UTC (6:00 AM EDT).
-- **Hard Limits:** The ingestion engine enforces `MAX_DAILY_SCRAPES = 150` (sized to paid-tier Serper/Firecrawl/OpenAI subscriptions) and a `PIPELINE_DEADLINE_SECONDS = 600` wall-clock cutoff so the run completes inside the 15-minute GitHub Actions ceiling.
+- **Hard Limits:** The ingestion engine runs under a run budget (`run_budget.py`): `MAX_DAILY_SCRAPES = 180` (sized to paid-tier Serper/Firecrawl/OpenAI subscriptions) and a `PIPELINE_DEADLINE_SECONDS = 1800` wall-clock cutoff so the run completes inside the 40-minute GitHub Actions ceiling, with a tail reserve that stops starting entity targets once the remaining budget falls to what the concept/macro groups still ahead need.
 
 To manually trigger a run, navigate to the **Actions** tab in GitHub, select the workflow, and click **Run workflow**.
 

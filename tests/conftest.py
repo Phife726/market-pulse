@@ -12,6 +12,7 @@ import pytest  # noqa: E402
 
 import discovery  # noqa: E402
 from mailer import FakeMailer  # noqa: E402
+from run_budget import RunBudget  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
 
 
@@ -60,6 +61,24 @@ def stub_insight(url: str, **overrides) -> dict:
     }
 
 
+def stub_target(
+    name: str, *, search_mode: str = "entity", results_per_entity: int = 2, **overrides,
+) -> dict:
+    """A target dict as `load_targets` would map it — the companion factory to
+    `stub_insight` for tests that hand `execute_pipeline` targets directly."""
+    target = {
+        "name": name,
+        "category": name,
+        "query": f'"{name}"',
+        "results_per_entity": results_per_entity,
+        "lookback_hours": 24,
+        "min_article_length": 500,
+        "search_mode": search_mode,
+    }
+    target.update(overrides)
+    return target
+
+
 @dataclass(frozen=True)
 class PipelineRun:
     """The observable result of one stubbed execute_pipeline run."""
@@ -89,6 +108,11 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         driving process_candidate's synthesis_failed gate).
       * `scrape`     — article text, or a callable(url, min_length) -> str|None.
       * `run`        — the run instant handed to execute_pipeline (RUN_INSTANT).
+      * `limits`     — keyword overrides for `RunBudget.for_targets`
+        (`max_scrapes` / `deadline_seconds` / `tail_reserve_seconds`); the
+        harness builds the budget from the targets it resolves, so it can
+        never mis-index. `None` lets the engine build the default (the
+        production path).
     """
 
     def _run(
@@ -99,6 +123,7 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         insight: Union[dict, Callable, None] = {},
         scrape: Union[str, Callable] = "text " * 200,
         run: RunInstant = RUN_INSTANT,
+        limits: Optional[dict] = None,
     ) -> PipelineRun:
         import ingestion_engine  # local: keeps supabase/openai imports off narrow runs
 
@@ -107,9 +132,12 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
 
         if targets is not None:
             monkeypatch.setattr(ingestion_engine, "load_targets", lambda path: targets)
+            resolved_targets = targets
         else:
             (tmp_path / "targets.yaml").write_text(targets_yaml)
             monkeypatch.chdir(tmp_path)
+            resolved_targets = ingestion_engine.load_targets("targets.yaml")
+        budget = None if limits is None else RunBudget.for_targets(resolved_targets, **limits)
 
         discover = candidates if callable(candidates) else (lambda target: list(candidates))
         monkeypatch.setattr(
@@ -139,7 +167,7 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(ingestion_engine, "generate_macro_summary", macro)
         monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
 
-        ingestion_engine.execute_pipeline(run)
+        ingestion_engine.execute_pipeline(run, budget=budget)
         return PipelineRun(stored=stored, macro=macro)
 
     return _run

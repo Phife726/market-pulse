@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from html.parser import HTMLParser
 from urllib.parse import urlparse, urlunparse
-from typing import Optional
+from typing import Callable, Optional
 
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
 from run_instant import RunInstant
+from run_budget import RunBudget, SkipEntity, Stop
 import insight
 import prompts
 # The macro summary's schema/validation + pure assembly live in macro_summary.py
@@ -29,19 +30,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-MAX_DAILY_SCRAPES = 180
-PIPELINE_DEADLINE_SECONDS = 1800  # stop ingestion after 30 min to stay inside the 40-min CI limit
-# Protected tail budget: once remaining scrape slots or wall-clock fall to the
-# reserve floor, remaining ENTITY targets are skipped so the concept/macro groups
-# at the bottom of targets.yaml always get discovery. Entity coverage is redundant
-# day-over-day (dedup absorbs re-discoveries); concept/macro coverage is not.
-# The slot reserve is derived per-run and position-aware: at each entity target
-# it reserves only the concept demand still AHEAD in file order (see
-# _concept_demand_ahead), so adding concept groups or raising results_per_entity
-# cannot silently reopen the starvation gap, and front-loading priority concepts
-# (Tier 1) cannot over-reserve and finish under cap. Only the time floor is a
-# constant (sized for ~40+ scrape attempts at the observed ~9s each).
-TAIL_RESERVE_SECONDS = 360
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
 
@@ -197,8 +185,8 @@ def load_targets(config_path: str) -> list[dict]:
             # discovery volume for priority segments; absent one, inherit the
             # global discovery value. Concept-only — a stray override on an
             # entity group is ignored (raising entity volume is not intended,
-            # and macro groups stay at the global value so the derived tail
-            # reserve — _tail_scrape_demand — is not inflated).
+            # and macro groups stay at the global value so the tail reserve's
+            # concept demand — RunBudget.concept_demand_ahead — is not inflated).
             group_results_per_entity: int = group_cfg.get(
                 "results_per_entity", results_per_entity
             )
@@ -546,38 +534,6 @@ def is_synthesis_outage(stats: dict, breakdown: dict[str, int]) -> bool:
     )
 
 
-def _tail_scrape_demand(targets: list[dict]) -> int:
-    """Worst-case scrape attempts *all* concept/macro targets can consume: every
-    concept target yields its full results_per_entity as new scrapable URLs
-    (true on any day their queries surface fresh news — dedup only absorbs
-    re-discoveries). This is the total configured concept demand; the entity
-    gate reserves only the slice still AHEAD of it (see _concept_demand_ahead)."""
-    return sum(
-        int(t.get("results_per_entity", 0))
-        for t in targets
-        if t.get("search_mode") == "concept"
-    )
-
-
-def _concept_demand_ahead(targets: list[dict]) -> list[int]:
-    """Suffix sums of concept scrape demand: element ``i`` is the worst-case
-    demand of ``targets[i:]``. The entity gate must reserve only the concept
-    demand that still lies AHEAD of the current target — front-loaded priority
-    concepts (Tier 1) have already run, so counting them (as a single static
-    total would) over-reserves and skips entity targets the budget could still
-    afford, finishing under cap. Order-independent: reordering targets.yaml can
-    never silently reopen the starvation gap nor over-protect a run."""
-    suffix = [0] * (len(targets) + 1)
-    for i in range(len(targets) - 1, -1, -1):
-        demand = (
-            int(targets[i].get("results_per_entity", 0))
-            if targets[i].get("search_mode") == "concept"
-            else 0
-        )
-        suffix[i] = suffix[i + 1] + demand
-    return suffix
-
-
 @dataclass(frozen=True)
 class Stored:
     """Candidate survived every gate and was persisted."""
@@ -754,8 +710,8 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
 def _finalize_run(ctx: RunContext, run: RunInstant) -> None:
     """The single end-of-run teardown: flush stats and provider yield, then
     persist the macro summary (or the accounting-only row) on the row `run`
-    keys. Called at every pipeline exit — mid-batch deadline, scrape cap, and
-    normal completion.
+    keys. The pipeline's single exit: `execute_pipeline` reaches it whether
+    the run completed or the run budget stopped it.
 
     Raises SynthesisOutageError last, so a run whose every synthesis call
     failed still records what it screened before it fails the job.
@@ -779,83 +735,97 @@ def _finalize_run(ctx: RunContext, run: RunInstant) -> None:
         )
 
 
-def execute_pipeline(run: RunInstant) -> None:
+def _run_target(
+    target: dict, ctx: RunContext, providers: list, budget: RunBudget, elapsed: Callable[[], float],
+) -> Optional[Stop]:
+    """Discover one target and run its candidates through the gauntlet, asking
+    the budget before each. Returns the `Stop` that cut the batch, else None."""
+    target_start = time.monotonic()
+
+    # Surface a yield line for every eligible provider, even at zero
+    # discovery, so the smoke clearly shows whether each provider ran. The
+    # seeding is provider-list-driven — no hard-coded provider names.
+    for provider_obj in providers:
+        if provider_obj.eligible(target):
+            ctx.provider_yield.setdefault(provider_obj.name, _new_provider_yield())
+
+    candidates = discover_candidates(target, providers)
+    ctx.stats["urls_discovered"] += len(candidates)
+    for candidate in candidates:
+        ctx.bump(candidate.get("provider", "unknown"), "discovered")
+
+    for candidate in candidates:
+        verdict = budget.before_candidate(
+            elapsed=elapsed(), scrapes_attempted=ctx.scrapes_attempted)
+        if isinstance(verdict, Stop):
+            return verdict
+        process_candidate(candidate, target, ctx)
+
+    logger.info(
+        "Target '%s' processed in %.1fs (%d candidates)",
+        target["name"], time.monotonic() - target_start, len(candidates),
+    )
+    return None
+
+
+def execute_pipeline(run: RunInstant, *, budget: Optional[RunBudget] = None) -> None:
+    """Run every active target through discovery and the candidate gauntlet
+    under `budget` (the default is built from the targets), then tear down
+    once through `_finalize_run`. The loop owns the stopwatch; the budget
+    decides at its two checkpoints, and a `Stop` from either ends the run at
+    the single exit below.
+    """
     pipeline_start = time.monotonic()
     targets = load_targets("targets.yaml")
-    concept_demand_ahead = _concept_demand_ahead(targets)
+    if budget is None:
+        budget = RunBudget.for_targets(targets)
+    elif len(budget.entity_at) != len(targets):
+        raise ValueError(
+            f"run budget was built from a different targets list "
+            f"({len(budget.entity_at)} targets) than the one loaded ({len(targets)})"
+        )
     providers = _discovery_providers()
     ctx = RunContext(
         providers_by_name={p.name: p for p in providers},
         seen_headlines=_hydrate_seen_headlines(),
     )
 
-    tail_reserve_triggered = False
+    def elapsed() -> float:
+        return time.monotonic() - pipeline_start
+
+    tail_reserve_logged = False
     for target_index, target in enumerate(targets):
-        if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
+        verdict = budget.before_target(
+            elapsed=elapsed(),
+            scrapes_attempted=ctx.scrapes_attempted,
+            target_index=target_index,
+        )
+        if isinstance(verdict, SkipEntity):
+            if not tail_reserve_logged:
+                logger.warning(
+                    "Tail reserve reached (%s) at target '%s' — skipping remaining "
+                    "entity targets to protect concept/macro coverage.",
+                    verdict.reason, target["name"],
+                )
+                tail_reserve_logged = True
+            continue
+        if isinstance(verdict, Stop):
             logger.warning(
-                "Pipeline deadline (%ds) reached before processing target '%s' — stopping early.",
-                PIPELINE_DEADLINE_SECONDS, target["name"],
+                "Run budget exhausted (%s) before target '%s' — %d/%d scrape attempts, "
+                "%.0f/%ds elapsed — stopping early.",
+                verdict.reason, target["name"], ctx.scrapes_attempted, budget.max_scrapes,
+                elapsed(), budget.deadline_seconds,
             )
             break
-
-        # Protected tail budget: once either budget falls to its reserve floor,
-        # stop starting ENTITY targets so the concept/macro groups still ahead
-        # in targets.yaml get their discovery pass. Concept targets keep running
-        # until the hard cap/deadline above actually fires. The slot reserve is
-        # position-aware — only the concept demand AHEAD of this target — so
-        # front-loaded priority concepts (Tier 1), already run, don't get
-        # double-reserved and starve the entity tier below its affordable budget.
-        if target.get("search_mode", "entity") == "entity":
-            tail_reserve_scrapes = concept_demand_ahead[target_index]
-            slots_low = ctx.scrapes_attempted >= MAX_DAILY_SCRAPES - tail_reserve_scrapes
-            clock_low = (
-                time.monotonic() - pipeline_start
-                >= PIPELINE_DEADLINE_SECONDS - TAIL_RESERVE_SECONDS
+        stop = _run_target(target, ctx, providers, budget, elapsed)
+        if stop is not None:
+            logger.warning(
+                "Run budget exhausted (%s) mid-batch at target '%s' — %d/%d scrape attempts, "
+                "%.0f/%ds elapsed — stopping early.",
+                stop.reason, target["name"], ctx.scrapes_attempted, budget.max_scrapes,
+                elapsed(), budget.deadline_seconds,
             )
-            if slots_low or clock_low:
-                if not tail_reserve_triggered:
-                    logger.warning(
-                        "Tail reserve reached (%s) at target '%s' — skipping remaining "
-                        "entity targets to protect concept/macro coverage.",
-                        "scrape slots" if slots_low else "wall clock", target["name"],
-                    )
-                    tail_reserve_triggered = True
-                continue
-
-        target_start = time.monotonic()
-
-        # Surface a yield line for every eligible provider, even at zero
-        # discovery, so the smoke clearly shows whether each provider ran. The
-        # seeding is provider-list-driven — no hard-coded provider names.
-        for provider_obj in providers:
-            if provider_obj.eligible(target):
-                ctx.provider_yield.setdefault(provider_obj.name, _new_provider_yield())
-
-        candidates = discover_candidates(target, providers)
-        ctx.stats["urls_discovered"] += len(candidates)
-        for candidate in candidates:
-            ctx.bump(candidate.get("provider", "unknown"), "discovered")
-
-        for candidate in candidates:
-            if time.monotonic() - pipeline_start >= PIPELINE_DEADLINE_SECONDS:
-                logger.warning(
-                    "Pipeline deadline (%ds) reached mid-batch — stopping early.",
-                    PIPELINE_DEADLINE_SECONDS,
-                )
-                _finalize_run(ctx, run)
-                return
-
-            if ctx.scrapes_attempted >= MAX_DAILY_SCRAPES:
-                logger.warning("MAX_DAILY_SCRAPES (%d) reached — stopping.", MAX_DAILY_SCRAPES)
-                _finalize_run(ctx, run)
-                return
-
-            process_candidate(candidate, target, ctx)
-
-        logger.info(
-            "Target '%s' processed in %.1fs (%d candidates)",
-            target["name"], time.monotonic() - target_start, len(candidates),
-        )
+            break
 
     _finalize_run(ctx, run)
 
