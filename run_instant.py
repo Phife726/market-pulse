@@ -7,9 +7,9 @@ from "today" is a property here, so the key is spelled once per run instead of
 once per function. `now` is naive UTC — the convention every stored timestamp
 follows — so the email's date is the UTC run date by construction.
 
-Everything here is pure except `current()`. Each engine's `main()` reads one
-and hands it to `execute_pipeline(run)`; tests build one from a literal
-datetime.
+Everything here is pure except `naive_utcnow()` and `current()`, which
+composes it with the run mode. Each engine's `main()` reads one and hands it
+to `execute_pipeline(run)`; tests build one from a literal datetime.
 """
 from __future__ import annotations
 

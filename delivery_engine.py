@@ -1,18 +1,16 @@
 import html
 import logging
 import os
-import random
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlparse
 
-import requests
 
 from suppression_ledger import ALL_CODES, SuppressionLedger, label_for
 from daily_intelligence_repo import _repo
 from llm import _llm
+from mailer import EmailMessage, _mailer
 from run_instant import RunInstant
 import prompts
 import scoring
@@ -416,15 +414,6 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Email delivery retry constants
-# ---------------------------------------------------------------------------
-
-_MAX_EMAIL_ATTEMPTS    = 5
-_EMAIL_BASE_DELAY_S    = 2.0
-_RESEND_API_URL        = "https://api.resend.com/emails"
-_TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
-
-# ---------------------------------------------------------------------------
 # 1. Data fetch — the delivery window, anchored to the last production email
 # ---------------------------------------------------------------------------
 
@@ -433,6 +422,10 @@ _TRANSIENT_HTTP_CODES  = {429, 500, 502, 503, 504}
 #: fallback run still covers the weekend.
 FALLBACK_LOOKBACK_HOURS = 24
 FALLBACK_LOOKBACK_HOURS_MONDAY = 72
+
+#: The delivery-window anchor and the QA fallback summary are always the
+#: PRODUCTION row, whatever mode this run is in (see CONTEXT.md).
+ANCHOR_RUN_MODE = "production"
 
 
 @dataclass(frozen=True)
@@ -469,7 +462,7 @@ def fetch_todays_intelligence(run: RunInstant) -> list[dict]:
     successful send); it is naive UTC to match created_at. Propagates a failed read —
     a no-news email on a database outage would be wrong, and its stamp would
     hide the rows the outage concealed."""
-    anchor = _repo().fetch_last_delivery(run_mode="production", before_date=run.run_date)
+    anchor = _repo().fetch_last_delivery(run_mode=ANCHOR_RUN_MODE, before_date=run.run_date)
     window = delivery_window(run.now, anchor)
     rows = _repo().fetch_since(window.cutoff)
     if window.anchored:
@@ -539,7 +532,7 @@ def fetch_macro_summary(run: RunInstant) -> dict | None:
         # matches no row and is a silent no-op UPDATE. Production mode never
         # falls back — it must not read test rows.
         production_row = _repo().fetch_latest_summary(
-            run_mode="production",
+            run_mode=ANCHOR_RUN_MODE,
             min_date=run.min_summary_date,
         )
         if _prefer_production_summary(summary, production_row):
@@ -1136,86 +1129,29 @@ def _render_no_news_email(
 # ---------------------------------------------------------------------------
 
 def send_email(html_content: str, *, run: RunInstant) -> None:
-    """Send the HTML digest via the Resend HTTP API with exponential backoff retry.
+    """Compose this run's digest email and hand it to the mailer seam.
 
-    Uses ``SMTP_PASS`` as the Resend API key so no secret changes are required.
-    The subject's date and its ``[TEST]`` marker come from the run instant.
-
-    Raises:
-        requests.HTTPError: On a permanent (non-transient) HTTP error response.
-        requests.ConnectionError: If the Resend API is unreachable.
-        requests.Timeout: If the request times out.
+    Addressing is the consumer's: `SENDER_EMAIL` is the sender and
+    `RECIPIENT_EMAILS` (comma-separated) is the only source of the recipient
+    list; the subject's date and `[TEST]` marker come from the run instant.
+    Transport and retry are the seam's; its failures propagate, so
+    `execute_pipeline` never stamps `delivered_at` for an unsent email.
     """
-    api_key      = os.environ["SMTP_PASS"]
-    sender_email = os.environ["SENDER_EMAIL"]
-    recipients   = [
-        e.strip()
-        for e in os.environ["RECIPIENT_EMAILS"].split(",")
-        if e.strip()
-    ]
-
+    recipients = tuple(
+        e.strip() for e in os.environ["RECIPIENT_EMAILS"].split(",") if e.strip()
+    )
+    if not recipients:
+        raise ValueError("RECIPIENT_EMAILS is set but contains no addresses — nothing to send to")
     subject = f"Americhem Market-Pulse \u2014 {run.subject_date}"
     if run.test_mode:
         subject = f"[TEST] {subject}"
 
-    payload = {
-        "from":    sender_email,
-        "to":      recipients,
-        "subject": subject,
-        "html":    html_content,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type":  "application/json",
-    }
-
-    for attempt in range(1, _MAX_EMAIL_ATTEMPTS + 1):
-        try:
-            resp = requests.post(
-                _RESEND_API_URL,
-                json=payload,
-                headers=headers,
-                timeout=30,
-            )
-
-            if resp.status_code in _TRANSIENT_HTTP_CODES and attempt < _MAX_EMAIL_ATTEMPTS:
-                delay = _EMAIL_BASE_DELAY_S * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
-                logger.warning(
-                    "Transient HTTP %s from Resend (attempt %d/%d) — retrying in %.1fs",
-                    resp.status_code, attempt, _MAX_EMAIL_ATTEMPTS, delay,
-                )
-                time.sleep(delay)
-                continue
-
-            if not resp.ok:
-                logger.error(
-                    "Resend API returned HTTP %s — body: %s",
-                    resp.status_code,
-                    resp.text,
-                )
-                resp.raise_for_status()
-
-            logger.info(
-                "Email sent — subject: '%s' | recipients: %d",
-                subject,
-                len(recipients),
-            )
-            return
-
-        except requests.HTTPError as exc:
-            raise
-
-        except requests.ConnectionError as exc:
-            logger.error("Connection error reaching Resend API: %s", exc)
-            raise
-
-        except requests.Timeout:
-            logger.error("Request to Resend API timed out")
-            raise
-
-        except Exception as exc:
-            logger.error("Unexpected error sending email: %s", exc)
-            raise
+    _mailer().send(EmailMessage(
+        sender=os.environ["SENDER_EMAIL"],
+        recipients=recipients,
+        subject=subject,
+        html=html_content,
+    ))
 
 
 # ---------------------------------------------------------------------------

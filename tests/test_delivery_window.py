@@ -229,11 +229,13 @@ def test_write_back_and_delivery_stamp_land_on_the_same_row(run_delivery_pipelin
 
     result = run_delivery_pipeline(fake)
 
+    assert len(result.sent) == 1   # exactly one email per run
     row = fake.get_delivery_state(run_date=RUN_DATE, run_mode="production")
     assert row["surfaced_count"] == 1
     assert row["delivered_at"], "delivered_at must be stamped after a successful send"
     assert fake.fetch_last_delivery(run_mode="production", before_date="2999-01-01") == T
-    assert result.runs == [RUN_INSTANT]   # the same instant reached the mailer
+    # ...and the same instant composed the subject that crossed the mailer seam.
+    assert result.sent[-1].subject == f"Americhem Market-Pulse \u2014 {RUN_INSTANT.subject_date}"
 
 
 def test_execute_pipeline_records_delivery_for_no_news_variant(run_delivery_pipeline):
@@ -246,14 +248,12 @@ def test_execute_pipeline_records_delivery_for_no_news_variant(run_delivery_pipe
     assert fake.get_delivery_state(run_date=RUN_DATE, run_mode="production")["delivered_at"]
 
 
-def test_execute_pipeline_does_not_record_delivery_when_send_fails(run_delivery_pipeline):
+def test_execute_pipeline_does_not_record_delivery_when_send_fails(run_delivery_pipeline, fake_mailer):
     fake = _seed()
-
-    def boom(html, *, run):
-        raise RuntimeError("resend down")
+    fake_mailer.fail_with = RuntimeError("resend down")
 
     with pytest.raises(RuntimeError, match="resend down"):
-        run_delivery_pipeline(fake, send=boom)
+        run_delivery_pipeline(fake)
 
     row = fake.get_delivery_state(run_date=RUN_DATE, run_mode="production")
     assert "delivered_at" not in row
@@ -302,7 +302,7 @@ def test_main_reads_the_run_instant_once_and_hands_it_down(monkeypatch):
 # actually went out.
 # ---------------------------------------------------------------------------
 
-def test_fetch_failure_sends_nothing_and_leaves_the_anchor_alone(run_delivery_pipeline, monkeypatch):
+def test_fetch_failure_sends_nothing_and_leaves_the_anchor_alone(run_delivery_pipeline, fake_mailer, monkeypatch):
     """A Supabase outage must not become a no-news email whose stamp then
     hides every row that existed at the time. fetch_since is a STRICT read:
     the error propagates, no email is sent, no stamp is written — the red job
@@ -313,11 +313,10 @@ def test_fetch_failure_sends_nothing_and_leaves_the_anchor_alone(run_delivery_pi
         raise RuntimeError("supabase unreachable")
     monkeypatch.setattr(fake, "fetch_since", outage)
 
-    sent: list = []
     with pytest.raises(RuntimeError, match="supabase unreachable"):
-        run_delivery_pipeline(fake, send=lambda html, *, run: sent.append(html))
+        run_delivery_pipeline(fake)
 
-    assert sent == []
+    assert fake_mailer.sent == []
     assert "delivered_at" not in fake.get_delivery_state(run_date=RUN_DATE, run_mode="production")
 
 

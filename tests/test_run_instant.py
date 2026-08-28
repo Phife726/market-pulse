@@ -2,10 +2,13 @@
 mode, as a frozen value (see CONTEXT.md).
 
 Pure: every derived date is a function of `now` and nothing else. Only
-`RunInstant.current()` touches the clock and `config.run_mode()`.
+`naive_utcnow()` touches the clock, and only `RunInstant.current()` composes
+it with `config.run_mode()`. The last test here pins the invariant behind
+the value: the engine modules make no ambient clock or run-mode read.
 """
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -92,3 +95,21 @@ def test_current_reads_a_naive_utc_clock_and_the_configured_run_mode(monkeypatch
 def test_current_defaults_to_production_without_the_env_var(monkeypatch):
     monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
     assert RunInstant.current().run_mode == "production"
+
+
+# ---------------------------------------------------------------------------
+# The invariant: engines take the run instant; they never read the clock or
+# MARKET_PULSE_RUN_MODE themselves (CLAUDE.md, Key Invariants).
+# ---------------------------------------------------------------------------
+
+ENGINE_MODULES = ("ingestion_engine.py", "delivery_engine.py")
+AMBIENT_READS = ("date.today(", "datetime.now(", "utcnow(", "config.run_mode(")
+
+
+@pytest.mark.parametrize("module", ENGINE_MODULES)
+def test_engine_modules_make_no_ambient_clock_or_run_mode_reads(module):
+    """A stray read would otherwise be caught only on days when the fixture
+    date differs from the wall-clock date — this makes the rule structural."""
+    src = (Path(__file__).resolve().parent.parent / module).read_text(encoding="utf-8")
+    for needle in AMBIENT_READS:
+        assert needle not in src, f"{module} reads {needle} — take the run instant instead"

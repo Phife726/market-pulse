@@ -7,7 +7,7 @@ language; domain terms are specific to the Americhem market-intelligence pipelin
 ## Seams
 
 A **seam** is where an interface lives — a place behaviour can be swapped without
-editing in place. This pipeline has four, each a pure module with a Protocol and
+editing in place. This pipeline has five, each a pure module with a Protocol and
 production + in-memory adapters (tests inject the fake at the consumer):
 
 - **Repo seam** (`daily_intelligence_repo.py`, `IntelligenceRepo`) — every Supabase
@@ -21,6 +21,20 @@ production + in-memory adapters (tests inject the fake at the consumer):
   `json.loads`). Never raises — returns `None` on any failure; the caller maps
   `None` to its own sentinel and does its own domain validation. Does **not** own
   response validation.
+- **Mailer seam** (`mailer.py`, `Mailer`) — the one outbound email transport.
+  Interface: `send(message: EmailMessage) -> None`, where **`EmailMessage`** is
+  a frozen value (`sender`, `recipients`, `subject`, `html`) — the composed
+  digest, transport-agnostic. Adapters: `ResendMailer` (owns the Resend API
+  key `SMTP_PASS` — legacy name —, the endpoint, the retry policy: transient
+  HTTP codes retry with exponential backoff, everything else propagates at
+  once) and `FakeMailer` (records every message; `fail_with` raises). The
+  consumer, `delivery_engine.send_email(html, *, run)`, keeps the
+  *addressing* — it reads `SENDER_EMAIL` / `RECIPIENT_EMAILS` (the only source
+  of the `to:` list) and composes the subject from the **run instant** — then
+  calls `_mailer().send(message)`; `execute_pipeline` never sees the seam.
+  Retry policy and request shape are asserted once, at the adapter
+  (`tests/test_mailer.py`); consumer tests inject `FakeMailer` and assert on
+  the message that crossed the seam.
 - **Discovery seam** (`discovery.py`, `DiscoveryProvider`) — how the ingestion
   engine consumes article-discovery providers. Interface: `name`,
   `eligible(target) -> bool`, `discover(target) -> list[dict]` (provider-neutral
@@ -41,7 +55,7 @@ production + in-memory adapters (tests inject the fake at the consumer):
 Tests inject the in-memory adapter at the consumer module, e.g.
 `monkeypatch.setattr("ingestion_engine._llm", lambda: FakeLLM(returns=...))`.
 
-A fourth seam is data-shaped rather than Protocol-shaped: the **report model**
+One further seam is data-shaped rather than Protocol-shaped: the **report model**
 (see Domain terms) — a plain frozen value between report assembly and rendering.
 It has no adapters; behaviour on either side of it is swapped by composing the
 pure functions differently, not by injection.
@@ -56,8 +70,8 @@ pure functions differently, not by injection.
 `REQUIRED_SECRETS`, raising `MissingEnvironmentError`) that each engine's
 `main()` runs before any API spend, so a misconfigured cron crashes at t=0
 instead of part-way through. It is **not** a Protocol seam: it has no adapters,
-because the Protocol seams (`llm`, `daily_intelligence_repo`, `zoominfo_client`,
-and `discovery`'s `ZoomInfoProvider`) keep reading their own secrets / feature
+because the Protocol seams (`llm`, `daily_intelligence_repo`, `mailer`,
+`zoominfo_client`, and `discovery`'s `ZoomInfoProvider`) keep reading their own secrets / feature
 flags at use time — config only *validates their presence* and owns the flag
 *values*, it does not own the seams' values. The pure
 report/scoring/prompt modules never import it: they receive a plain config dict

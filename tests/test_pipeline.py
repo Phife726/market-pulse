@@ -4,6 +4,7 @@ No live API calls — all external clients are mocked.
 """
 import json
 import textwrap
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -677,66 +678,33 @@ def test_render_card_omits_article_summary():
 
 
 # ---------------------------------------------------------------------------
-# 10. send_email() HTTP retry behaviour
+# 10. send_email() — the consumer side of the mailer seam
 # ---------------------------------------------------------------------------
-
-import time as _time
-
-import requests as _requests
 
 from delivery_engine import send_email as _send_email
 
 
-def _email_env(monkeypatch) -> None:
-    monkeypatch.setenv("SMTP_PASS", "re_test_key")
-    monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
-    monkeypatch.setenv("RECIPIENT_EMAILS", "user@test.com")
-
-
-def test_send_email_retries_on_429_then_succeeds(monkeypatch):
-    _email_env(monkeypatch)
-    monkeypatch.setattr(_time, "sleep", lambda s: None)
-
-    attempt = {"count": 0}
-
-    def fake_post(*args, **kwargs):
-        attempt["count"] += 1
-        resp = MagicMock()
-        if attempt["count"] == 1:
-            resp.status_code = 429
-            resp.raise_for_status = MagicMock()
-        else:
-            resp.status_code = 200
-            resp.raise_for_status = MagicMock()
-        return resp
-
-    monkeypatch.setattr(_requests, "post", fake_post)
+def test_send_email_hands_one_composed_message_to_the_mailer(fake_mailer):
+    """send_email composes the digest (sender, recipients, subject, html) and
+    crosses the seam exactly once; transport and retries are the adapter's."""
     _send_email("<html>test</html>", run=_RUN)
-    assert attempt["count"] == 2
+
+    assert len(fake_mailer.sent) == 1
+    message = fake_mailer.sent[0]
+    assert message.sender == "noreply@harness.test"
+    assert message.recipients == ("qa@harness.test",)
+    assert message.html == "<html>test</html>"
 
 
-def test_send_email_raises_immediately_on_auth_failure(monkeypatch):
-    _email_env(monkeypatch)
-    monkeypatch.setattr(_time, "sleep", lambda s: None)
+def test_send_email_refuses_an_empty_recipient_list(fake_mailer, monkeypatch):
+    """RECIPIENT_EMAILS set to separators only is a configuration error the
+    consumer catches before the seam — never a request with `to: []`."""
+    monkeypatch.setenv("RECIPIENT_EMAILS", " , ,")
 
-    attempt = {"count": 0}
+    with pytest.raises(ValueError, match="RECIPIENT_EMAILS"):
+        _send_email("<html>x</html>", run=_RUN)
 
-    def fake_post(*args, **kwargs):
-        attempt["count"] += 1
-        resp = MagicMock()
-        resp.status_code = 403
-        resp.ok = False
-        http_err = _requests.HTTPError()
-        http_err.response = resp
-        resp.raise_for_status = MagicMock(side_effect=http_err)
-        return resp
-
-    monkeypatch.setattr(_requests, "post", fake_post)
-
-    with pytest.raises(_requests.HTTPError):
-        _send_email("<html>test</html>", run=_RUN)
-
-    assert attempt["count"] == 1  # must NOT have retried
+    assert fake_mailer.sent == []
 
 
 # ---------------------------------------------------------------------------
@@ -3118,60 +3086,30 @@ def test_config_int_returns_default_and_warns_for_bad_value(caplog):
 # MARKET_PULSE_RUN_MODE — test-mode markings
 # ===========================================================================
 
-def test_send_email_test_mode_prefixes_subject(monkeypatch):
+def test_send_email_test_mode_prefixes_subject(fake_mailer):
     """A test-mode run instant marks the subject and dates it."""
-    _email_env(monkeypatch)
-    monkeypatch.setattr(_time, "sleep", lambda s: None)
-
-    captured = {}
-    def fake_post(*args, **kwargs):
-        captured["payload"] = kwargs["json"]
-        resp = MagicMock(); resp.status_code = 200; resp.ok = True
-        resp.raise_for_status = MagicMock()
-        return resp
-
-    monkeypatch.setattr(_requests, "post", fake_post)
     _send_email("<html>x</html>", run=_TEST_RUN)
-    assert captured["payload"]["subject"] == "[TEST] Americhem Market-Pulse \u2014 August 27, 2026"
+
+    assert fake_mailer.sent[0].subject == "[TEST] Americhem Market-Pulse \u2014 August 27, 2026"
 
 
-def test_send_email_production_mode_subject_unchanged(monkeypatch):
+def test_send_email_production_mode_subject_unchanged(fake_mailer):
     """A production run instant dates the subject and adds no [TEST] prefix."""
-    _email_env(monkeypatch)
-    monkeypatch.setattr(_time, "sleep", lambda s: None)
-
-    captured = {}
-    def fake_post(*args, **kwargs):
-        captured["payload"] = kwargs["json"]
-        resp = MagicMock(); resp.status_code = 200; resp.ok = True
-        resp.raise_for_status = MagicMock()
-        return resp
-
-    monkeypatch.setattr(_requests, "post", fake_post)
     _send_email("<html>x</html>", run=_RUN)
-    assert captured["payload"]["subject"] == "Americhem Market-Pulse \u2014 August 27, 2026"
+
+    assert fake_mailer.sent[0].subject == "Americhem Market-Pulse \u2014 August 27, 2026"
 
 
-def test_send_email_recipient_list_is_only_recipient_emails_env(monkeypatch):
+def test_send_email_recipient_list_is_only_recipient_emails_env(fake_mailer, monkeypatch):
     """Recipient invariant: send_email() builds the Resend 'to' list strictly from the
     RECIPIENT_EMAILS env var and never falls back to any hardcoded address. This is
     the safety guarantee that lets the workflow swap recipient pools by env var alone.
     """
-    monkeypatch.setenv("SMTP_PASS", "re_test_key")
-    monkeypatch.setenv("SENDER_EMAIL", "noreply@test.com")
-    monkeypatch.setenv("RECIPIENT_EMAILS", "jphifer@americhem.com")
-    monkeypatch.setattr(_time, "sleep", lambda s: None)
+    monkeypatch.setenv("RECIPIENT_EMAILS", " jphifer@americhem.com , qa@americhem.com,, ")
 
-    captured = {}
-    def fake_post(*args, **kwargs):
-        captured["payload"] = kwargs["json"]
-        resp = MagicMock(); resp.status_code = 200; resp.ok = True
-        resp.raise_for_status = MagicMock()
-        return resp
-
-    monkeypatch.setattr(_requests, "post", fake_post)
     _send_email("<html>x</html>", run=_RUN)
-    assert captured["payload"]["to"] == ["jphifer@americhem.com"]
+
+    assert fake_mailer.sent[0].recipients == ("jphifer@americhem.com", "qa@americhem.com")
 
 
 def test_render_report_test_mode_prefixes_header():
@@ -4497,13 +4435,15 @@ def test_delivery_execute_pipeline_wires_prepare_render_and_send(run_delivery_pi
         llm_returns={"Healthcare": "Wired synthesis paragraph."},
     )
 
-    html = result.sent[-1]
+    assert len(result.sent) == 1   # exactly one email per run
+    message = result.sent[-1]
+    html = message.html
     # run → render wiring: a test-mode run instant marks the HTML body and
-    # dates the header; the SAME instant reaches send_email (the subject).
+    # dates the header; the SAME instant reaches the mailer (the subject).
     assert "[TEST]" in html
     assert "TEST RUN" in html
     assert _TEST_RUN.header_date in html
-    assert result.runs == [_TEST_RUN]
+    assert message.subject.startswith("[TEST] ") and _TEST_RUN.subject_date in message.subject
     # prepare_report ran: its synthesis reached the rendered email...
     assert "Wired synthesis paragraph." in html
     # ...and its write-back landed on the run's daily_summaries row.
@@ -4537,7 +4477,8 @@ def test_delivery_only_test_run_renders_exec_summary_without_touching_prod_row(r
 
     result = run_delivery_pipeline(fake, run=_TEST_RUN)
 
-    html = result.sent[-1]
+    assert len(result.sent) == 1
+    html = result.sent[-1].html
     assert "Executive Summary" in html
     assert "Market pressure" in html
     assert "Resin prices climb" in html                 # cited source in the footer
@@ -4555,8 +4496,10 @@ def test_delivery_execute_pipeline_production_run_ships_unmarked_html(run_delive
 
     result = run_delivery_pipeline(fake, run=_RUN)
 
-    assert "[TEST]" not in result.sent[-1]
-    assert "TEST RUN" not in result.sent[-1]
+    assert len(result.sent) == 1
+    assert "[TEST]" not in result.sent[-1].html
+    assert "TEST RUN" not in result.sent[-1].html
+    assert "[TEST]" not in result.sent[-1].subject
 
 
 def test_render_executive_bullets_renders_three_labeled_bullets():
@@ -5122,7 +5065,7 @@ def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     fixed_monday = datetime(2026, 5, 25, 9, 0, 0)  # Monday
-    delivery_engine.fetch_todays_intelligence(RunInstant(now=fixed_monday, run_mode="production"))
+    delivery_engine.fetch_todays_intelligence(replace(_RUN, now=fixed_monday))
     fake.fetch_since.assert_called_once_with(fixed_monday - timedelta(hours=72))
 
 

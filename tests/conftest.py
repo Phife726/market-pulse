@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import pytest  # noqa: E402
 
 import discovery  # noqa: E402
+from mailer import FakeMailer  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
 
 
@@ -145,32 +146,43 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
 
 
 # ===========================================================================
-# Shared delivery execute_pipeline harness — the ingestion harness's twin
+# Shared delivery harness — the ingestion harness's twin
 # ===========================================================================
 
-@dataclass(frozen=True)
-class DeliveryRun:
-    """The observable result of one stubbed delivery execute_pipeline run."""
-
-    #: Every HTML body handed to `send_email`, in order.
-    sent: list
-    #: The run instant handed to `send_email` alongside each body.
-    runs: list
+@pytest.fixture(autouse=True)
+def _inert_mailer(monkeypatch) -> FakeMailer:
+    """Install a recording FakeMailer as the process-wide mailer for EVERY
+    test, so no test can reach the real Resend transport by omission — the
+    production workflow's pytest step runs with the live SMTP_PASS and the
+    production RECIPIENT_EMAILS in its environment. Consumer tests that
+    assert on what was sent take `fake_mailer` (below), which builds on this."""
+    fake = FakeMailer()
+    monkeypatch.setattr("mailer._mailer_singleton", fake)
+    return fake
 
 
 @pytest.fixture
-def run_delivery_pipeline(monkeypatch):
+def fake_mailer(monkeypatch, _inert_mailer) -> FakeMailer:
+    """The process-wide FakeMailer plus the addressing env the real
+    `send_email` reads. `sent` is every EmailMessage that crossed the seam;
+    set `fail_with` to simulate a failed send."""
+    monkeypatch.setenv("SENDER_EMAIL", "noreply@harness.test")
+    monkeypatch.setenv("RECIPIENT_EMAILS", "qa@harness.test")
+    return _inert_mailer
+
+
+@pytest.fixture
+def run_delivery_pipeline(monkeypatch, fake_mailer):
     """Run `delivery_engine.execute_pipeline(run)` over an injected repo with
-    the LLM and the mailer stubbed.
+    the LLM and the mailer seams faked — the real `send_email` composes the
+    message, so the subject/recipient wiring is exercised end to end.
 
       * `fake_repo`     — the InMemoryIntelligenceRepo the run reads and writes.
       * `run`           — the run instant (RUN_INSTANT).
       * `llm_returns`   — what the FakeLLM answers (None = unusable response,
         i.e. bullets-only synthesis).
-      * `send`          — a `send_email(html, *, run)` replacement; by default
-        every HTML body is captured on `DeliveryRun.sent` and the run instant
-        it arrived with on `DeliveryRun.runs`.
       * `report_config` — the mp_config dict (default: visible threshold 6).
+    Returns the `fake_mailer` fixture's FakeMailer (`sent` = what went out).
     """
 
     def _run(
@@ -178,27 +190,18 @@ def run_delivery_pipeline(monkeypatch):
         *,
         run: RunInstant = RUN_INSTANT,
         llm_returns=None,
-        send: Optional[Callable] = None,
         report_config: Optional[dict] = None,
-    ) -> DeliveryRun:
-        import delivery_engine  # local: keeps supabase/openai imports off narrow runs
+    ) -> FakeMailer:
+        import delivery_engine
         from llm import FakeLLM
-
-        sent: list = []
-        runs: list = []
-
-        def _capture(html: str, *, run: RunInstant) -> None:  # the real seam is keyword-only
-            sent.append(html)
-            runs.append(run)
 
         cfg = report_config if report_config is not None else {
             "reporting": {"visible_impact_threshold": 6}
         }
         monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
         monkeypatch.setattr("delivery_engine._llm", lambda: FakeLLM(returns=llm_returns))
-        monkeypatch.setattr("delivery_engine.send_email", send or _capture)
         monkeypatch.setattr("config.mp_config", lambda: cfg)
         delivery_engine.execute_pipeline(run)
-        return DeliveryRun(sent=sent, runs=runs)
+        return fake_mailer
 
     return _run
