@@ -17,11 +17,11 @@ from llm import FakeLLM
 from tests.conftest import (
     RUN_INSTANT as _RUN,
     TEST_RUN_INSTANT as _TEST_RUN,
-    _APPENDIX_CFG,
-    _VALID_MACRO_OUTLOOK,
-    _appendix_hashes,
-    _make_new_article,
-    _src,
+    VALID_MACRO_OUTLOOK,
+    VISIBLE_6_CFG,
+    appendix_hashes,
+    stub_row,
+    stub_source,
 )
 from delivery_engine import (
     _render_card,
@@ -122,10 +122,10 @@ def test_macro_outlook_cites_card_suppressed_article():
     """A macro article suppressed as a card (generic-market-report title, no
     entities) can still be cited by the outlook — the outlook renders from the
     summary row, independent of card visibility."""
-    suppressed = _make_new_article("supp", 8, commercial_segment="Industrial",
+    suppressed = stub_row("supp", 8, commercial_segment="Industrial",
                                    headline="Global polymer market outlook to reach $50 billion")
     suppressed["entities_mentioned"] = []
-    visible = _make_new_article("vis", 8, commercial_segment="Packaging",
+    visible = stub_row("vis", 8, commercial_segment="Packaging",
                                 headline="Packaging supply disruption raises converter costs")
     macro = {
         "macro_outlook": {
@@ -162,11 +162,11 @@ def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
         "run_date": _RUN.run_date,
         "run_mode": "production",
         "executive_summary": "x", "macro_sentiment": "Mixed / Watch",
-        "macro_outlook": _VALID_MACRO_OUTLOOK,
+        "macro_outlook": VALID_MACRO_OUTLOOK,
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
     summary = delivery_engine.fetch_macro_summary(_RUN)
-    assert summary["macro_outlook"] == _VALID_MACRO_OUTLOOK
+    assert summary["macro_outlook"] == VALID_MACRO_OUTLOOK
 
 
 # ===========================================================================
@@ -189,46 +189,20 @@ def test_render_card_excludes_article_summary():
 
 
 # ===========================================================================
-# Thematic synthesis helpers — shared fixture
-# ===========================================================================
-
-
-def _make_article(
-    url_hash: str,
-    score: int,
-    category: str | None,
-    headline: str = "Test Headline",
-) -> dict:
-    return {
-        "url_hash": url_hash,
-        "sentiment_score": score,
-        "category": category,
-        "headline": headline,
-        "americhem_impact": "Some impact.",
-        "entities_mentioned": ["TestCorp"],
-        "source_url": "https://news.com/article",
-    }
-
-
-# ===========================================================================
 # synthesize_thematic_paragraphs()
 # ===========================================================================
-
-
-def _make_synthesis_mock(paragraphs: dict) -> FakeLLM:
-    return FakeLLM(returns=paragraphs)
 
 
 def test_synthesize_thematic_paragraphs_returns_paragraphs():
     """Returns dict of {category: paragraph} on success."""
     groups = {
         "competitors": [
-            _make_article("a", 8, "competitors"),
-            _make_article("b", 7, "competitors"),
+            stub_row("a", 8, category="competitors"),
+            stub_row("b", 7, category="competitors"),
         ]
     }
     expected = {"competitors": "Avient and Techmer raised prices."}
-    mock_client = _make_synthesis_mock(expected)
+    mock_client = FakeLLM(returns=expected)
 
     with patch("delivery_engine._llm", return_value=mock_client):
         result = synthesize_thematic_paragraphs(groups)
@@ -240,11 +214,11 @@ def test_synthesize_thematic_paragraphs_passes_grouped_text_to_seam():
     """The caller sends one request carrying the grouped category text."""
     groups = {
         "suppliers": [
-            _make_article("a", 4, "suppliers"),
-            _make_article("b", 5, "suppliers"),
+            stub_row("a", 4, category="suppliers"),
+            stub_row("b", 5, category="suppliers"),
         ]
     }
-    fake = _make_synthesis_mock({"suppliers": "Supply chain tightening."})
+    fake = FakeLLM(returns={"suppliers": "Supply chain tightening."})
 
     with patch("delivery_engine._llm", return_value=fake):
         synthesize_thematic_paragraphs(groups)
@@ -268,8 +242,8 @@ def test_synthesize_thematic_paragraphs_graceful_degradation():
     """Returns {} when the seam yields no usable response — does not re-raise."""
     groups = {
         "competitors": [
-            _make_article("a", 7, "competitors"),
-            _make_article("b", 8, "competitors"),
+            stub_row("a", 7, category="competitors"),
+            stub_row("b", 8, category="competitors"),
         ]
     }
     # The seam swallows transport/parse failures and returns None.
@@ -300,7 +274,7 @@ def test_report_legacy_critical_old_sections_gone():
     # current threshold filter. What we DO assert: the old section labels are gone
     # and Peripheral Signals is hidden in production. The CRITICAL badge behaviour
     # is unit-tested directly via test_render_segment_watch_section_critical_badge_for_legacy_low_score.
-    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(data, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert "PERIPHERAL SIGNALS" not in html
     assert "CRITICAL DISRUPTIONS" not in html
@@ -322,7 +296,7 @@ def test_report_routes_two_plus_to_segment_watch():
          "americhem_impact": "Effect.", "source_url": "https://x/b",
          "entities_mentioned": ["Techmer"]},
     ]
-    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(data, config=VISIBLE_6_CFG)
     assert model.synthesis_candidates() == {"Healthcare": model.groups["Healthcare"]}
     html = render_report(
         model.with_synthesis({"Healthcare": "Synthesis paragraph here."}),
@@ -344,7 +318,7 @@ def test_report_single_low_relevance_not_a_visible_card():
              "headline": "Low relevance packaging signal",
              "americhem_impact": ".", "source_url": "https://x/p",
              "entities_mentioned": ["Acme"]}]
-    model = assemble_report(data, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(data, config=VISIBLE_6_CFG)
     assert model.groups == {}
     assert [a["url_hash"] for a in model.additional_articles] == ["x"]
     assert model.ledger.breakdown.get("weak_relevance", 0) == 0
@@ -356,13 +330,13 @@ def test_assemble_report_filters_below_impact_threshold():
     """Articles with americhem_impact_score below the threshold must not appear in the report.
     Use a non-Enterprise segment so the Enterprise-low-impact suppression rule
     doesn't claim the row first — this exercises the visibility filter itself."""
-    low_impact = _make_new_article("low", americhem_impact_score=3, headline="Low Impact Headline",
+    low_impact = stub_row("low", americhem_impact_score=3, headline="Low Impact Headline",
                                    commercial_segment="Packaging")
-    high_impact = _make_new_article("high", americhem_impact_score=8, headline="High Impact Headline",
+    high_impact = stub_row("high", americhem_impact_score=8, headline="High Impact Headline",
                                     commercial_segment="Packaging")
 
     model = assemble_report([low_impact, high_impact],
-                            config={"reporting": {"visible_impact_threshold": 6}})
+                            config=VISIBLE_6_CFG)
 
     kept = {a["url_hash"] for arts in model.groups.values() for a in arts}
     assert kept == {"high"}
@@ -408,9 +382,9 @@ def test_legacy_outlook_render_lists_no_orphan_sources():
                           "signals": signals},
         "executive_sources": sources,
     }
-    rows = [_make_new_article("v", 8, commercial_segment="Packaging",
+    rows = [stub_row("v", 8, commercial_segment="Packaging",
                               headline="Packaging demand firms on brand-owner restocking")]
-    model = assemble_report(rows, macro_summary=macro_summary, config=_APPENDIX_CFG)
+    model = assemble_report(rows, macro_summary=macro_summary, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     # The kept (sliced) sources appear in the Sources footer.
@@ -428,13 +402,13 @@ def test_assemble_report_groups_by_commercial_segment():
     """Two new-style articles with the same commercial_segment are grouped under that label."""
     # Use genuinely distinct headlines so delivery suppression doesn't flag them
     # as semantic duplicates (token_sort_ratio threshold is 88).
-    art_a = _make_new_article("a", 8, commercial_segment="Healthcare",
+    art_a = stub_row("a", 8, commercial_segment="Healthcare",
                               headline="Hospital network consolidation squeezes specialty polymer demand")
-    art_b = _make_new_article("b", 7, commercial_segment="Healthcare",
+    art_b = stub_row("b", 7, commercial_segment="Healthcare",
                               headline="FDA clears new medical-grade compound for implantable devices")
 
     model = assemble_report([art_a, art_b],
-                            config={"reporting": {"visible_impact_threshold": 6}})
+                            config=VISIBLE_6_CFG)
     assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["a", "b"]
 
     html = render_report(
@@ -607,7 +581,7 @@ def test_report_capped_articles_flow_into_appendix():
         "Generic drug expansion pressures premium plastics pricing",
     ]
     articles = [
-        _make_new_article(
+        stub_row(
             f"h{i}", americhem_impact_score=10 - i,
             commercial_segment="Healthcare",
             headline=_hc_headlines[i],
@@ -657,17 +631,17 @@ def _macro_summary_with_outlook() -> dict:
             ],
         },
         "executive_sources": [
-            {"id": 1, "headline": "Industrial PMI slips", "url": "https://s/1", "domain": "s.com"},
-            {"id": 2, "headline": "Housing starts fall", "url": "https://s/2", "domain": "t.com"},
+            stub_source(1, "Industrial PMI slips", "https://s/1", "s.com"),
+            stub_source(2, "Housing starts fall", "https://s/2", "t.com"),
         ],
     }
 
 
 def test_macro_section_renders_between_exec_and_segment_watch():
-    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+    visible = stub_row("v", 8, commercial_segment="Packaging",
                                 headline="High-impact packaging supply disruption card")
     model = assemble_report([visible], macro_summary=_macro_summary_with_outlook(),
-                            config=_APPENDIX_CFG)
+                            config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert _MACRO_TITLE in html
     assert "Industrial and construction demand both softening." in html
@@ -683,10 +657,10 @@ def test_macro_section_renders_between_exec_and_segment_watch():
 
 
 def test_macro_section_absent_when_none():
-    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+    visible = stub_row("v", 8, commercial_segment="Packaging",
                                 headline="High-impact packaging card with no outlook")
     model = assemble_report([visible], macro_summary={"dominant_condition": "Mixed / Watch"},
-                            config=_APPENDIX_CFG)
+                            config=VISIBLE_6_CFG)
     assert model.macro_outlook is None
     html = render_report(model, today_str=_TODAY_STR)
     assert _MACRO_TITLE not in html
@@ -694,9 +668,9 @@ def test_macro_section_absent_when_none():
 
 def test_macro_section_current_condition_rendered_once():
     model = assemble_report(
-        [_make_new_article("v", 8, commercial_segment="Packaging",
+        [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card to accompany the macro outlook")],
-        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+        macro_summary=_macro_summary_with_outlook(), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert html.count("Industrial and construction demand both softening.") == 1
 
@@ -706,9 +680,9 @@ def test_macro_section_shares_one_citation_numbering_space():
     shows [1], the macro section shows [2], and the single Sources footer lists
     both — one numbering space (bullets enumerated, then signals)."""
     model = assemble_report(
-        [_make_new_article("v", 8, commercial_segment="Packaging",
+        [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card next to the macro outlook here")],
-        macro_summary=_macro_summary_with_outlook(), config=_APPENDIX_CFG)
+        macro_summary=_macro_summary_with_outlook(), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     # Both cited sources resolve in the bottom Sources list.
     assert "Industrial PMI slips" in html
@@ -734,11 +708,11 @@ def test_section_headers_render_without_nowrap():
     """The rendered email's section titles are not placed in nowrap cells."""
     macro = _macro_summary_with_outlook()
     model = assemble_report(
-        [_make_new_article("v", 8, commercial_segment="Packaging",
+        [stub_row("v", 8, commercial_segment="Packaging",
                            headline="High-impact packaging card for header test"),
-         _make_new_article("w", 5, commercial_segment="Industrial",
+         stub_row("w", 5, commercial_segment="Industrial",
                            headline="Near-threshold industrial reading for appendix here")],
-        macro_summary=macro, config=_APPENDIX_CFG)
+        macro_summary=macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     for title in ("MACROECONOMIC OUTLOOK", "COMMERCIAL SEGMENT WATCH",
                   "Additional Articles to Explore"):
@@ -772,9 +746,9 @@ def test_macro_section_direction_styling_is_valence_neutral():
         ],
     }
     model = assemble_report(
-        [_make_new_article("v", 8, commercial_segment="Packaging", sentiment_tag="Neutral",
+        [stub_row("v", 8, commercial_segment="Packaging", sentiment_tag="Neutral",
                            headline="Neutral-tag packaging card beside the outlook")],
-        macro_summary=macro, config=_APPENDIX_CFG)
+        macro_summary=macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     macro_section = html[html.find(_MACRO_TITLE):html.find("COMMERCIAL SEGMENT WATCH")]
     # No sentiment green/red inside the macro section — direction is neutral.
@@ -787,9 +761,9 @@ def test_macro_section_escapes_untrusted_text():
     macro = _macro_summary_with_outlook()
     macro["macro_outlook"]["signals"][0]["americhem_implication"] = "<script>alert('x')</script> risk"
     model = assemble_report(
-        [_make_new_article("v", 8, commercial_segment="Packaging",
+        [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card with an XSS-y macro outlook")],
-        macro_summary=macro, config=_APPENDIX_CFG)
+        macro_summary=macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
@@ -806,10 +780,10 @@ _APPENDIX_TITLE = "Additional Articles to Explore"
 def test_appendix_renders_when_items_present():
     """The appendix section shows title, linked headline, segment, impact, and
     source for each row."""
-    row = _make_new_article("a", 5, commercial_segment="Packaging",
+    row = stub_row("a", 5, commercial_segment="Packaging",
                             headline="Near-threshold packaging demand firms up")
     row["source_publication"] = "Plastics News"
-    model = assemble_report([row], config=_APPENDIX_CFG)
+    model = assemble_report([row], config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert _APPENDIX_TITLE in html
     assert "Near-threshold packaging demand firms up" in html
@@ -821,9 +795,9 @@ def test_appendix_renders_when_items_present():
 
 def test_appendix_absent_when_empty():
     """No appendix section renders when there are no additional articles."""
-    row = _make_new_article("v", 8, commercial_segment="Packaging",
+    row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible high-impact packaging card only")
-    model = assemble_report([row], config=_APPENDIX_CFG)
+    model = assemble_report([row], config=VISIBLE_6_CFG)
     assert model.additional_articles == ()
     html = render_report(model, today_str=_TODAY_STR)
     assert _APPENDIX_TITLE not in html
@@ -831,14 +805,14 @@ def test_appendix_absent_when_empty():
 
 def test_appendix_shows_date_only_when_published_at():
     """Publication date renders only from published_at, never a scrape timestamp."""
-    dated = _make_new_article("d", 5, commercial_segment="Packaging",
+    dated = stub_row("d", 5, commercial_segment="Packaging",
                               headline="Dated near-threshold packaging signal here")
     dated["published_at"] = "2026-07-15T09:00:00+00:00"
     dated["created_at"] = "2026-07-16T23:59:00+00:00"  # scrape time — must NOT show
-    undated = _make_new_article("u", 5, commercial_segment="Industrial",
+    undated = stub_row("u", 5, commercial_segment="Industrial",
                                 headline="Undated near-threshold industrial signal")
     undated["created_at"] = "2026-07-16T23:59:00+00:00"
-    model = assemble_report([dated, undated], config=_APPENDIX_CFG)
+    model = assemble_report([dated, undated], config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert "Jul 15, 2026" in html          # published_at of the dated row
     assert "Jul 16, 2026" not in html      # scrape timestamp never displayed
@@ -846,11 +820,11 @@ def test_appendix_shows_date_only_when_published_at():
 
 def test_appendix_omits_so_what_narrative():
     """The appendix does not render the americhem_impact 'So what' narrative."""
-    row = _make_new_article("a", 5, commercial_segment="Packaging",
+    row = stub_row("a", 5, commercial_segment="Packaging",
                             headline="Near-threshold packaging note for appendix")
     row["americhem_impact"] = "UNIQUE_SO_WHAT_NARRATIVE_TOKEN"
-    model = assemble_report([row], config=_APPENDIX_CFG)
-    assert _appendix_hashes(model) == ["a"]
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert appendix_hashes(model) == ["a"]
     html = render_report(model, today_str=_TODAY_STR)
     assert _APPENDIX_TITLE in html
     assert "UNIQUE_SO_WHAT_NARRATIVE_TOKEN" not in html
@@ -858,10 +832,10 @@ def test_appendix_omits_so_what_narrative():
 
 def test_appendix_escapes_untrusted_and_guards_href():
     """Headline/source are HTML-escaped and a non-http(s) URL is neutralized."""
-    row = _make_new_article("a", 5, commercial_segment="Packaging",
+    row = stub_row("a", 5, commercial_segment="Packaging",
                             headline="<script>alert('x')</script> resin note")
     row["source_url"] = "javascript:alert(1)"
-    model = assemble_report([row], config=_APPENDIX_CFG)
+    model = assemble_report([row], config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
@@ -870,9 +844,9 @@ def test_appendix_escapes_untrusted_and_guards_href():
 
 def test_appendix_renders_below_segment_watch_above_sources():
     """Section order: Commercial Segment Watch -> Additional Articles -> Sources."""
-    visible = _make_new_article("v", 8, commercial_segment="Packaging",
+    visible = stub_row("v", 8, commercial_segment="Packaging",
                                 headline="High-impact packaging supply disruption card")
-    weak = _make_new_article("w", 5, commercial_segment="Industrial",
+    weak = stub_row("w", 5, commercial_segment="Industrial",
                              headline="Near-threshold industrial reading for appendix")
     macro = {
         "dominant_condition": "Mixed / Watch",
@@ -885,7 +859,7 @@ def test_appendix_renders_below_segment_watch_above_sources():
             {"id": 1, "headline": "Source one", "url": "https://s/1", "domain": "s.com"},
         ],
     }
-    model = assemble_report([visible, weak], macro_summary=macro, config=_APPENDIX_CFG)
+    model = assemble_report([visible, weak], macro_summary=macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     i_watch = html.find("COMMERCIAL SEGMENT WATCH")
     i_appendix = html.find(_APPENDIX_TITLE)
@@ -902,35 +876,48 @@ def test_appendix_renders_below_segment_watch_above_sources():
 def test_assemble_report_excludes_negative_low_impact_new_style():
     """A Negative-sentiment article with low americhem_impact_score must be excluded.
     Filtering is by impact score, not tone — this validates the invariant."""
-    neg_low = _make_new_article(
+    # A segment-specific row, so rule 1 (Enterprise below 7) cannot be what
+    # keeps it off the cards — the visibility filter must; it lands in the appendix.
+    neg_low = stub_row(
         "neg_low", americhem_impact_score=4,
-        sentiment_tag="Negative",
+        sentiment_tag="Negative", commercial_segment="Packaging",
         headline="Negative Low Impact Headline",
     )
-    pos_high = _make_new_article(
+    # An Enterprise row below enterprise_min_impact is rule-1 suppressed: nowhere.
+    ent_low = stub_row(
+        "ent_low", americhem_impact_score=4,
+        sentiment_tag="Negative",
+        headline="Enterprise Low Impact Headline",
+    )
+    pos_high = stub_row(
         "pos_high", americhem_impact_score=8,
         sentiment_tag="Positive",
         headline="Positive High Impact Headline",
     )
-    model = assemble_report([neg_low, pos_high],
-                            config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report([neg_low, ent_low, pos_high], config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
-    assert "Positive High Impact Headline" in html
-    assert "Negative Low Impact Headline" not in html
+    visible = {row["url_hash"] for rows in model.groups.values() for row in rows}
+    assert visible == {"pos_high"}
+    assert appendix_hashes(model) == ["neg_low"]
+    cards, appendix = html.split(_APPENDIX_TITLE, 1)
+    assert "Positive High Impact Headline" in cards
+    assert "Negative Low Impact Headline" not in cards
+    assert "Negative Low Impact Headline" in appendix
+    assert "Enterprise Low Impact Headline" not in html
 
 
 def test_report_shows_negative_high_impact():
     """A Negative-sentiment article with high americhem_impact_score MUST appear.
     A high-impact supply disruption (Negative) is more important than a positive routine signal."""
-    neg_high = _make_new_article(
+    neg_high = stub_row(
         "neg_high", americhem_impact_score=9,
         sentiment_tag="Negative",
         commercial_segment="Raw Materials / Supply Chain",
         headline="Negative High Impact Supply Disruption",
     )
     model = assemble_report([neg_high],
-                            config={"reporting": {"visible_impact_threshold": 6}})
+                            config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     assert "Negative High Impact Supply Disruption" in html
@@ -971,7 +958,7 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(fake_mailer, mon
 def test_render_report_test_mode_prefixes_header():
     """With test_mode=True, render_report() must include [TEST] in the title and
     a visible TEST RUN banner in the rendered HTML."""
-    model = assemble_report([_make_new_article("h", 8, headline="Some Headline")])
+    model = assemble_report([stub_row("h", 8, headline="Some Headline")])
     html = render_report(model, today_str=_TODAY_STR, test_mode=True)
     assert "[TEST]" in html
     assert "TEST RUN" in html
@@ -981,7 +968,7 @@ def test_render_report_test_mode_prefixes_header():
 def test_render_report_production_mode_unchanged():
     """With test_mode=False (the default), the rendered HTML must contain
     no [TEST] markers or TEST RUN banner."""
-    model = assemble_report([_make_new_article("h", 8, headline="Some Headline")])
+    model = assemble_report([stub_row("h", 8, headline="Some Headline")])
     html = render_report(model, today_str=_TODAY_STR)
     assert "[TEST]" not in html
     assert "TEST RUN" not in html
@@ -1205,7 +1192,7 @@ def test_render_report_tolerates_accounting_only_macro_summary():
          "americhem_impact": "Effect.", "source_url": "https://x/v1",
          "entities_mentioned": ["Acme"]},
     ]
-    model = assemble_report(rows, summary, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(rows, summary, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=True)
     assert "Executive Summary" not in html
     assert "MACROECONOMIC OUTLOOK" not in html
@@ -1446,7 +1433,7 @@ def test_prepare_report_update_filtered_by_run_date_and_run_mode(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, run=_TEST_RUN, report_config={"reporting": {"visible_impact_threshold": 6}})
+        prepare_report(rows, None, run=_TEST_RUN, report_config=VISIBLE_6_CFG)
 
     assert update_calls, f"Expected update_delivery_counts call. calls={update_calls}"
     keys = set()
@@ -1702,7 +1689,7 @@ def test_header_falls_back_to_len_data_when_screened_null():
     ], "dominant_condition": "Competitive Pressure",
        "screened_count": None, "surfaced_count": None}
 
-    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     assert "from 7 screened items" in html
@@ -1720,7 +1707,7 @@ def test_header_omits_dominant_condition_clause_when_null():
              "dominant_condition": None, "macro_sentiment": None,
              "screened_count": 5, "surfaced_count": 1}
 
-    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     # The literal string 'None' must not appear anywhere as a rendered value.
@@ -1762,7 +1749,7 @@ def test_qa_debug_section_appears_in_test_mode():
         ],
     }
 
-    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=True)
 
     assert "QA" in html
@@ -1795,7 +1782,7 @@ def test_qa_debug_section_absent_in_production():
                                  "title": "Pretty plastic tote"}],
     }
 
-    model = assemble_report(rows, macro, config={"reporting": {"visible_impact_threshold": 6}})
+    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=False)
 
     assert "Suppression Summary" not in html
@@ -2002,8 +1989,8 @@ def test_synthesize_thematic_ships_prompts_module_text_across_seam():
     import prompts
 
     groups = {"Healthcare": [
-        _make_article("a", 8, "competitors"),
-        _make_article("b", 7, "competitors"),
+        stub_row("a", 8, category="competitors"),
+        stub_row("b", 7, category="competitors"),
     ]}
     fake = FakeLLM(returns=None)
     with patch("delivery_engine._llm", return_value=fake):
@@ -2203,7 +2190,7 @@ def test_render_bullets_inline_citation_is_grouped_and_linked():
         {"label": "Supply chain watch", "body": "Freight up.", "citation_source_ids": []},
         {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
     ]
-    sources = [_src(5, url="https://a.com/x"), _src(8, url="https://b.com/y")]
+    sources = [stub_source(5, url="https://a.com/x"), stub_source(8, url="https://b.com/y")]
     dmap = _citation_display_map(bullets, sources)
     html_out = _render_executive_bullets(bullets, sources, dmap)
     assert "Pricing firm." in html_out
@@ -2231,7 +2218,7 @@ def test_render_bullets_escapes_malicious_url_and_headline():
         {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
     ]
     # javascript: scheme must be dropped -> number rendered as plain text, no href.
-    sources = [_src(1, url="javascript:alert(1)")]
+    sources = [stub_source(1, url="javascript:alert(1)")]
     dmap = _citation_display_map(bullets, sources)
     html_out = _render_executive_bullets(bullets, sources, dmap)
     assert "javascript:alert(1)" not in html_out
@@ -2246,8 +2233,8 @@ def test_render_sources_footer_orders_and_escapes():
         {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
     ]
     sources = [
-        _src(5, headline="Resin <b>up</b>", url="https://a.com/x", domain="a.com"),
-        _src(8, headline="Freight", url="https://b.com/y", domain="b.com"),
+        stub_source(5, headline="Resin <b>up</b>", url="https://a.com/x", domain="a.com"),
+        stub_source(8, headline="Freight", url="https://b.com/y", domain="b.com"),
     ]
     dmap = _citation_display_map(bullets, sources)
     footer = _render_sources_footer(sources, dmap)
@@ -2264,7 +2251,7 @@ def test_render_sources_footer_empty_when_no_citations():
 
 def test_render_sources_footer_handles_missing_url_gracefully():
     bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [1]}]
-    sources = [_src(1, headline="", url="", domain="")]
+    sources = [stub_source(1, headline="", url="", domain="")]
     dmap = _citation_display_map(bullets, sources)
     footer = _render_sources_footer(sources, dmap)
     assert footer != ""               # does not crash, still renders a row
@@ -2291,8 +2278,8 @@ def test_render_marker_mixes_linked_and_unlinked_by_url_safety():
         {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
     ]
     sources = [
-        _src(1, url="javascript:alert(1)"),   # unsafe -> plain text [1]
-        _src(2, url="https://safe.com/y"),     # safe -> linked [2]
+        stub_source(1, url="javascript:alert(1)"),   # unsafe -> plain text [1]
+        stub_source(2, url="https://safe.com/y"),     # safe -> linked [2]
     ]
     dmap = _citation_display_map(bullets, sources)
     html_out = _render_executive_bullets(bullets, sources, dmap)
@@ -2374,10 +2361,8 @@ def _macro_with_citations():
             {"label": "Commercial action", "body": "Watch.", "citation_source_ids": []},
         ],
         "executive_sources": [
-            {"id": 1, "headline": "Resin prices climb", "url": "https://reuters.com/x",
-             "domain": "reuters.com", "segment": "Auto", "score": 8},
-            {"id": 2, "headline": "Freight rates spike", "url": "https://icis.com/y",
-             "domain": "icis.com", "segment": "Auto", "score": 7},
+            stub_source(1, "Resin prices climb", "https://reuters.com/x", "reuters.com"),
+            stub_source(2, "Freight rates spike", "https://icis.com/y", "icis.com"),
         ],
     }
 

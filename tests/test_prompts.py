@@ -406,6 +406,16 @@ def test_thematic_user_contains_category_blocks_and_impact_lines():
     assert "maximum 30 words" in spec.system
 
 
+def test_thematic_prompt_accepts_a_legacy_row():
+    """A pre-relevance-upgrade row (sentiment_score only — no tag, no segment)
+    still builds a line: impact via the sentiment fallback, no tag suffix, and
+    the entity label falls through to the category."""
+    legacy = {"headline": "Old", "americhem_impact": "Legacy impact.",
+              "sentiment_score": 7, "entities_mentioned": [], "category": "suppliers"}
+    spec = prompts.thematic_prompt({"suppliers": [legacy]})
+    assert "- [suppliers | impact:7/10] Legacy impact." in spec.user
+
+
 # ---------------------------------------------------------------------------
 # Insight prompt — RULE 1 precedence over the RULE 6 / RULE 7 exits (issue #72)
 # ---------------------------------------------------------------------------

@@ -173,21 +173,3 @@ def test_validate_ingestion_ignores_delivery_only_secret(monkeypatch):
         monkeypatch.setenv(name, "x")
     monkeypatch.delenv("SMTP_PASS", raising=False)
     config.validate_environment("ingestion")  # no raise
-
-
-# ===========================================================================
-# Moved from the pipeline monolith; consolidated with the rules above in a follow-up
-# ===========================================================================
-
-
-def test_run_mode_helper(monkeypatch):
-    """config.run_mode() returns 'test' when env=test; 'production' otherwise; case-insensitive."""
-    from config import run_mode
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
-    assert run_mode() == "test"
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "TEST")
-    assert run_mode() == "test"
-    monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "")
-    assert run_mode() == "production"
-    monkeypatch.delenv("MARKET_PULSE_RUN_MODE", raising=False)
-    assert run_mode() == "production"
