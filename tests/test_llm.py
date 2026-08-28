@@ -3,7 +3,7 @@
 The SDK-shape contract — model id, json-object response format, message
 ordering, and the failure-to-None envelope handling — lives here, at the
 adapter, instead of being re-asserted inside every caller. Caller tests inject
-``FakeLLM`` and assert on the prompts that cross the seam (see test_pipeline.py).
+``FakeLLM`` and assert on the prompts that cross the seam (see test_ingestion_engine.py / test_delivery_engine.py).
 """
 
 import json

@@ -17,7 +17,7 @@ The pipeline is fully serverless, executing autonomously via GitHub Actions.
 3. **Normalization & Deduplication:** Strips URL tracking parameters and computes a SHA-256 hash to guarantee zero duplicate entries in the database.
 4. **Synthesis:** Passes the raw text to OpenAI (`gpt-5.4-nano`) to extract strict JSON: the Americhem impact, a sentiment score (1-10), and the exact source URL.
 5. **Storage:** Upserts the structured intelligence into a PostgreSQL database (Supabase).
-6. **Delivery:** Formats the last 24 hours of data (72 h on Mondays, to capture weekend news) into a BLUF (Bottom Line Up Front) HTML email and transmits it to stakeholders via the **Resend HTTP API** with exponential-backoff retry.
+6. **Delivery:** Formats every article stored since the last production delivery (the delivery window — anchored to `delivered_at`, so a late start never drops a day; a 24 h / 72 h-on-Monday wall-clock lookback is only the fallback when no delivery is recorded) into a BLUF (Bottom Line Up Front) HTML email and transmits it to stakeholders via the **Resend HTTP API** with exponential-backoff retry.
 
 ---
 

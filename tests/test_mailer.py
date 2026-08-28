@@ -4,7 +4,7 @@ The transport contract — Resend endpoint, bearer auth from SMTP_PASS, payload
 shape, and the retry policy (transient HTTP codes retry with backoff; any
 other failure propagates at once) — lives here, at the adapter, instead of
 being re-asserted inside every caller. Consumer tests inject ``FakeMailer``
-and assert on the ``EmailMessage`` that crossed the seam (see test_pipeline.py).
+and assert on the ``EmailMessage`` that crossed the seam (see test_delivery_engine.py).
 """
 from dataclasses import FrozenInstanceError
 from unittest.mock import MagicMock

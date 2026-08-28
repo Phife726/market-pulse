@@ -151,3 +151,83 @@ def test_signal_type_defaults_when_missing():
 
 def test_signal_type_returns_value():
     assert insight.signal_type({"signal_type": "Regulatory"}) == "Regulatory"
+
+
+# ===========================================================================
+# Moved from the pipeline monolith; consolidated with the rules above in a follow-up
+# ===========================================================================
+
+
+def test_discard_signal_detected():
+    insight = {"americhem_impact": "DISCARD"}
+    assert insight.get("americhem_impact") == "DISCARD"
+
+
+def test_commercial_segment_of_returns_commercial_segment():
+    from insight import commercial_segment as _commercial_segment_of
+    assert _commercial_segment_of({"commercial_segment": "Healthcare"}) == "Healthcare"
+
+
+def test_commercial_segment_of_strips_whitespace():
+    from insight import commercial_segment as _commercial_segment_of
+    assert _commercial_segment_of({"commercial_segment": " Packaging "}) == "Packaging"
+
+
+def test_commercial_segment_of_ignores_legacy_strategic_segment():
+    """The legacy strategic_segment fallback was removed — rows with only that
+    field must route to the default Enterprise / Cross-Segment bucket."""
+    from insight import commercial_segment as _commercial_segment_of
+    assert _commercial_segment_of({"strategic_segment": "Healthcare"}) == "Enterprise / Cross-Segment"
+
+
+def test_commercial_segment_of_defaults_when_missing():
+    from insight import commercial_segment as _commercial_segment_of
+    assert _commercial_segment_of({}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"commercial_segment": None}) == "Enterprise / Cross-Segment"
+    assert _commercial_segment_of({"commercial_segment": ""}) == "Enterprise / Cross-Segment"
+
+
+def test_commercial_segment_of_defaults_for_whitespace_only():
+    """A whitespace-only commercial_segment must default to Enterprise / Cross-Segment,
+    not produce a blank segment bucket."""
+    from insight import commercial_segment as _commercial_segment_of
+    assert _commercial_segment_of({"commercial_segment": "   "}) == "Enterprise / Cross-Segment"
+
+
+def test_signal_type_of_prefers_new_field():
+    from insight import signal_type as _signal_type_of
+    assert _signal_type_of({"signal_type": "Regulatory"}) == "Regulatory"
+
+
+def test_signal_type_of_falls_back_to_other():
+    from insight import signal_type as _signal_type_of
+    assert _signal_type_of({}) == "Other"
+    assert _signal_type_of({"signal_type": None}) == "Other"
+    assert _signal_type_of({"signal_type": ""}) == "Other"
+
+
+def test_effective_impact_falls_back_when_americhem_impact_score_is_malformed():
+    """Bad americhem_impact_score → fall back to sentiment_score."""
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
+    row = {"americhem_impact_score": "bad", "sentiment_score": 8}
+    assert _effective_impact(row) == 8
+    assert _alert_tier(row) == "STRATEGIC"
+
+
+def test_effective_impact_uses_default_when_both_scores_malformed():
+    """Bad in both fields → default to 5 (routine), do not raise."""
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
+    row = {"americhem_impact_score": "bad", "sentiment_score": "also bad"}
+    assert _effective_impact(row) == 5
+    assert _alert_tier(row) == "ROUTINE"
+
+
+def test_effective_impact_uses_default_when_both_scores_missing():
+    """Missing scores → default to 5 (unchanged behavior)."""
+    from insight import effective_impact as _effective_impact
+    from scoring import tier as _alert_tier
+    row = {"headline": "test"}
+    assert _effective_impact(row) == 5
+    assert _alert_tier(row) == "ROUTINE"

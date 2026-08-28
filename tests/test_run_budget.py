@@ -5,7 +5,7 @@ Pure: every verdict is a function of the budget's limits, the position-aware
 concept demand, and the two numbers the loop passes (`elapsed`,
 `scrapes_attempted`). No clock, no I/O — the loop owns the stopwatch. The
 shipped-config headroom guard (real `targets.yaml`) lives in
-`tests/test_pipeline.py` beside the other real-config invariants.
+`tests/test_targets.py` beside the other real-control-file pins.
 """
 from dataclasses import FrozenInstanceError
 from functools import partial
