@@ -24,12 +24,13 @@ the gauntlet keep relying on the shape.
 """
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, Protocol
 
 import requests
 
 import config
+from run_instant import naive_utcnow
 import relevance_gate
 import zoominfo_client
 
@@ -170,7 +171,7 @@ class ZoomInfoProvider:
         per_company = config.env_int(
             "ZOOMINFO_NEWS_PER_COMPANY", ZOOMINFO_NEWS_PER_COMPANY_DEFAULT
         )
-        start_date = (datetime.utcnow() - timedelta(days=lookback_days)).date().isoformat()
+        start_date = (naive_utcnow() - timedelta(days=lookback_days)).date().isoformat()
         return zoominfo_client.discover_company_news(
             zoominfo_company_id=company_id,
             publishing_date_start=start_date,

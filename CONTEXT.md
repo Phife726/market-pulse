@@ -7,7 +7,7 @@ language; domain terms are specific to the Americhem market-intelligence pipelin
 ## Seams
 
 A **seam** is where an interface lives — a place behaviour can be swapped without
-editing in place. This pipeline has four, each a pure module with a Protocol and
+editing in place. This pipeline has five, each a pure module with a Protocol and
 production + in-memory adapters (tests inject the fake at the consumer):
 
 - **Repo seam** (`daily_intelligence_repo.py`, `IntelligenceRepo`) — every Supabase
@@ -21,6 +21,20 @@ production + in-memory adapters (tests inject the fake at the consumer):
   `json.loads`). Never raises — returns `None` on any failure; the caller maps
   `None` to its own sentinel and does its own domain validation. Does **not** own
   response validation.
+- **Mailer seam** (`mailer.py`, `Mailer`) — the one outbound email transport.
+  Interface: `send(message: EmailMessage) -> None`, where **`EmailMessage`** is
+  a frozen value (`sender`, `recipients`, `subject`, `html`) — the composed
+  digest, transport-agnostic. Adapters: `ResendMailer` (owns the Resend API
+  key `SMTP_PASS` — legacy name —, the endpoint, the retry policy: transient
+  HTTP codes retry with exponential backoff, everything else propagates at
+  once) and `FakeMailer` (records every message; `fail_with` raises). The
+  consumer, `delivery_engine.send_email(html, *, run)`, keeps the
+  *addressing* — it reads `SENDER_EMAIL` / `RECIPIENT_EMAILS` (the only source
+  of the `to:` list) and composes the subject from the **run instant** — then
+  calls `_mailer().send(message)`; `execute_pipeline` never sees the seam.
+  Retry policy and request shape are asserted once, at the adapter
+  (`tests/test_mailer.py`); consumer tests inject `FakeMailer` and assert on
+  the message that crossed the seam.
 - **Discovery seam** (`discovery.py`, `DiscoveryProvider`) — how the ingestion
   engine consumes article-discovery providers. Interface: `name`,
   `eligible(target) -> bool`, `discover(target) -> list[dict]` (provider-neutral
@@ -41,7 +55,7 @@ production + in-memory adapters (tests inject the fake at the consumer):
 Tests inject the in-memory adapter at the consumer module, e.g.
 `monkeypatch.setattr("ingestion_engine._llm", lambda: FakeLLM(returns=...))`.
 
-A fourth seam is data-shaped rather than Protocol-shaped: the **report model**
+One further seam is data-shaped rather than Protocol-shaped: the **report model**
 (see Domain terms) — a plain frozen value between report assembly and rendering.
 It has no adapters; behaviour on either side of it is swapped by composing the
 pure functions differently, not by injection.
@@ -56,8 +70,8 @@ pure functions differently, not by injection.
 `REQUIRED_SECRETS`, raising `MissingEnvironmentError`) that each engine's
 `main()` runs before any API spend, so a misconfigured cron crashes at t=0
 instead of part-way through. It is **not** a Protocol seam: it has no adapters,
-because the Protocol seams (`llm`, `daily_intelligence_repo`, `zoominfo_client`,
-and `discovery`'s `ZoomInfoProvider`) keep reading their own secrets / feature
+because the Protocol seams (`llm`, `daily_intelligence_repo`, `mailer`,
+`zoominfo_client`, and `discovery`'s `ZoomInfoProvider`) keep reading their own secrets / feature
 flags at use time — config only *validates their presence* and owns the flag
 *values*, it does not own the seams' values. The pure
 report/scoring/prompt modules never import it: they receive a plain config dict
@@ -114,6 +128,28 @@ zero-I/O purity is untouched.
   old "rows created in the last 24 h" window was relative to the delivery
   step's own clock, so a late scheduled start (13:53 UTC on 2026-08-27) closed
   it after every row of the previous day and silently dropped them.
+- **Run instant** (`run_instant.py`, `RunInstant`) — the one clock reading a
+  pipeline run makes, plus the run mode, as a frozen value: `now` (naive UTC —
+  the convention every stored timestamp follows) and `run_mode`. Together they
+  are the `daily_summaries` row this run belongs to (`run_date` + `run_mode`
+  is that table's key) and everything else a run derives from "today" —
+  `min_summary_date` (the macro-summary lookback floor), `header_date` /
+  `subject_date` (the email's display dates), `test_mode`. `RunInstant.current()`
+  is the single effectful line (clock + `config.run_mode()`); each engine's
+  `main()` reads one and hands it to `execute_pipeline(run)`, which threads it,
+  so the row key is spelled once per run instead of once per function. The
+  email's date is the **UTC** run date by construction. Ingestion hands it to
+  `_finalize_run` (the gauntlet never reads it); delivery to every fetch,
+  write-back, send and stamp. The rule: effectful functions take the value,
+  pure functions take the one field they need — `delivery_window(now, …)` and
+  `render_report(today_str, test_mode)` never see it, the caller derives the
+  field. The instant is per process: ingestion and delivery each read their
+  own, so a workflow that straddles 00:00 UTC keys the two on different
+  days (never the 10:00 UTC cron; see the Key Invariants entry in
+  `CLAUDE.md`). Named to end the five independent clock reads (two time
+  zones) one delivery run used to make, which spelled the summary-row key
+  four different ways.
+  *Avoid*: run clock, run context (that is ingestion's mutable gauntlet state).
 - **Synthesis outage** (`ingestion_engine.is_synthesis_outage`) — a run that
   stored nothing because **every** LLM synthesis call failed, as opposed to a
   quiet news day where the LLM answered and there was simply nothing material.
@@ -203,7 +239,7 @@ zero-I/O purity is untouched.
   visibility filter → segment grouping → optional per-segment cap → optional
   total cap → appendix selection → weak-relevance accounting). Consumed by the pure renderer
   (`delivery_engine.render_report`) and the `daily_summaries` write-back.
-  `delivery_engine.prepare_report(rows, macro_summary)` runs assembly itself
+  `delivery_engine.prepare_report(rows, macro_summary, run=run)` runs assembly itself
   (there is no model-in/model-out effectful call), then performs the run's two
   side effects — write-back + thematic synthesis — exactly once, after
   assembly and before rendering; both are skipped for `no_news`. Rendering a

@@ -1,6 +1,7 @@
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Callable, Optional, Union
 from unittest.mock import MagicMock
 
@@ -10,6 +11,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 import pytest  # noqa: E402
 
 import discovery  # noqa: E402
+from mailer import FakeMailer  # noqa: E402
+from run_instant import RunInstant  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +22,18 @@ def _reset_discovery_providers():
     discovery._reset_discovery_providers()
     yield
     discovery._reset_discovery_providers()
+
+
+# ===========================================================================
+# The run instant every clock-sensitive test hands the engines
+# ===========================================================================
+# Thursday 2026-08-27 14:01 UTC — the late start from issue #64. Tests pass
+# this instead of reading the process clock or flipping MARKET_PULSE_RUN_MODE;
+# only tests/test_run_instant.py spells the literal itself, since it tests
+# the value.
+
+RUN_INSTANT = RunInstant(now=datetime(2026, 8, 27, 14, 1, 0), run_mode="production")
+TEST_RUN_INSTANT = replace(RUN_INSTANT, run_mode="test")
 
 
 # ===========================================================================
@@ -73,6 +88,7 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         LLM response (what the real `synthesize_insight` returns on failure,
         driving process_candidate's synthesis_failed gate).
       * `scrape`     — article text, or a callable(url, min_length) -> str|None.
+      * `run`        — the run instant handed to execute_pipeline (RUN_INSTANT).
     """
 
     def _run(
@@ -82,6 +98,7 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         candidates: Union[list, Callable] = (),
         insight: Union[dict, Callable, None] = {},
         scrape: Union[str, Callable] = "text " * 200,
+        run: RunInstant = RUN_INSTANT,
     ) -> PipelineRun:
         import ingestion_engine  # local: keeps supabase/openai imports off narrow runs
 
@@ -122,7 +139,69 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(ingestion_engine, "generate_macro_summary", macro)
         monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
 
-        ingestion_engine.execute_pipeline()
+        ingestion_engine.execute_pipeline(run)
         return PipelineRun(stored=stored, macro=macro)
+
+    return _run
+
+
+# ===========================================================================
+# Shared delivery harness — the ingestion harness's twin
+# ===========================================================================
+
+@pytest.fixture(autouse=True)
+def _inert_mailer(monkeypatch) -> FakeMailer:
+    """Install a recording FakeMailer as the process-wide mailer for EVERY
+    test, so no test can reach the real Resend transport by omission — the
+    production workflow's pytest step runs with the live SMTP_PASS and the
+    production RECIPIENT_EMAILS in its environment. Consumer tests that
+    assert on what was sent take `fake_mailer` (below), which builds on this."""
+    fake = FakeMailer()
+    monkeypatch.setattr("mailer._mailer_singleton", fake)
+    return fake
+
+
+@pytest.fixture
+def fake_mailer(monkeypatch, _inert_mailer) -> FakeMailer:
+    """The process-wide FakeMailer plus the addressing env the real
+    `send_email` reads. `sent` is every EmailMessage that crossed the seam;
+    set `fail_with` to simulate a failed send."""
+    monkeypatch.setenv("SENDER_EMAIL", "noreply@harness.test")
+    monkeypatch.setenv("RECIPIENT_EMAILS", "qa@harness.test")
+    return _inert_mailer
+
+
+@pytest.fixture
+def run_delivery_pipeline(monkeypatch, fake_mailer):
+    """Run `delivery_engine.execute_pipeline(run)` over an injected repo with
+    the LLM and the mailer seams faked — the real `send_email` composes the
+    message, so the subject/recipient wiring is exercised end to end.
+
+      * `fake_repo`     — the InMemoryIntelligenceRepo the run reads and writes.
+      * `run`           — the run instant (RUN_INSTANT).
+      * `llm_returns`   — what the FakeLLM answers (None = unusable response,
+        i.e. bullets-only synthesis).
+      * `report_config` — the mp_config dict (default: visible threshold 6).
+    Returns the `fake_mailer` fixture's FakeMailer (`sent` = what went out).
+    """
+
+    def _run(
+        fake_repo,
+        *,
+        run: RunInstant = RUN_INSTANT,
+        llm_returns=None,
+        report_config: Optional[dict] = None,
+    ) -> FakeMailer:
+        import delivery_engine
+        from llm import FakeLLM
+
+        cfg = report_config if report_config is not None else {
+            "reporting": {"visible_impact_threshold": 6}
+        }
+        monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
+        monkeypatch.setattr("delivery_engine._llm", lambda: FakeLLM(returns=llm_returns))
+        monkeypatch.setattr("config.mp_config", lambda: cfg)
+        delivery_engine.execute_pipeline(run)
+        return fake_mailer
 
     return _run

@@ -3,8 +3,8 @@
 Concentrates what the two engines read directly from the process environment and
 from ``market_pulse_config.yaml``: the cached config-file load, the run-mode
 switch, integer/flag env coercion, and a fail-fast startup check for the secrets
-each engine requires. The three Protocol seams (``llm``, ``daily_intelligence_repo``,
-``zoominfo_client``) keep reading their own values at use time — their adapters are
+each engine requires. The Protocol seams (``llm``, ``daily_intelligence_repo``,
+``mailer``, ``zoominfo_client``) keep reading their own values at use time — their adapters are
 the substitution path, so this module only *validates their presence*, it does not
 own their values.
 
