@@ -12,7 +12,8 @@ import pytest
 from llm import FakeLLM
 from run_instant import RunInstant
 
-from tests.conftest import RUN_INSTANT as _RUN, TEST_RUN_INSTANT as _TEST_RUN, stub_insight
+from run_budget import RunBudget
+from tests.conftest import RUN_INSTANT as _RUN, TEST_RUN_INSTANT as _TEST_RUN, stub_insight, stub_target
 
 from ingestion_engine import (
     _TextExtractor,
@@ -295,40 +296,6 @@ def test_entity_group_ignores_stray_results_per_entity(tmp_path):
     config_file.write_text(config_yaml)
     targets = load_targets(str(config_file))
     assert targets[0]["results_per_entity"] == 2
-
-
-def test_tail_scrape_demand_reflects_per_group_override(tmp_path):
-    """_tail_scrape_demand sums each concept target's own results_per_entity,
-    so a per-group override raises the derived tail reserve automatically."""
-    import ingestion_engine
-
-    config_yaml = textwrap.dedent(
-        """\
-        priority_segment:
-          search_mode: concept
-          active: true
-          results_per_entity: 4
-          include_any:
-            - "building products plastics"
-          include_all: []
-          exclude_any: []
-        plain_segment:
-          search_mode: concept
-          active: true
-          include_any:
-            - "polymer additives"
-          include_all: []
-          exclude_any: []
-        discovery:
-          results_per_entity: 2
-          lookback_hours: 24
-          min_article_length: 500
-        """
-    )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
-    assert ingestion_engine._tail_scrape_demand(targets) == 4 + 2
 
 
 # ---------------------------------------------------------------------------
@@ -1348,10 +1315,12 @@ from ingestion_engine import execute_pipeline
 
 
 def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch, tmp_path):
-    """When the pipeline deadline is exceeded mid-batch, _log_stats and
-    generate_macro_summary must be called before the function returns."""
+    """When the pipeline deadline is exceeded (here at the first target
+    checkpoint — the clock is already past it), _log_stats and
+    generate_macro_summary must still be called before the function returns."""
     import textwrap
     import ingestion_engine
+    import run_budget
 
     # Write a minimal targets.yaml with one active entity
     config_yaml = textwrap.dedent(
@@ -1377,10 +1346,10 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
     def fake_monotonic():
         call_count["n"] += 1
         # First call (pipeline_start assignment) returns 0; subsequent calls
-        # return a value past the deadline so the mid-batch check fires.
+        # return a value past the deadline so the first checkpoint stops the run.
         if call_count["n"] == 1:
             return 0.0
-        return float(ingestion_engine.PIPELINE_DEADLINE_SECONDS + 1)
+        return float(run_budget.PIPELINE_DEADLINE_SECONDS + 1)
 
     monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
 
@@ -1411,31 +1380,27 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
 
 
 # ===========================================================================
-# Protected tail budget — concept/macro groups must always get discovery
+# Tail reserve — concept/macro groups must always get discovery
 # ===========================================================================
 
-def _reserve_target(name: str, search_mode: str) -> dict:
+def _reserve_candidate(target: dict) -> dict:
     return {
-        "name": name,
-        "category": name,
-        "query": f'"{name}"',
-        "results_per_entity": 2,
-        "lookback_hours": 24,
-        "min_article_length": 500,
-        "search_mode": search_mode,
+        "url": f"https://example.com/{target['name']}",
+        "title": f"News about {target['name']}",
+        "provider": "serper",
     }
 
 
-def _run_reserve_pipeline(run_ingestion_pipeline, targets: list[dict]) -> list[str]:
+def _run_reserve_pipeline(
+    run_ingestion_pipeline, targets: list[dict], **limits: int,
+) -> list[str]:
     """Run execute_pipeline over fake targets (one candidate each, every scrape
-    succeeds and stores) and return the trigger entities stored, in order."""
+    succeeds and stores) under a budget with `limits`, and return the trigger
+    entities stored, in order."""
     run = run_ingestion_pipeline(
         targets=targets,
-        candidates=lambda target: [{
-            "url": f"https://example.com/{target['name']}",
-            "title": f"News about {target['name']}",
-            "provider": "serper",
-        }],
+        limits=limits,
+        candidates=lambda target: [_reserve_candidate(target)],
         insight=lambda text, url, entity, category: stub_insight(
             url, headline=f"Headline {entity}"),
     )
@@ -1446,36 +1411,32 @@ def test_tail_reserve_skips_entity_targets_when_scrape_budget_low(monkeypatch, r
     """When remaining scrape slots fall to the reserve, remaining ENTITY targets
     are skipped but concept targets still run — concept/macro coverage is
     protected from entity-tail starvation."""
-    import ingestion_engine
-
     # One concept target × results_per_entity=2 → derived reserve of 2.
-    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 3)
-    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
-        _reserve_target("EntityA", "entity"),
-        _reserve_target("EntityB", "entity"),
-        _reserve_target("concept_group", "concept"),
-    ])
+    targets = [
+        stub_target("EntityA"),
+        stub_target("EntityB"),
+        stub_target("concept_group", search_mode="concept"),
+    ]
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, targets, max_scrapes=3)
     # EntityA consumes the single unreserved slot; EntityB is skipped by the
     # reserve; the concept group spends the reserved budget.
     assert stored == ["EntityA", "concept_group"]
 
 
-def test_tail_reserve_covers_full_configured_tail_demand(monkeypatch, run_ingestion_pipeline):
-    """The slot reserve is DERIVED from the configured tail demand
-    (sum of results_per_entity over concept targets), not a fixed constant —
+def test_tail_reserve_covers_the_full_concept_demand_ahead(monkeypatch, run_ingestion_pipeline):
+    """The slot reserve is DERIVED from the concept demand still ahead
+    (sum of results_per_entity over the concept targets not yet run), not a fixed constant —
     so every concept/macro group gets a discovery pass even when each earlier
     concept target consumes its full candidate budget."""
-    import ingestion_engine
-
     # Two concept targets × results_per_entity=2 → demand 4; cap 5 leaves
     # exactly one unreserved slot for the entity tier.
-    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 5)
-    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
-        _reserve_target("EntityA", "entity"),
-        _reserve_target("EntityB", "entity"),
-        _reserve_target("concept_one", "concept"),
-        _reserve_target("concept_two", "concept"),
-    ])
+    targets = [
+        stub_target("EntityA"),
+        stub_target("EntityB"),
+        stub_target("concept_one", search_mode="concept"),
+        stub_target("concept_two", search_mode="concept"),
+    ]
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, targets, max_scrapes=5)
     assert stored == ["EntityA", "concept_one", "concept_two"]
 
 
@@ -1485,19 +1446,17 @@ def test_tail_reserve_excludes_front_loaded_concepts(monkeypatch, run_ingestion_
     run, so counting it over-reserves and skips entity targets that the budget
     could still afford. The reserve protects only the concept demand still
     AHEAD of the current target."""
-    import ingestion_engine
-
     # concept_front runs first (1 scrape), then two entities, then concept_tail.
     # Static all-concepts reserve = 4 (both concepts) → entity threshold MAX-4=0
     # → both entities wrongly skipped. Position-aware reserve at the entities =
     # only concept_tail (2) → threshold MAX-2=2 → EntityA survives.
-    monkeypatch.setattr(ingestion_engine, "MAX_DAILY_SCRAPES", 4)
-    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
-        _reserve_target("concept_front", "concept"),
-        _reserve_target("EntityA", "entity"),
-        _reserve_target("EntityB", "entity"),
-        _reserve_target("concept_tail", "concept"),
-    ])
+    targets = [
+        stub_target("concept_front", search_mode="concept"),
+        stub_target("EntityA"),
+        stub_target("EntityB"),
+        stub_target("concept_tail", search_mode="concept"),
+    ]
+    stored = _run_reserve_pipeline(run_ingestion_pipeline, targets, max_scrapes=4)
     assert stored == ["concept_front", "EntityA", "concept_tail"]
 
 
@@ -1506,8 +1465,6 @@ def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch, run_
     targets are skipped but concept targets still run."""
     import ingestion_engine
 
-    monkeypatch.setattr(ingestion_engine, "PIPELINE_DEADLINE_SECONDS", 100)
-    monkeypatch.setattr(ingestion_engine, "TAIL_RESERVE_SECONDS", 50)
     # First call anchors pipeline_start at 0; everything after runs at t=60 —
     # past the entity cutoff (100-50=50) but inside the hard deadline (100).
     call_count = {"n": 0}
@@ -1517,31 +1474,85 @@ def test_tail_reserve_skips_entity_targets_when_wall_clock_low(monkeypatch, run_
         return 0.0 if call_count["n"] == 1 else 60.0
 
     monkeypatch.setattr(ingestion_engine.time, "monotonic", fake_monotonic)
-    stored = _run_reserve_pipeline(run_ingestion_pipeline, [
-        _reserve_target("EntityA", "entity"),
-        _reserve_target("concept_group", "concept"),
-    ])
+    targets = [
+        stub_target("EntityA"),
+        stub_target("concept_group", search_mode="concept"),
+    ]
+    stored = _run_reserve_pipeline(
+        run_ingestion_pipeline, targets, deadline_seconds=100, tail_reserve_seconds=50)
     assert stored == ["concept_group"]
 
 
+def test_scrape_cap_stops_the_run_before_the_next_target_discovers(run_ingestion_pipeline, caplog):
+    """A target reached at the cap never spends discovery it cannot scrape:
+    the cap fires at the target checkpoint, before `discover_candidates`,
+    not only per candidate."""
+    discovered: list[str] = []
+
+    def candidates(target: dict) -> list[dict]:
+        discovered.append(target["name"])
+        return [_reserve_candidate(target)]
+
+    targets = [
+        stub_target("concept_one", search_mode="concept"),
+        stub_target("concept_two", search_mode="concept"),
+    ]
+    run = run_ingestion_pipeline(
+        targets=targets, candidates=candidates, limits={"max_scrapes": 1})
+    assert [p["trigger_entity"] for p in run.stored] == ["concept_one"]
+    assert discovered == ["concept_one"]
+    run.macro.assert_called_once()
+    assert "Run budget exhausted (scrape_cap) before target 'concept_two'" in caplog.text
+
+
+def test_scrape_cap_stops_the_run_mid_batch(run_ingestion_pipeline, caplog):
+    """A hard limit crossed inside a target's batch ends the run there — the
+    remaining candidates are not scraped, the next target is never discovered,
+    and the single teardown still runs. (The tail reserve never cuts a started
+    target; a hard limit does.)"""
+    discovered: list[str] = []
+
+    def candidates(target: dict) -> list[dict]:
+        discovered.append(target["name"])
+        return [
+            {**_reserve_candidate(target), "url": f"https://example.com/{target['name']}/{n}"}
+            for n in range(3)
+        ]
+
+    targets = [stub_target("concept_one", search_mode="concept"),
+               stub_target("concept_two", search_mode="concept")]
+    run = run_ingestion_pipeline(
+        targets=targets, candidates=candidates, limits={"max_scrapes": 2})
+    assert [p["source_url"] for p in run.stored] == [
+        "https://example.com/concept_one/0", "https://example.com/concept_one/1"]
+    assert discovered == ["concept_one"]
+    run.macro.assert_called_once()
+    # The operator can tell a cut batch (discovery spent) from a target never
+    # started: the next target's checkpoint would stop the run either way.
+    assert "Run budget exhausted (scrape_cap) mid-batch at target 'concept_one'" in caplog.text
+
+
+def test_execute_pipeline_rejects_a_budget_built_from_other_targets(monkeypatch):
+    """The budget is indexed by target position, so an injected one must have
+    been built from the list the engine loads — a mismatch fails loudly
+    before any seam is touched, not with an IndexError mid-run."""
+    import ingestion_engine
+
+    monkeypatch.setattr(
+        ingestion_engine, "load_targets", lambda path: [stub_target("EntityA")])
+    with pytest.raises(ValueError, match="built from a different targets list"):
+        ingestion_engine.execute_pipeline(_RUN, budget=RunBudget.for_targets([]))
+
+
 def test_tail_reserve_defaults_leave_headroom_for_tail_groups():
-    """Against the real targets.yaml, the derived slot reserve must be nonzero
-    (there are concept/macro groups to protect) and leave the entity tier a
-    majority of the cap; the time reserve must sit inside the deadline."""
-    import ingestion_engine
-
-    targets = load_targets("targets.yaml")
-    demand = ingestion_engine._tail_scrape_demand(targets)
-    assert 0 < demand < ingestion_engine.MAX_DAILY_SCRAPES / 2
-    assert 0 < ingestion_engine.TAIL_RESERVE_SECONDS < ingestion_engine.PIPELINE_DEADLINE_SECONDS
-
-
-def test_tail_scrape_demand_is_zero_without_concept_targets():
-    """No concept targets → nothing to protect → entity targets never skipped."""
-    import ingestion_engine
-
-    assert ingestion_engine._tail_scrape_demand(
-        [_reserve_target("EntityA", "entity")]) == 0
+    """Against the real targets.yaml: the total concept demand is the eight
+    priority groups at 4 plus the thirteen other concept/macro groups at 2 —
+    the per-group override must reach the reserve — and it leaves the entity
+    tier a majority of the cap; the clock reserve sits inside the deadline."""
+    budget = RunBudget.for_targets(load_targets("targets.yaml"))
+    assert budget.concept_demand_ahead[0] == 8 * 4 + 13 * 2
+    assert budget.concept_demand_ahead[0] < budget.max_scrapes / 2
+    assert 0 < budget.tail_reserve_seconds < budget.deadline_seconds
 
 
 # ===========================================================================

@@ -22,7 +22,7 @@ import ingestion_engine
 
 #: The functions that make up a run: the loop, the candidate gauntlet it
 #: delegates to, and the shared teardown every exit path takes.
-PIPELINE_FUNCTIONS = ("execute_pipeline", "process_candidate", "_finalize_run")
+PIPELINE_FUNCTIONS = ("execute_pipeline", "_run_target", "process_candidate", "_finalize_run")
 
 #: Calls the harness deliberately leaves real — pure helpers, value types,
 #: logging, and the discovery-provider registry (reset per-test by the autouse
@@ -33,7 +33,7 @@ DELIBERATELY_REAL = {
     "normalize_url",
     "compute_url_hash",
     "_is_unscrapable_domain",
-    "_concept_demand_ahead",
+    "RunBudget.for_targets",
     "_new_provider_yield",
     "_discovery_metadata",
     "insight.is_discard",
@@ -52,6 +52,7 @@ DELIBERATELY_REAL = {
     "logger.warning",
     "logger.error",
     # Under test, not stubbed
+    "_run_target",
     "process_candidate",
     "_finalize_run",
     # Registry: reset by the autouse _reset_discovery_providers fixture

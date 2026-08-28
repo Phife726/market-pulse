@@ -249,14 +249,37 @@ zero-I/O purity is untouched.
   duplicate → unscrapable domain → provider relevance gate → scrape →
   synthesis → store. Lives in `ingestion_engine.process_candidate(candidate,
   target, ctx)`; every drop is a recorded suppression (record + provider-yield
-  bump are one inseparable call). The run-level budget gates (pipeline
-  deadline, scrape cap, tail reserve) are **not** part of the gauntlet — they
-  are loop control in `execute_pipeline`.
+  bump are one inseparable call). The run-level limits (pipeline deadline,
+  scrape cap, tail reserve) are **not** part of the gauntlet — they are the
+  **run budget**, asked at the two checkpoints around it.
 - **Candidate outcome** — the gauntlet's verdict for one candidate, as plain
   frozen data: `Stored` (persisted), `Suppressed(reason)` (dropped; `reason`
   is an ingestion ledger taxonomy code, including `synthesis_failed` for an
   unusable LLM response), or `Error` (a technical store failure — an error,
   not a suppression). There is no run-terminating outcome by design.
+- **Run budget** (`run_budget.py`, `RunBudget`) — what one ingestion run may
+  spend, as a frozen value: the two hard limits — the **scrape cap** (attempted
+  scrapes, the API-cost guard) and the **pipeline deadline** (elapsed wall
+  clock, the CI-timeout guard) — plus the **tail reserve**, the slice of each
+  held back so the concept/macro groups at the bottom of `targets.yaml` always
+  get their discovery pass. The slot reserve is position-aware: at each entity
+  target it is the concept demand still *ahead* in file order (a concept
+  target's demand is its `results_per_entity`), so front-loaded priority
+  concepts that have already run are never reserved twice; the clock reserve
+  is a constant. Time-agnostic — the loop owns the stopwatch and passes
+  `elapsed`. Entity coverage is what the reserve sacrifices because dedup
+  absorbs day-over-day re-discoveries; concept/macro coverage would otherwise
+  starve silently.
+  *Avoid*: protected tail budget, tail demand (both name the tail reserve).
+- **Budget verdict** — the run budget's answer at a checkpoint, as plain frozen
+  data: `Proceed`, `SkipEntity(reason)` (don't *start* this entity target —
+  `scrape_slots` / `wall_clock`; the reserve never cuts a started target,
+  only a hard limit does), or `Stop(reason)` (`deadline` / `scrape_cap` —
+  end the run at the single teardown). Two checkpoints ask it: **before a target** (both hard
+  limits, and the tail reserve for entity targets — so a target at the cap
+  never spends discovery it cannot scrape) and **before a candidate** (the
+  hard limits only). The run-level twin of the **candidate outcome**; like it,
+  the value decides and never logs.
 - **Relevance gate** — the ZoomInfo false-positive suppression rule
   (`relevance_gate.py`), applied to ZoomInfo candidates during ingestion.
 - **Prompt spec** (`prompts.py`, `PromptSpec` / `MacroPrompt`) — a fully
