@@ -2,7 +2,7 @@
 
 The prompt-contract tests live here: no FakeLLM, no repo fake, no patching —
 the builders are pure functions over dicts. The engine tests keep one thin
-wiring check each (e.g. the non-English-body regression in test_pipeline.py)
+wiring check each (e.g. the non-English-body regression in test_ingestion_engine.py)
 proving the assembled spec actually crosses the LLM seam.
 """
 import prompts

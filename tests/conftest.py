@@ -233,3 +233,53 @@ def run_delivery_pipeline(monkeypatch, fake_mailer):
         return fake_mailer
 
     return _run
+
+
+# ===========================================================================
+# Report-side builders shared by test_report.py and test_delivery_engine.py
+# ===========================================================================
+
+
+def _make_new_article(
+    url_hash: str,
+    americhem_impact_score: int,
+    commercial_segment: str = "Enterprise / Cross-Segment",
+    sentiment_tag: str = "Neutral",
+    headline: str = "Test Headline",
+) -> dict:
+    """Build a fully-populated new-style article with all relevance fields."""
+    return {
+        "url_hash": url_hash,
+        "americhem_impact_score": americhem_impact_score,
+        "sentiment_tag": sentiment_tag,
+        "impact_rationale": "Direct feedstock cost effect.",
+        "commercial_segment": commercial_segment,
+        "headline": headline,
+        "americhem_impact": "Some impact.",
+        "entities_mentioned": ["TestCorp"],
+        "source_url": "https://news.com/article",
+        "category": "markets",
+        # No sentinel_score — new-style row
+    }
+
+
+_APPENDIX_CFG = {"reporting": {"visible_impact_threshold": 6}}
+
+
+def _appendix_hashes(model) -> list[str]:
+    return [a["url_hash"] for a in model.additional_articles]
+
+
+_VALID_MACRO_OUTLOOK = {
+    "current_condition": "Industrial demand softening as construction cools.",
+    "signals": [
+        {"indicator": "Manufacturing PMI", "direction": "Declining",
+         "americhem_implication": "Downside risk for engineered-resin demand.",
+         "affected_segments": ["Industrial"], "citation_source_ids": [1]},
+    ],
+}
+
+
+def _src(id, headline="H", url="https://x.com/a", domain="x.com"):
+    return {"id": id, "headline": headline, "url": url, "domain": domain,
+            "segment": "Auto", "score": 7}

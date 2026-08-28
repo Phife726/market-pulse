@@ -23,9 +23,6 @@ from report import (
     ReportModel,
     assemble_report,
     structured_exec_bullets as _structured_exec_bullets,
-    # Not called here: re-exported so the numbering rule keeps one name in the
-    # tests that pin it. Production reads ReportModel.citations.
-    _citation_display_map,  # noqa: F401
 )
 
 logging.basicConfig(

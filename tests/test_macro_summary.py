@@ -3,7 +3,7 @@ the once-per-run Macro summary (the run-level twin of insight.py).
 
 No I/O, no fakes, no patching: these exercise the pure transforms directly.
 The generate_macro_summary orchestration (LLM call + upsert) is tested in
-tests/test_pipeline.py.
+tests/test_ingestion_engine.py.
 """
 from macro_summary import (
     assemble_macro_content,

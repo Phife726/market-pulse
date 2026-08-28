@@ -328,7 +328,7 @@ def test_update_delivery_counts_silent_when_row_missing():
 #
 # We mock the supabase Client and assert each method touches the right
 # table + filters + on_conflict. These replace the six-deep MagicMock
-# chains scattered through test_pipeline.py.
+# chains scattered through the engine test files.
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
