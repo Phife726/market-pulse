@@ -76,13 +76,18 @@ def build_query(
 
 
 def _list_field(owner: str, cfg: dict, key: str) -> list:
-    """`cfg[key]` as a list; absent -> []. A scalar where a list belongs is a
-    shape error, not a one-element list."""
-    value = cfg.get(key)
-    if value is None:
+    """`cfg[key]` as a list; an ABSENT key -> []. A scalar where a list
+    belongs is a shape error, not a one-element list — and so is a present
+    key with no value (a bare `entities:` line is a null, and treating it as
+    empty would silently drop the whole group's coverage)."""
+    if key not in cfg:
         return []
+    value = cfg[key]
     if not isinstance(value, list):
-        raise TargetsError(f"{owner}: '{key}' must be a list, got {type(value).__name__}")
+        raise TargetsError(
+            f"{owner}: '{key}' must be a list, got {type(value).__name__}"
+            + (" (a bare key with no value? give it a list or remove the line)" if value is None else "")
+        )
     return value
 
 

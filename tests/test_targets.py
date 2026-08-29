@@ -230,6 +230,18 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
           entities: Avient
         """, "entities", id="entities-not-a-list"),
     pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+        """, "entities", id="entities-present-but-null"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any:
+          include_all: ["x"]
+        """, "include_any", id="include_any-present-but-null"),
+    pytest.param("""\
         discovery:
           results_per_entity: "2"
         competitors:
