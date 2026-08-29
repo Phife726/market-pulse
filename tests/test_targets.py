@@ -1,6 +1,6 @@
 """The two non-technical control files as shipped — `targets.yaml` and
-`market_pulse_config.yaml` — and `load_targets`, the mapping that turns the
-first into target dicts.
+`market_pulse_config.yaml` — and `targets.py`, the catalogue: `load_targets`
+(the one parser of the first file, fail-fast on shape errors), `build_query`.
 
 Contract tests here read the REAL control files: group order (the four-tier
 degradation policy), the macro groups, the priority-segment split, per-group
@@ -11,9 +11,11 @@ import textwrap
 from functools import cache
 from pathlib import Path
 
+import pytest
 import yaml
 from run_budget import RunBudget
-from ingestion_engine import load_targets
+from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, load_targets
+from tests.conftest import stub_target
 
 _TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
 _CONFIG_PATH = _TARGETS_PATH.with_name("market_pulse_config.yaml")
@@ -36,6 +38,13 @@ def _real_config_yaml() -> dict:
 @cache
 def _real_targets() -> list[dict]:
     return load_targets(str(_TARGETS_PATH))
+
+
+def _load(tmp_path: Path, body: str) -> list[dict]:
+    """Write `body` (dedented) as a tmp targets.yaml and load it."""
+    path = tmp_path / "targets.yaml"
+    path.write_text(textwrap.dedent(body))
+    return load_targets(str(path))
 
 
 # ===========================================================================
@@ -62,9 +71,7 @@ def test_load_targets_filters_inactive(tmp_path):
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     names = [t["name"] for t in targets]
     assert "ActiveCorp" in names
     assert "InactiveCorp" not in names
@@ -87,9 +94,7 @@ def test_load_targets_returns_expected_fields(tmp_path):
           min_article_length: 300
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     assert len(targets) == 1
     t = targets[0]
     assert t["name"] == "Avient"
@@ -120,9 +125,7 @@ def test_load_targets_concept_group(tmp_path):
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     assert len(targets) == 1
     t = targets[0]
     assert t["name"] == "industry"
@@ -143,16 +146,19 @@ def test_load_targets_inactive_concept_group(tmp_path):
             - "plastics industry"
           include_all: []
           exclude_any: []
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
         discovery:
           results_per_entity: 2
           lookback_hours: 24
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
-    assert targets == []
+    targets = _load(tmp_path, config_yaml)
+    assert [t["name"] for t in targets] == ["Avient"]
 
 
 def test_load_targets_entity_excludes_applied_to_query(tmp_path):
@@ -174,14 +180,182 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     assert len(targets) == 1
     q = targets[0]["query"]
     assert '"Shaw Industries"' in q
     assert '-"patents"' in q
     assert '-"securities analyst reports"' in q
+
+
+# ===========================================================================
+# Shape validation — a malformed control file fails at load, naming the group
+# ===========================================================================
+
+
+@pytest.mark.parametrize("body, needle", [
+    pytest.param("", "mapping of groups", id="empty-file"),
+    pytest.param("- competitors\n- customers\n", "mapping of groups", id="list-root"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - active: true
+        """, "competitors", id="entity-without-name"),
+    pytest.param("""\
+        competitors:
+          search_mode: hybrid
+          entities: []
+        """, "hybrid", id="unknown-search-mode"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+        """, "include_any", id="concept-without-include_any"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: false
+          include_any: []
+        """, "include_any", id="concept-with-empty-include_any-even-inactive"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: "medical device polymers"
+        """, "include_any", id="include_any-not-a-list"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities: Avient
+        """, "entities", id="entities-not-a-list"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+        """, "entities", id="entities-present-but-null"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any:
+          include_all: ["x"]
+        """, "include_any", id="include_any-present-but-null"),
+    pytest.param("""\
+        discovery:
+          results_per_entity: "2"
+        competitors:
+          search_mode: entity
+          entities: []
+        """, "results_per_entity", id="discovery-setting-quoted"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: false
+          results_per_entity: four
+          include_any: ["x"]
+        """, "results_per_entity", id="group-override-not-an-int-even-inactive"),
+    pytest.param("""\
+        discovery: fast
+        competitors:
+          search_mode: entity
+          entities: [{name: Avient, active: true}]
+        """, "discovery", id="discovery-not-a-mapping"),
+    pytest.param("""\
+        competitors:
+          - name: Avient
+            active: true
+        """, "competitors", id="entities-written-directly-under-the-group"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: "false"
+        """, "active", id="active-quoted"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_news: "no"
+        """, "zoominfo_news", id="zoominfo_news-quoted"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: 2024
+              active: true
+        """, "name", id="name-not-a-string"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: false
+        """, "no active targets", id="nothing-active"),
+])
+def test_load_targets_rejects_shape_errors_naming_the_group(tmp_path, body, needle):
+    with pytest.raises(TargetsError, match=needle):
+        _load(tmp_path, body)
+
+
+def test_load_targets_carries_optional_entity_keys_or_their_defaults(tmp_path):
+    """The ZoomInfo fields and the resolution hints (`domain` / `hq_country` /
+    `hq_state`, read by the enrichment utility) ride along on the same target
+    the engine runs — one parser; absent keys are None (news defaults on)."""
+    by_name = {t["name"]: t for t in _load(tmp_path, """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 12345678
+              zoominfo_news: false
+              domain: avient.com
+              hq_country: US
+            - name: Clariant
+              active: true
+        """)}
+    optional = lambda target: {k: target[k] for k in ENTITY_OPTIONAL_KEYS}  # noqa: E731
+    assert optional(by_name["Avient"]) == {
+        "zoominfo_company_id": 12345678, "zoominfo_news": False,
+        "domain": "avient.com", "hq_country": "US", "hq_state": None,
+    }
+    assert optional(by_name["Clariant"]) == ENTITY_OPTIONAL_KEYS
+
+
+def test_stub_target_mirrors_the_loaders_key_set(tmp_path):
+    """`tests/conftest.stub_target` documents itself as 'a target dict as
+    `load_targets` maps it' — pin the key set for both modes, so a key the
+    loader gains reaches every harness-driven test."""
+    loaded = _load(tmp_path, """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: ["medical polymers"]
+        """)
+    by_mode = {t["search_mode"]: t for t in loaded}
+    assert set(stub_target("X")) == set(by_mode["entity"])
+    assert set(stub_target("X", search_mode="concept")) == set(by_mode["concept"])
+
+
+def test_load_targets_ignores_a_stray_top_level_scalar(tmp_path):
+    """Top-level scalars (a note, a version stamp) are not groups."""
+    assert _load(tmp_path, """\
+        version: 3
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+        """)[0]["name"] == "Avient"
 
 
 # ===========================================================================
@@ -215,9 +389,7 @@ def test_concept_group_results_per_entity_override(tmp_path):
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     by_name = {t["name"]: t for t in targets}
     assert by_name["priority_segment"]["results_per_entity"] == 4
     assert by_name["plain_segment"]["results_per_entity"] == 2
@@ -242,9 +414,7 @@ def test_entity_group_ignores_stray_results_per_entity(tmp_path):
           min_article_length: 500
         """
     )
-    config_file = tmp_path / "targets.yaml"
-    config_file.write_text(config_yaml)
-    targets = load_targets(str(config_file))
+    targets = _load(tmp_path, config_yaml)
     assert targets[0]["results_per_entity"] == 2
 
 
@@ -653,3 +823,56 @@ def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
     for group in _NEW_CONCEPT_GROUPS:
         assert "zoominfo_company_id" not in config[group]
         assert "zoominfo_company_id" not in targets[group]
+
+
+# ===========================================================================
+# build_query()
+# ===========================================================================
+
+
+def test_build_query_entity_mode_bare():
+    """Entity mode with no include_all or exclude_any produces a quoted name."""
+    result = build_query(name="Shaw Industries")
+    assert result == '"Shaw Industries"'
+
+
+def test_build_query_entity_mode_with_excludes():
+    """Entity mode exclude_any terms become -\"term\" operators."""
+    result = build_query(name="Shaw Industries",
+        include_all=[],
+        exclude_any=["patents", "securities analyst reports"],
+    )
+    assert '"Shaw Industries"' in result
+    assert '-"patents"' in result
+    assert '-"securities analyst reports"' in result
+
+
+def test_build_query_concept_mode():
+    """Concept mode ORs all include_any terms and ANDs include_all."""
+    result = build_query(include_any=["plastics industry", "chemical industry", "compounding"],
+        include_all=["business"],
+        exclude_any=[],
+    )
+    assert '("plastics industry" OR "chemical industry" OR "compounding")' in result
+    assert '"business"' in result
+
+
+def test_build_query_filters_moody_internal_excludes():
+    """Moody's platform identifiers in exclude_any must be silently dropped."""
+    result = build_query(include_any=["plastics industry"],
+        include_all=[],
+        exclude_any=["source set 238658", "PR wires", "Targeted News Search", "tenders"],
+    )
+    assert "source set 238658" not in result
+    assert "PR wires" not in result
+    assert "Targeted News Search" not in result
+    assert '-"tenders"' in result   # real term must survive
+
+
+def test_build_query_concept_mode_no_include_all():
+    """Concept mode with empty include_all produces no spurious quoted terms."""
+    result = build_query(include_any=["automotive industry"],
+        include_all=[],
+        exclude_any=[],
+    )
+    assert result == '("automotive industry")'

@@ -19,6 +19,7 @@ if TYPE_CHECKING:  # annotations only — keep openai/report off narrow runs
     from llm import FakeLLM
     from report import ReportModel
 from run_budget import RunBudget  # noqa: E402
+from targets import ENTITY_OPTIONAL_KEYS  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
 
 
@@ -81,6 +82,8 @@ def stub_target(
         "min_article_length": 500,
         "search_mode": search_mode,
     }
+    if search_mode == "entity":
+        target.update(ENTITY_OPTIONAL_KEYS)  # the ZoomInfo fields + resolution hints, at their defaults
     target.update(overrides)
     return target
 

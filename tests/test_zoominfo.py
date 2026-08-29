@@ -18,7 +18,6 @@ from tests.conftest import stub_http_response
 from ingestion_engine import (
     compute_url_hash,
     discover_candidates,
-    load_targets,
     normalize_url,
 )
 
@@ -96,76 +95,6 @@ def _routed_post(token_resp: MagicMock, news_resp: MagicMock):
 def _set_client_creds(monkeypatch, client_id="cid-123", secret="secret-xyz") -> None:
     monkeypatch.setenv("ZOOMINFO_CLIENT_ID", client_id)
     monkeypatch.setenv("ZOOMINFO_CLIENT_SECRET", secret)
-
-
-# ===========================================================================
-# load_targets() — ZoomInfo field extension
-# ===========================================================================
-
-def test_load_targets_old_yaml_has_no_zoominfo_id(tmp_path):
-    """Entity targets without ZoomInfo fields default to id=None, news=True."""
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(_entity_yaml())
-    target = load_targets(str(cfg))[0]
-    assert target["zoominfo_company_id"] is None
-    assert target["zoominfo_news"] is True
-
-
-def test_load_targets_includes_zoominfo_company_id(tmp_path):
-    """A mapped zoominfo_company_id is carried onto the target dict and news defaults True."""
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(
-        textwrap.dedent(
-            """\
-            customers:
-              search_mode: entity
-              include_all: []
-              exclude_any: []
-              entities:
-                - name: Magna International
-                  active: true
-                  zoominfo_company_id: 12345678
-            discovery:
-              results_per_entity: 2
-              lookback_hours: 24
-              min_article_length: 500
-            """
-        )
-    )
-    target = load_targets(str(cfg))[0]
-    assert target["zoominfo_company_id"] == 12345678
-    assert target["zoominfo_news"] is True
-
-
-def test_load_targets_respects_zoominfo_news_false(tmp_path):
-    """zoominfo_news: false must be preserved even when an id exists."""
-    cfg = tmp_path / "targets.yaml"
-    cfg.write_text(
-        textwrap.dedent(
-            """\
-            customers:
-              search_mode: entity
-              include_all: []
-              exclude_any: []
-              entities:
-                - name: Magna International
-                  active: true
-                  zoominfo_company_id: 12345678
-                  zoominfo_news: false
-            discovery:
-              results_per_entity: 2
-              lookback_hours: 24
-              min_article_length: 500
-            """
-        )
-    )
-    target = load_targets(str(cfg))[0]
-    assert target["zoominfo_company_id"] == 12345678
-    assert target["zoominfo_news"] is False
-
-
-# The ZoomInfo feature-flag and env-int helpers moved to config.py; their
-# behavior is covered directly in tests/test_config.py.
 
 
 # ===========================================================================

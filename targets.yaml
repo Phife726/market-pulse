@@ -10,7 +10,7 @@
 # To add a concept group: new top-level key, search_mode: concept
 #
 # exclude_any: Moody's platform identifiers (e.g. "source set 238658",
-#   "PR wires") are silently ignored by ingestion_engine.py —
+#   "PR wires") are silently ignored by targets.py —
 #   only real search terms become -"term" operators.
 #
 # ── GROUP ORDER IS THE GRACEFUL-DEGRADATION POLICY ──────────

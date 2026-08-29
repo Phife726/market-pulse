@@ -1,8 +1,7 @@
 """ingestion_engine.py — Scrape → Synthesize → Store.
 
 URL normalisation and hashing, the scraper and its fallback, `synthesize_insight`
-validation, `generate_macro_summary`, `build_query`, the run loop under the run
-budget, the synthesis-outage guard, and the ingestion-side repo wiring. Every
+validation, `generate_macro_summary`, the run loop under the run budget, the synthesis-outage guard, and the ingestion-side repo wiring. Every
 external client is a fake or an in-memory adapter — no live calls.
 """
 
@@ -28,7 +27,6 @@ from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
     _scrape_fallback,
-    build_query,
     compute_url_hash,
     execute_pipeline,
     generate_macro_summary,
@@ -653,67 +651,6 @@ def test_generate_macro_summary_numbers_the_digest():
 
     user_prompt = fake.calls[-1]["user"]
     assert "[1]" in user_prompt and "TopMateriality" in user_prompt
-
-
-# ===========================================================================
-# build_query()
-# ===========================================================================
-
-
-def test_build_query_entity_mode_bare():
-    """Entity mode with no include_all or exclude_any produces a quoted name."""
-    result = build_query("entity", name="Shaw Industries")
-    assert result == '"Shaw Industries"'
-
-
-def test_build_query_entity_mode_with_excludes():
-    """Entity mode exclude_any terms become -\"term\" operators."""
-    result = build_query(
-        "entity",
-        name="Shaw Industries",
-        include_all=[],
-        exclude_any=["patents", "securities analyst reports"],
-    )
-    assert '"Shaw Industries"' in result
-    assert '-"patents"' in result
-    assert '-"securities analyst reports"' in result
-
-
-def test_build_query_concept_mode():
-    """Concept mode ORs all include_any terms and ANDs include_all."""
-    result = build_query(
-        "concept",
-        include_any=["plastics industry", "chemical industry", "compounding"],
-        include_all=["business"],
-        exclude_any=[],
-    )
-    assert '("plastics industry" OR "chemical industry" OR "compounding")' in result
-    assert '"business"' in result
-
-
-def test_build_query_filters_moody_internal_excludes():
-    """Moody's platform identifiers in exclude_any must be silently dropped."""
-    result = build_query(
-        "concept",
-        include_any=["plastics industry"],
-        include_all=[],
-        exclude_any=["source set 238658", "PR wires", "Targeted News Search", "tenders"],
-    )
-    assert "source set 238658" not in result
-    assert "PR wires" not in result
-    assert "Targeted News Search" not in result
-    assert '-"tenders"' in result   # real term must survive
-
-
-def test_build_query_concept_mode_no_include_all():
-    """Concept mode with empty include_all produces no spurious quoted terms."""
-    result = build_query(
-        "concept",
-        include_any=["automotive industry"],
-        include_all=[],
-        exclude_any=[],
-    )
-    assert result == '("automotive industry")'
 
 
 # ===========================================================================
