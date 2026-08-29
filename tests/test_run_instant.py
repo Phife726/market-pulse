@@ -102,7 +102,7 @@ def test_current_defaults_to_production_without_the_env_var(monkeypatch):
 # MARKET_PULSE_RUN_MODE themselves (CLAUDE.md, Key Invariants).
 # ---------------------------------------------------------------------------
 
-ENGINE_MODULES = ("ingestion_engine.py", "delivery_engine.py")
+ENGINE_MODULES = ("ingestion_engine.py", "delivery_engine.py", "renderer.py")
 AMBIENT_READS = ("date.today(", "datetime.now(", "utcnow(", "config.run_mode(")
 
 

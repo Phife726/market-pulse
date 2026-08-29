@@ -237,13 +237,25 @@ zero-I/O purity is untouched.
   counts), the raw macro-summary row, and the thematic synthesis paragraphs.
   Produced by `assemble_report` (pure decision pipeline: delivery suppression →
   visibility filter → segment grouping → optional per-segment cap → optional
-  total cap → appendix selection → weak-relevance accounting). Consumed by the pure renderer
-  (`delivery_engine.render_report`) and the `daily_summaries` write-back.
+  total cap → appendix selection → weak-relevance accounting). Consumed by the
+  **renderer** (`renderer.render_report`) and the `daily_summaries` write-back.
   `delivery_engine.prepare_report(rows, macro_summary, run=run)` runs assembly itself
   (there is no model-in/model-out effectful call), then performs the run's two
   side effects — write-back + thematic synthesis — exactly once, after
   assembly and before rendering; both are skipped for `no_news`. Rendering a
   model whose synthesis is empty **is** the bullets-only fallback.
+- **Renderer** (`renderer.py`, `render_report`) — the pure function from a
+  **report model** (plus the header date and the test-mode flag the caller
+  derives from the **run instant**) to the email's HTML. Owns the layout — the
+  fixed section order: executive summary, Macroeconomic Outlook, Commercial
+  Segment Watch, Additional Articles, Sources, the test-mode QA block — and the
+  two rendering rules: **every interpolated string is HTML-escaped, whether or
+  not its source is trusted**, and **every `href` passes the http/https guard**
+  (an unsafe URL renders its text unlinked, never dropped). Deterministic: same
+  model, date and mode → same bytes; no clock, config, seam or log. The
+  producing half of the pair whose sending half is the **mailer seam** — the
+  renderer makes the HTML, `send_email` addresses it, the mailer transports it.
+  *Avoid*: template, view, email builder.
 - **Candidate gauntlet** — the ordered per-candidate decision sequence
   ingestion runs on every discovered candidate: duplicate URL → semantic
   duplicate → unscrapable domain → provider relevance gate → scrape →

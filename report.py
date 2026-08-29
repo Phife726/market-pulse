@@ -4,7 +4,7 @@ The **report model** (`ReportModel`) is the plain-data seam between the two
 halves of delivery: `assemble_report` (the decision pipeline: delivery
 suppression -> visibility filter -> segment grouping -> per-segment cap ->
 total cap -> weak-relevance accounting) produces it, and the pure renderer
-(`delivery_engine.render_report`) plus the daily_summaries write-back consume
+(`renderer.render_report`) plus the daily_summaries write-back consume
 it. Same species as `insight.py` / `scoring.py`: no I/O, no clock, no env
 reads, and no imports of the repo or LLM seams — purity is enforced by the
 import graph.
