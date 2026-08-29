@@ -138,6 +138,25 @@ def test_synthesize_thematic_paragraphs_graceful_degradation():
     assert result == {}
 
 
+def test_synthesize_thematic_paragraphs_keeps_only_string_paragraphs():
+    """The LLM seam hands back the parsed JSON unvalidated (its contract:
+    the caller validates). The shape the renderer relies on is one prose
+    string per category, so a drifted answer — a list of sentences, a nested
+    object, a null, a non-string key — is dropped and that category renders
+    bullets-only, instead of crashing `html.escape` after the write-back has
+    already landed and before the email is sent."""
+    groups = {"Packaging": [stub_row("p1", 7), stub_row("p2", 7)],
+              "Healthcare": [stub_row("h1", 7), stub_row("h2", 7)]}
+    fake = FakeLLM(returns={"Packaging": "Converters are consolidating.",
+                            "Healthcare": ["sentence one", "sentence two"],
+                            "Fibers": None, 3: "a non-string key"})
+
+    with patch("delivery_engine._llm", return_value=fake):
+        result = synthesize_thematic_paragraphs(groups)
+
+    assert result == {"Packaging": "Converters are consolidating."}
+
+
 # ===========================================================================
 # MARKET_PULSE_RUN_MODE — test-mode markings
 # ===========================================================================

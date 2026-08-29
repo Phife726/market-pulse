@@ -249,8 +249,9 @@ zero-I/O purity is untouched.
   derives from the **run instant**) to the email's HTML. Owns the layout — the
   fixed section order: executive summary, Macroeconomic Outlook, Commercial
   Segment Watch, Additional Articles, Sources, the test-mode QA block — and the
-  two rendering rules: **every interpolated string is HTML-escaped, whether or
-  not its source is trusted**, and **every `href` passes the http/https guard**
+  two rendering rules: **every value the email carries — from a row, the
+  summary row, the synthesis, config or the caller — is HTML-escaped, whether
+  or not its source is trusted**, and **every `href` passes the http/https guard**
   (an unsafe URL renders its text unlinked, never dropped). Deterministic: same
   model, date and mode → same bytes; no clock, config, seam or log. The
   producing half of the pair whose sending half is the **mailer seam** — the

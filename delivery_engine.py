@@ -233,8 +233,15 @@ def synthesize_thematic_paragraphs(
     if result is None:
         logger.error("Thematic synthesis failed — falling back to bullets-only.")
         return {}
-    logger.info("Thematic synthesis complete — %d categories.", len(result))
-    return result
+    # The seam returns the parsed JSON unvalidated; this caller's validation is
+    # the shape the renderer relies on — one prose string per category. A list
+    # of sentences or a nested object becomes bullets-only for that category.
+    paragraphs = {k: v for k, v in result.items() if isinstance(k, str) and isinstance(v, str)}
+    if len(paragraphs) != len(result):
+        logger.warning("Thematic synthesis returned %d non-text entries — dropped.",
+                       len(result) - len(paragraphs))
+    logger.info("Thematic synthesis complete — %d categories.", len(paragraphs))
+    return paragraphs
 
 
 # ---------------------------------------------------------------------------

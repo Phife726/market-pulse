@@ -6,9 +6,10 @@ entry point; `delivery_engine.execute_pipeline` calls it between
 `prepare_report` and `send_email`. Everything below it is the layout — the
 section renderers in the order the email shows them, the card, the citation
 markers and Sources footer, the test-mode markings, the no-news variant —
-plus the two rules every section follows: untrusted values are HTML-escaped,
-and every href passes `_safe_http_url` (an unsafe URL renders its text
-unlinked).
+plus the two rules every section follows: every interpolated data value is
+HTML-escaped, trusted or not (`tests/test_renderer.py` poisons every field
+and renders the whole email), and every href passes `_safe_http_url` (an
+unsafe URL renders its text unlinked).
 
 Pure and deterministic: same (model, today_str, test_mode) -> same bytes. No
 clock, config, seam or logger — the header date and the test-mode flag are
@@ -95,11 +96,11 @@ def _render_meta_strip(item: dict) -> str:
         tag_color = _SENTIMENT_TAG_COLORS.get(tag, "#6B7280")
         tag_html = (
             f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;</span>'
-            f'<span style="color:{tag_color};font-weight:600;">{tag}</span>'
+            f'<span style="color:{tag_color};font-weight:600;">{html.escape(tag)}</span>'
         )
         signal = (item.get("signal_type") or "").strip()
         signal_html = (
-            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Signal: {signal}</span>'
+            f'<span style="color:#9CA3AF;">&nbsp;&#9679;&nbsp;Signal: {html.escape(signal)}</span>'
             if signal else ""
         )
     else:
@@ -193,7 +194,7 @@ def _render_segment_watch_section(
         para_html = (
             f'<p style="margin:0 0 10px 0;font-size:13px;color:#1a2a45;'
             f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
-            f'{para}</p>'
+            f'{html.escape(para)}</p>'
         ) if para else ""
 
         articles_sorted = sorted(
@@ -206,7 +207,7 @@ def _render_segment_watch_section(
             f'<tr><td style="padding:18px 0 0 0;">'
             f'<p style="margin:0 0 8px 0;font-size:12px;font-weight:700;'
             f'letter-spacing:1px;text-transform:uppercase;color:{_BRAND_NAVY};'
-            f'font-family:Arial,sans-serif;">{segment_label}</p>'
+            f'font-family:Arial,sans-serif;">{html.escape(segment_label)}</p>'
             f'{para_html}'
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0">{cards_html}</table>'
             f'</td></tr>'
@@ -362,14 +363,13 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
 
     samples_html = ""
     for s in samples[-10:]:
-        reason_code = s.get("reason", "")
-        reason_label = label_for(reason_code)
-        title = s.get("title", "")
-        url = s.get("url", "")
+        reason_label = label_for(str(s.get("reason") or ""))
+        title = str(s.get("title") or "")
+        url = str(s.get("url") or "")
         samples_html += (
             f'<tr><td style="padding:2px 0;font-size:11px;color:#6B7280;'
             f'font-family:monospace;">'
-            f'[{reason_label}] "{title}" — {url}'
+            f'[{html.escape(reason_label)}] "{html.escape(title)}" — {html.escape(url)}'
             f'</td></tr>'
         )
 
@@ -382,8 +382,8 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
               <td>
                 <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
                            font-family:Arial,sans-serif;">
-                  Screened: {screened if screened is not None else '?'} &nbsp;&middot;&nbsp;
-                  Surfaced: {surfaced if surfaced is not None else '?'} &nbsp;&middot;&nbsp;
+                  Screened: {html.escape(str(screened)) if screened is not None else '?'} &nbsp;&middot;&nbsp;
+                  Surfaced: {html.escape(str(surfaced)) if surfaced is not None else '?'} &nbsp;&middot;&nbsp;
                   Suppressed: {suppressed_total}
                 </p>
                 <p style="margin:8px 0 4px 0;font-size:11px;color:#6B7280;
@@ -451,7 +451,8 @@ def _render_citation_marker(cited_ids: Optional[list], citations: CitationSet) -
     )
 
 
-def _render_executive_bullets(bullets: list[dict], sources=None, display_map=None,
+def _render_executive_bullets(bullets: list[dict], sources: Optional[list[dict]] = None,
+                              display_map: Optional[dict] = None,
                               citations: CitationSet | None = None) -> str:
     """Render the 3-bullet executive summary body, each bullet followed by its
     grouped inline citation marker when it has resolvable cited sources.
@@ -617,7 +618,7 @@ def _render_exec_summary(macro_summary: dict | None,
         body_html = (
             f'<p style="margin:0;font-size:14px;color:#1a2a45;'
             f"font-family:Georgia,'Times New Roman',serif;line-height:1.65;\">"
-            f'{legacy_text}</p>'
+            f'{html.escape(legacy_text)}</p>'
         )
     else:
         return ""
@@ -627,7 +628,7 @@ def _render_exec_summary(macro_summary: dict | None,
         badge_html = (
             f'&nbsp;<span style="background-color:{_BRAND_NAVY};color:#ffffff;'
             f'padding:2px 10px;border-radius:20px;font-size:10px;font-weight:600;'
-            f'letter-spacing:0.5px;">{condition}</span>'
+            f'letter-spacing:0.5px;">{html.escape(condition)}</span>'
         )
 
     return f"""
@@ -745,14 +746,14 @@ def render_report(
             f'color:{_BRAND_GREEN};border:1px solid rgba(127,176,105,0.4);'
             f'padding:3px 12px;border-radius:20px;font-size:11px;font-weight:600;'
             f'font-family:Arial,sans-serif;letter-spacing:0.5px;">'
-            f'{dominant_condition}</span>'
+            f'{html.escape(dominant_condition)}</span>'
         )
 
     qa_html = _render_qa_debug_section(macro_summary) if test_mode else ""
 
     subtitle = (
-        f"{today_str} &nbsp;&middot;&nbsp; "
-        f"{model.surfaced_count} surfaced signals from {model.screened_count} screened items"
+        f"{html.escape(today_str)} &nbsp;&middot;&nbsp; "
+        f"{model.surfaced_count} surfaced signals from {html.escape(str(model.screened_count))} screened items"
     )
 
     return f"""<!DOCTYPE html>
@@ -858,7 +859,7 @@ def _render_no_news_email(
           <table width="100%" cellpadding="0" cellspacing="0" border="0">
             <tr><td style="background-color:{_BRAND_NAVY};padding:20px 32px 18px;">
               <p style="margin:0;font-size:18px;font-weight:700;color:#ffffff;font-family:Arial,sans-serif;">{title_prefix}Market-Pulse: Daily Intelligence</p>
-              <p style="margin:4px 0 0 0;font-size:12px;color:rgba(255,255,255,0.6);font-family:Arial,sans-serif;">{today_str}</p>
+              <p style="margin:4px 0 0 0;font-size:12px;color:rgba(255,255,255,0.6);font-family:Arial,sans-serif;">{html.escape(today_str)}</p>
             </td></tr>
             <tr><td style="background-color:{_BRAND_GREEN};height:3px;font-size:0;line-height:0;">&nbsp;</td></tr>
             {test_banner_row}

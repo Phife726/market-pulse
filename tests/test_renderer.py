@@ -8,15 +8,22 @@ assemble a `ReportModel` only to render it belong here: the HTML is the
 observable.
 """
 
+import ast
+import html as _html   # `html` is the rendered output in most tests below
+import inspect
+import re
+
 import pytest
 
 from tests.conftest import (
     RUN_INSTANT as _RUN,
     VISIBLE_6_CFG,
     appendix_hashes,
+    stub_macro_signal,
     stub_row,
     stub_source,
 )
+import renderer
 from renderer import (
     _render_card,
     render_report,
@@ -1586,15 +1593,13 @@ def test_render_qa_debug_section_orders_ingestion_codes_before_delivery_codes():
 def test_renderer_imports_only_the_pure_modules_it_presents():
     """renderer.py is the pure email renderer: same (model, today_str,
     test_mode) -> same bytes. That holds only while it imports no clock,
-    config, seam or logger — so the allow-list is pinned structurally, from
-    the module's own AST, and a new `import config` / `from llm import` /
-    `import logging` fails here, not in a QA email."""
-    import ast
-    from pathlib import Path
-
-    tree = ast.parse(Path("renderer.py").read_text(encoding="utf-8"))
+    config, seam or logger — so the allow-list is pinned from the module's
+    own source — every import, function-local ones included — and a new
+    `import config` / `from llm import` / `import logging` fails here, not
+    in a QA email."""
+    tree = ast.parse(inspect.getsource(renderer))
     imported = set()
-    for node in tree.body:
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
@@ -1603,3 +1608,103 @@ def test_renderer_imports_only_the_pure_modules_it_presents():
     allowed = {"html", "datetime", "typing", "urllib.parse",
                "report", "scoring", "suppression_ledger"}
     assert imported <= allowed, f"renderer.py imports outside its allow-list: {sorted(imported - allowed)}"
+
+
+# ===========================================================================
+# The escape rule — every interpolated data value, trusted or not
+# ===========================================================================
+
+
+POISON = "<!P!>"   # survives only if a site interpolates its value raw
+
+
+def _poison(name: str) -> str:
+    return f"{POISON}{name}"
+
+
+def _sites(out: str, marker: str) -> set[str]:
+    """The poisoned names that follow `marker` in the rendered HTML — raw
+    (`POISON`) for leaks, escaped (`_html.escape(POISON)`) for coverage."""
+    return set(re.findall(re.escape(marker) + r"(\w+)", out))
+
+
+def _poisoned_row(h: str, score: int, filler: str) -> dict:
+    """A stored row with every string field the renderer reads poisoned —
+    the schema-validated ones (sentiment_tag, signal_type, commercial_segment)
+    included: the renderer's rule does not depend on what upstream promised.
+    `filler` keeps the headlines dissimilar, so the rows survive the
+    duplicate-headline rules and every section actually renders."""
+    return stub_row(h, score, headline=f"{_poison('headline_' + h)} {filler}",
+                    americhem_impact=_poison("so_what"), sentiment_tag=_poison("tag"),
+                    signal_type=_poison("signal"), commercial_segment=_poison("segment"),
+                    source_publication=_poison("pub"), published_at=_poison("date"),
+                    source_url=_poison("url"))
+
+
+def _poisoned_macro(*, structured: bool) -> dict:
+    macro = {
+        "dominant_condition": _poison("condition"), "macro_sentiment": _poison("sentiment"),
+        "executive_summary": _poison("legacy_summary"),
+        "executive_sources": [stub_source(1, _poison("src_headline"), _poison("src_url"), _poison("src_domain"))],
+        "macro_outlook": {"current_condition": _poison("current"),
+                          "signals": [stub_macro_signal(indicator=_poison("indicator"), direction=_poison("direction"),
+                                                        americhem_implication=_poison("implication"),
+                                                        affected_segments=[_poison("affected")],
+                                                        citation_source_ids=[1])]},
+        "screened_count": _poison("screened"), "surfaced_count": _poison("surfaced"),
+        "suppression_breakdown": {"duplicate_url": 1},
+        "suppression_samples": [{"reason": _poison("reason"), "title": _poison("sample_title"),
+                                 "url": _poison("sample_url")}],
+    }
+    if structured:
+        macro["executive_bullets"] = [
+            {"label": _poison("label1"), "body": _poison("body1"), "citation_source_ids": [1]},
+            {"label": _poison("label2"), "body": _poison("body2")},
+            {"label": _poison("label3"), "body": _poison("body3")},
+        ]
+    else:
+        macro["executive_bullets"] = None   # the legacy-prose path
+    return macro
+
+
+# Every poisoned name the daily email must show, escaped. Absent by design:
+# `url` / `src_url` (an unsafe href renders its text unlinked, the URL itself
+# never appears), `date` (an unparseable published_at renders no date), and
+# `sentiment` (dominant_condition shadows macro_sentiment).
+_RENDERED_EVERYWHERE = frozenset({
+    "headline_a", "headline_b", "headline_c", "so_what", "tag", "signal", "segment", "pub",
+    "synthesis", "condition", "current", "indicator", "direction", "implication", "affected",
+    "src_headline", "src_domain", "reason", "sample_title", "sample_url", "today",
+    "screened", "surfaced",   # integer columns in production; data all the same
+})
+_RENDERED_BY_VARIANT = {
+    True: {"label1", "body1", "label2", "body2", "label3", "body3"},   # structured bullets win
+    False: {"legacy_summary"},                                          # bullets null -> prose
+}
+
+
+@pytest.mark.parametrize("structured", [True, False], ids=["structured-bullets", "legacy-prose"])
+def test_every_interpolated_data_value_is_escaped(structured):
+    """Poison every string the email carries — from the rows, the summary
+    row, the synthesis, config-shaped labels, and the caller's date — render
+    the whole email in test mode, and require the raw marker nowhere and the
+    escaped one at every site that renders. Pinned once across the email,
+    not once per site: two cards (a synthesis paragraph needs 2+), one
+    appendix-band row, the outlook, the citations, the Sources footer, the
+    QA block, the header."""
+    rows = [_poisoned_row("a", 8, "alpha bravo charlie delta"),
+            _poisoned_row("b", 8, "echo foxtrot golf hotel"),
+            _poisoned_row("c", 4, "india juliet kilo lima")]
+    model = assemble_report(rows, _poisoned_macro(structured=structured), config=VISIBLE_6_CFG)
+    model = model.with_synthesis({_poison("segment"): _poison("synthesis")})
+
+    out = render_report(model, today_str=_poison("today"), test_mode=True)
+
+    assert _sites(out, POISON) == set()
+    assert _sites(out, _html.escape(POISON)) >= _RENDERED_EVERYWHERE | _RENDERED_BY_VARIANT[structured]
+
+
+def test_no_news_variant_escapes_the_callers_date():
+    out = render_report(assemble_report([], None, VISIBLE_6_CFG), today_str=_poison("today"), test_mode=True)
+    assert _sites(out, POISON) == set()
+    assert _sites(out, _html.escape(POISON)) == {"today"}
