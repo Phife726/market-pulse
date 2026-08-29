@@ -1,77 +1,105 @@
 # tests/test_pipeline_harness.py
-"""The shared execute_pipeline harness must stay in sync with the real pipeline.
+"""The shared execute_pipeline harnesses must stay in sync with the real pipelines.
 
-`run_ingestion_pipeline` (tests/conftest.py) stubs every seam the ingestion
-pipeline reaches. A seam added to the pipeline but missed by the harness used to
-surface only as a runtime KeyError/AttributeError in the 10:00 UTC cron — never
-as a test failure, because the stub stacks were hand-maintained in three places.
+`run_ingestion_pipeline` and `run_delivery_pipeline` (tests/conftest.py) stub
+every seam their engine reaches. A seam added to a pipeline but missed by its
+harness used to surface only as a runtime KeyError/AttributeError in the 10:00
+UTC cron — never as a test failure, because the stub stacks were hand-maintained.
 
-These guards walk both sides and compare them:
+These guards walk both sides of each harness and compare them:
 
-  * the pipeline's real call graph, from ingestion_engine's AST, and
-  * what the fixture actually monkeypatches, from conftest's AST.
+  * the pipeline's real call graph, from the engine module's AST, and
+  * what the fixture actually monkeypatches, from conftest's AST — both the
+    attribute form `setattr(ingestion_engine, "x", …)` and the string form
+    `setattr("delivery_engine._repo", …)`.
 
-Both sides are DERIVED. Nothing here is a hand-copied list of stub names, so
-the guard cannot quietly drift away from the harness it is guarding.
+Both sides are DERIVED. Nothing here is a hand-copied list of stub names, so a
+guard cannot quietly drift away from the harness it is guarding.
 """
 import ast
 import inspect
 import os
+from dataclasses import dataclass
+from types import ModuleType
 
+import pytest
+
+import delivery_engine
 import ingestion_engine
 
-#: The functions that make up a run: the loop, the candidate gauntlet it
-#: delegates to, and the shared teardown every exit path takes.
-PIPELINE_FUNCTIONS = ("execute_pipeline", "_run_target", "process_candidate", "_finalize_run")
-
-#: Calls the harness deliberately leaves real — pure helpers, value types,
-#: logging, and the discovery-provider registry (reset per-test by the autouse
-#: fixture, and exercised for real by the ZoomInfo gate tests). Dotted entries
-#: are attribute calls on one of ingestion_engine's module-level imports.
-DELIBERATELY_REAL = {
-    # Pure transforms and predicates
-    "normalize_url",
-    "compute_url_hash",
-    "_is_unscrapable_domain",
-    "RunBudget.for_targets",
-    "_new_provider_yield",
-    "_discovery_metadata",
-    "insight.is_discard",
-    "is_synthesis_outage",
-    # Value types / outcome variants
-    "RunContext",
-    "Stored",
-    "Error",
-    # The end-of-run guard: stubbing it would disarm the very failure the
-    # harness tests exercise (a run where every synthesis call fails).
-    "SynthesisOutageError",
-    # Log-only sinks
-    "_log_stats",
-    "_log_provider_yield",
-    "logger.info",
-    "logger.warning",
-    "logger.error",
-    # Under test, not stubbed
-    "_run_target",
-    "process_candidate",
-    "_finalize_run",
-    # Registry: reset by the autouse _reset_discovery_providers fixture
-    "_discovery_providers",
-    # Read at use time; tests drive it with monkeypatch.setenv instead
-    "config.store_discovery_metadata",
-    # The clock: the tests that care fake it themselves (tail reserve, deadline)
-    "time.monotonic",
-}
-
 _CONFTEST = os.path.join(os.path.dirname(__file__), "conftest.py")
+
+
+@dataclass(frozen=True)
+class Harness:
+    """One engine's harness contract: the fixture whose body is the harness,
+    the functions that make up a run, and the calls it deliberately leaves real."""
+    engine: ModuleType
+    #: The conftest fixture whose body is the harness — only its own
+    #: `monkeypatch.setattr` calls count as harness coverage.
+    fixture: str
+    #: The functions that make up a run, walked for seam calls. Calls between
+    #: them are the code under test, never stubs.
+    functions: tuple
+    #: Calls the harness deliberately leaves real. Dotted entries are attribute
+    #: calls on one of the engine's module-level imports.
+    deliberately_real: frozenset
+
+
+INGESTION = Harness(
+    engine=ingestion_engine,
+    fixture="run_ingestion_pipeline",
+    # The loop, the per-target body, the candidate gauntlet, and the shared teardown.
+    functions=("execute_pipeline", "_run_target", "process_candidate", "_finalize_run"),
+    deliberately_real=frozenset({
+        # Pure transforms and predicates
+        "normalize_url", "compute_url_hash", "_is_unscrapable_domain",
+        "RunBudget.for_targets", "_new_provider_yield", "_discovery_metadata",
+        "insight.is_discard", "is_synthesis_outage",
+        # Value types / outcome variants
+        "RunContext", "Stored", "Error",
+        # The end-of-run guard: stubbing it would disarm the very failure the
+        # harness tests exercise (a run where every synthesis call fails).
+        "SynthesisOutageError",
+        # Log-only sinks
+        "_log_stats", "_log_provider_yield", "logger.info", "logger.warning", "logger.error",
+        # Registry: reset by the autouse _reset_discovery_providers fixture
+        "_discovery_providers",
+        # Read at use time; tests drive it with monkeypatch.setenv instead
+        "config.store_discovery_metadata",
+        # The clock: the tests that care fake it themselves (tail reserve, deadline)
+        "time.monotonic",
+    }),
+)
+
+DELIVERY = Harness(
+    engine=delivery_engine,
+    fixture="run_delivery_pipeline",
+    # The run, its two fetches, report preparation (assembly + write-back +
+    # thematic synthesis), composition/send, and the post-send stamp.
+    functions=(
+        "execute_pipeline", "fetch_todays_intelligence", "fetch_macro_summary",
+        "prepare_report", "_update_delivery_summary_counts",
+        "synthesize_thematic_paragraphs", "send_email", "_record_delivery",
+    ),
+    deliberately_real=frozenset({
+        # Pure: the window rule, report assembly and rendering, the summary
+        # preference, scoring, prompt assembly, the message value
+        "delivery_window", "assemble_report", "render_report",
+        "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
+        "EmailMessage", "SuppressionLedger.from_row",
+        # Log-only sinks
+        "logger.info", "logger.warning", "logger.error",
+    }),
+)
 
 
 def _qualified(node: ast.Call) -> str:
     """The dotted name a call targets, or "" if it isn't a module-level seam.
 
     Bare `foo()` -> "foo"; `time.sleep()` -> "time.sleep". Calls through a
-    local (`ctx.suppress()`, `provider_obj.gate()`) return "" — they are
-    reached via an object, not an attribute monkeypatch could replace.
+    local (`ctx.suppress()`, `repo.fetch_since()`) return "" — they are reached
+    via an object, not an attribute monkeypatch could replace.
     """
     func = node.func
     if isinstance(func, ast.Name):
@@ -81,22 +109,22 @@ def _qualified(node: ast.Call) -> str:
     return ""
 
 
-def _pipeline_seam_calls() -> set:
-    """Every call in the pipeline functions that resolves into ingestion_engine's
+def _pipeline_seam_calls(h: Harness) -> set:
+    """Every call in the pipeline functions that resolves into the engine's
     module namespace — i.e. something monkeypatch could replace on the module,
     which is exactly what a seam is."""
-    tree = ast.parse(inspect.getsource(ingestion_engine))
+    tree = ast.parse(inspect.getsource(h.engine))
     functions = {
         node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
     }
-    missing = set(PIPELINE_FUNCTIONS) - set(functions)
+    missing = set(h.functions) - set(functions)
     assert not missing, (
-        f"ingestion_engine no longer defines {sorted(missing)} — this guard walks "
-        "the real pipeline functions, so update PIPELINE_FUNCTIONS."
+        f"{h.engine.__name__} no longer defines {sorted(missing)} — this guard walks "
+        "the real pipeline functions, so update the Harness.functions tuple."
     )
-    namespace = set(vars(ingestion_engine))
+    namespace = set(vars(h.engine))
     calls = set()
-    for func_name in PIPELINE_FUNCTIONS:
+    for func_name in h.functions:
         for node in ast.walk(functions[func_name]):
             if not isinstance(node, ast.Call):
                 continue
@@ -106,51 +134,70 @@ def _pipeline_seam_calls() -> set:
     return calls
 
 
-def _harness_stubbed_names() -> set:
-    """What run_ingestion_pipeline actually replaces, read from conftest's own
-    source — so these guards check the HARNESS, not a copy of it.
+def _setattr_target(node: ast.Call) -> tuple:
+    """(module, attribute) a `monkeypatch.setattr` call replaces, in either
+    spelling: `setattr(ingestion_engine.time, "sleep", …)` or
+    `setattr("delivery_engine._repo", …)`. ("", "") if it is neither."""
+    target = node.args[0]
+    if isinstance(target, ast.Constant) and isinstance(target.value, str):
+        mod, _, attr = target.value.rpartition(".")
+        return mod, attr
+    if not (len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)):
+        return "", ""
+    if isinstance(target, ast.Name):
+        return target.id, node.args[1].value
+    if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+        return f"{target.value.id}.{target.attr}", node.args[1].value
+    return "", ""
 
-    Picks up both `monkeypatch.setattr(ingestion_engine, "x", ...)` and
-    `monkeypatch.setattr(ingestion_engine.time, "sleep", ...)`.
-    """
+
+def _harness_stubbed_names(h: Harness) -> set:
+    """What the fixture actually replaces, read from its own body in conftest —
+    so these guards check the HARNESS, not a copy of it. A target on the engine
+    module is recorded bare (`_repo`, `time.sleep`); one on another module the
+    engine imports is recorded dotted (`config.mp_config`)."""
     with open(_CONFTEST) as fh:
         tree = ast.parse(fh.read())
+    fixture = next(n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == h.fixture)
+    engine_name = h.engine.__name__
     stubbed = set()
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "setattr"
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)):
+    for node in ast.walk(fixture):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "setattr" and node.args):
             continue
-        target, attr = node.args[0], node.args[1].value
-        if isinstance(target, ast.Name) and target.id == "ingestion_engine":
+        mod, attr = _setattr_target(node)
+        if not mod:
+            continue
+        if mod == engine_name:
             stubbed.add(attr)
-        elif (isinstance(target, ast.Attribute)
-              and isinstance(target.value, ast.Name)
-              and target.value.id == "ingestion_engine"):
-            stubbed.add(f"{target.attr}.{attr}")
-    assert stubbed, f"found no ingestion_engine stubs in {_CONFTEST}"
+        elif mod.startswith(engine_name + "."):
+            stubbed.add(f"{mod[len(engine_name) + 1:]}.{attr}")
+        else:
+            stubbed.add(f"{mod}.{attr}")
+    assert stubbed, f"{h.fixture} in {_CONFTEST} stubs nothing"
     return stubbed
 
 
-def test_harness_accounts_for_every_pipeline_seam():
+@pytest.mark.parametrize("h", [INGESTION, DELIVERY], ids=lambda h: h.fixture)
+def test_harness_accounts_for_every_pipeline_seam(h: Harness):
     """A new call in the pipeline must be a conscious decision: stub it in the
     shared harness, or record it here as deliberately real."""
-    unaccounted = _pipeline_seam_calls() - _harness_stubbed_names() - DELIBERATELY_REAL
+    unaccounted = (_pipeline_seam_calls(h) - _harness_stubbed_names(h)
+                   - h.deliberately_real - set(h.functions))
     assert not unaccounted, (
-        f"ingestion_engine gained call(s) {sorted(unaccounted)} in "
-        f"{list(PIPELINE_FUNCTIONS)} — either stub them in the "
-        "run_ingestion_pipeline fixture (tests/conftest.py), or add them to "
-        "DELIBERATELY_REAL here."
+        f"{h.engine.__name__} gained call(s) {sorted(unaccounted)} in "
+        f"{list(h.functions)} — either stub them in the {h.fixture} fixture "
+        "(tests/conftest.py), or add them to that Harness's deliberately_real here."
     )
 
 
-def test_harness_stubs_nothing_the_pipeline_no_longer_calls():
+@pytest.mark.parametrize("h", [INGESTION, DELIVERY], ids=lambda h: h.fixture)
+def test_harness_stubs_nothing_the_pipeline_no_longer_calls(h: Harness):
     """The mirror check: a stub for a seam the pipeline dropped is dead
     scaffolding, and monkeypatch would keep it alive silently."""
-    stale = _harness_stubbed_names() - _pipeline_seam_calls()
+    stale = _harness_stubbed_names(h) - _pipeline_seam_calls(h)
     assert not stale, (
-        f"run_ingestion_pipeline still stubs {sorted(stale)}, which "
-        f"{list(PIPELINE_FUNCTIONS)} no longer call."
+        f"{h.fixture} still stubs {sorted(stale)}, which "
+        f"{list(h.functions)} no longer call."
     )

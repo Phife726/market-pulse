@@ -73,6 +73,15 @@ def test_tier_routine():
     assert scoring.tier({"americhem_impact_score": 5}) == "ROUTINE"
 
 
+def test_tier_reads_through_the_effective_impact_fallback():
+    """`tier` scores a row by `insight.effective_impact`, so a legacy or
+    malformed `americhem_impact_score` falls back to `sentiment_score`, and
+    both missing or malformed falls back to the default (5 → ROUTINE)."""
+    assert scoring.tier({"americhem_impact_score": "bad", "sentiment_score": 8}) == "STRATEGIC"
+    assert scoring.tier({"americhem_impact_score": "bad", "sentiment_score": "bad"}) == "ROUTINE"
+    assert scoring.tier({}) == "ROUTINE"
+
+
 # --- is_legacy_critical -----------------------------------------------------
 
 def test_legacy_critical_true_for_low_sentiment_legacy_row():

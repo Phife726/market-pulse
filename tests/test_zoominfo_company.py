@@ -2,28 +2,13 @@
 target-metadata enrichment utility. No live API calls — requests.post is
 always mocked."""
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import requests
 
 import zoominfo_client
-
-
-def _ok(json_payload: dict) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = json_payload
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
-def _err(status: int, body: str = "") -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = status
-    resp.text = body
-    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
-    return resp
+from tests.conftest import stub_http_response
 
 
 @pytest.fixture(autouse=True)
@@ -39,19 +24,19 @@ def _bearer(monkeypatch):
 
 def test_resolve_company_returns_id_on_match():
     payload = {"data": [{"id": 357374413, "name": "Avient Corporation"}]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.resolve_company(domain="avient.com")
     assert result == {"status": "ok", "company_id": 357374413}
 
 
 def test_resolve_company_empty_when_no_candidates():
-    with patch("zoominfo_client.requests.post", return_value=_ok({"data": []})):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json={"data": []})):
         result = zoominfo_client.resolve_company(name="No Such Co")
     assert result == {"status": "empty"}
 
 
 def test_resolve_company_error_on_403():
-    with patch("zoominfo_client.requests.post", return_value=_err(403)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(403)):
         result = zoominfo_client.resolve_company(name="Avient")
     assert result == {"status": "error"}
 
@@ -66,7 +51,7 @@ def test_resolve_company_error_on_transport_failure():
 
 
 def test_resolve_company_error_on_malformed_json():
-    resp = _ok({})
+    resp = stub_http_response(200, json={})
     resp.json.side_effect = ValueError("no json")
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.resolve_company(name="Avient")
@@ -76,7 +61,7 @@ def test_resolve_company_error_on_malformed_json():
 def test_enrich_company_returns_raw_company_on_success():
     payload = {"data": [{"attributes": {"name": "Avient Corporation",
                                         "revenueRange": "$1B - $5B"}}]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.enrich_company(357374413)
     assert result["status"] == "ok"
     assert result["company"]["name"] == "Avient Corporation"
@@ -90,7 +75,7 @@ def test_enrich_company_returns_raw_company_on_success():
 
 def test_enrich_company_sends_matchcompanyinput_identifier():
     payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)) as m:
         zoominfo_client.enrich_company(357374413)
     attrs = m.call_args.kwargs["json"]["data"]["attributes"]
     assert m.call_args.kwargs["json"]["data"]["type"] == "CompanyEnrich"
@@ -99,7 +84,7 @@ def test_enrich_company_sends_matchcompanyinput_identifier():
 
 def test_enrich_company_no_longer_sends_rejected_shapes():
     payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)) as m:
         zoominfo_client.enrich_company(357374413)
     attrs = m.call_args.kwargs["json"]["data"]["attributes"]
     # The two live-rejected (400) identifier shapes must be gone.
@@ -109,7 +94,7 @@ def test_enrich_company_no_longer_sends_rejected_shapes():
 
 def test_enrich_company_requests_verified_output_fields():
     payload = {"data": [{"attributes": {"name": "Avient Corporation"}}]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)) as m:
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)) as m:
         zoominfo_client.enrich_company(357374413)
     attrs = m.call_args.kwargs["json"]["data"]["attributes"]
     assert attrs["outputFields"] == [
@@ -126,7 +111,7 @@ def test_enrich_company_parses_first_item_attributes_from_data_list():
         "attributes": {"name": "Avient Corporation", "revenue": 3600000,
                        "industries": ["Plastics & Rubber Manufacturing"]},
     }]}
-    with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.enrich_company(357374413)
     assert result["status"] == "ok"
     assert result["company"]["name"] == "Avient Corporation"
@@ -134,13 +119,13 @@ def test_enrich_company_parses_first_item_attributes_from_data_list():
 
 
 def test_enrich_company_empty_when_no_company():
-    with patch("zoominfo_client.requests.post", return_value=_ok({"data": []})):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json={"data": []})):
         result = zoominfo_client.enrich_company(999)
     assert result == {"status": "empty"}
 
 
 def test_enrich_company_error_on_403():
-    with patch("zoominfo_client.requests.post", return_value=_err(403)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(403)):
         result = zoominfo_client.enrich_company(357374413)
     assert result == {"status": "error"}
 
@@ -155,7 +140,7 @@ def test_enrich_company_error_on_transport_failure():
 
 
 def test_enrich_company_error_on_malformed_json():
-    resp = _ok({})
+    resp = stub_http_response(200, json={})
     resp.json.side_effect = ValueError("no json")
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.enrich_company(357374413)
@@ -170,7 +155,7 @@ def test_enrich_company_error_on_malformed_json():
 def test_enrich_company_400_is_error_and_logs_sanitized_snippet(caplog):
     body = '{"error":"Invalid field requested: outputFields is required"}'
     with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
-        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+        with patch("zoominfo_client.requests.post", return_value=stub_http_response(400, text=body)):
             result = zoominfo_client.enrich_company(357374413)
     assert result == {"status": "error"}  # 400 degrades, never raises
     text = caplog.text
@@ -181,7 +166,7 @@ def test_enrich_company_400_is_error_and_logs_sanitized_snippet(caplog):
 def test_resolve_company_400_is_error_and_logs_sanitized_snippet(caplog):
     body = '{"error":"Invalid search criteria"}'
     with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
-        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+        with patch("zoominfo_client.requests.post", return_value=stub_http_response(400, text=body)):
             result = zoominfo_client.resolve_company(name="Avient")
     assert result == {"status": "error"}
     assert "400" in caplog.text
@@ -191,7 +176,7 @@ def test_resolve_company_400_is_error_and_logs_sanitized_snippet(caplog):
 def test_enrich_company_400_snippet_capped_at_500_chars(caplog):
     body = "x" * 5000
     with caplog.at_level(logging.ERROR, logger="zoominfo_client"):
-        with patch("zoominfo_client.requests.post", return_value=_err(400, body)):
+        with patch("zoominfo_client.requests.post", return_value=stub_http_response(400, text=body)):
             zoominfo_client.enrich_company(357374413)
     # The raw 5000-char body must never appear in full; the snippet is capped.
     assert ("x" * 5000) not in caplog.text
@@ -202,7 +187,7 @@ def test_enrich_company_structural_log_is_keys_only_no_values(caplog):
     payload = {"data": [{"attributes": {"name": "SENTINEL_VALUE",
                                         "revenueRange": "$1B - $5B"}}]}
     with caplog.at_level(logging.INFO, logger="zoominfo_client"):
-        with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+        with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
             zoominfo_client.enrich_company(357374413)
     text = caplog.text
     # Field NAMES are surfaced so the next entitled run can confirm the schema...
@@ -215,7 +200,7 @@ def test_enrich_company_structural_log_is_keys_only_no_values(caplog):
 def test_resolve_company_structural_log_is_keys_only_no_values(caplog):
     payload = {"data": [{"id": 357374413, "name": "SENTINEL_VALUE"}]}
     with caplog.at_level(logging.INFO, logger="zoominfo_client"):
-        with patch("zoominfo_client.requests.post", return_value=_ok(payload)):
+        with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
             zoominfo_client.resolve_company(name="Avient")
     assert "SENTINEL_VALUE" not in caplog.text
 
@@ -225,9 +210,9 @@ def test_diagnostics_never_log_the_bearer_token(caplog):
     # (200 structural log or 400 snippet) may ever surface it.
     with caplog.at_level(logging.DEBUG, logger="zoominfo_client"):
         with patch("zoominfo_client.requests.post",
-                   return_value=_err(400, '{"error":"bad"}')):
+                   return_value=stub_http_response(400, text='{"error":"bad"}')):
             zoominfo_client.enrich_company(357374413)
         with patch("zoominfo_client.requests.post",
-                   return_value=_ok({"data": [{"attributes": {"name": "X"}}]})):
+                   return_value=stub_http_response(200, json={"data": [{"attributes": {"name": "X"}}]})):
             zoominfo_client.enrich_company(357374413)
     assert "test-bearer" not in caplog.text

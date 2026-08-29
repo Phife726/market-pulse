@@ -5,6 +5,9 @@ No I/O, no fakes, no patching: these exercise the pure transforms directly.
 The generate_macro_summary orchestration (LLM call + upsert) is tested in
 tests/test_ingestion_engine.py.
 """
+from functools import partial
+
+from tests.conftest import stub_macro_signal, stub_source
 from macro_summary import (
     assemble_macro_content,
     validate_executive_bullets,
@@ -20,16 +23,8 @@ from prompts import EXEC_BULLET_LABELS
 _MACRO_VALID_IDS = frozenset({1, 2, 3})
 
 
-def _macro_signal(**over) -> dict:
-    sig = {
-        "indicator": "Manufacturing PMI",
-        "direction": "Declining",
-        "americhem_implication": "Downside risk for industrial resin demand.",
-        "affected_segments": ["Industrial"],
-        "citation_source_ids": [1],
-    }
-    sig.update(over)
-    return sig
+# The shared valid signal, with this file's implication wording.
+_macro_signal = partial(stub_macro_signal, americhem_implication="Downside risk for industrial resin demand.")
 
 
 def _macro_outlook(**over) -> dict:
@@ -176,8 +171,7 @@ def test_validate_bullets_rejects_wrong_label_order():
 # ---------------------------------------------------------------------------
 
 def _pack(*ids):
-    return [{"id": i, "headline": f"H{i}", "url": f"http://e/{i}",
-             "domain": "e.com", "segment": "Industrial", "score": 7} for i in ids]
+    return [stub_source(i, f"H{i}", f"http://e/{i}", "e.com") for i in ids]
 
 
 def _bullets(a=(1,), b=(2,), c=()):

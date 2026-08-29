@@ -2,7 +2,7 @@ import os
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Optional, Union
 from unittest.mock import MagicMock
 
 # Make scripts/ importable as top-level modules in tests (e.g. `enrich_targets`).
@@ -10,8 +10,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import pytest  # noqa: E402
 
+import requests  # noqa: E402
+
 import discovery  # noqa: E402
 from mailer import FakeMailer  # noqa: E402
+
+if TYPE_CHECKING:  # annotations only — keep openai/report off narrow runs
+    from llm import FakeLLM
+    from report import ReportModel
 from run_budget import RunBudget  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
 
@@ -223,11 +229,12 @@ def run_delivery_pipeline(monkeypatch, fake_mailer):
         import delivery_engine
         from llm import FakeLLM
 
-        cfg = report_config if report_config is not None else {
-            "reporting": {"visible_impact_threshold": 6}
-        }
+        cfg = report_config if report_config is not None else VISIBLE_6_CFG
         monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
         monkeypatch.setattr("delivery_engine._llm", lambda: FakeLLM(returns=llm_returns))
+        # The same fake the autouse _inert_mailer installs at the seam module —
+        # injected here too so the harness guard derives the mailer as stubbed.
+        monkeypatch.setattr("delivery_engine._mailer", lambda: fake_mailer)
         monkeypatch.setattr("config.mp_config", lambda: cfg)
         delivery_engine.execute_pipeline(run)
         return fake_mailer
@@ -236,50 +243,80 @@ def run_delivery_pipeline(monkeypatch, fake_mailer):
 
 
 # ===========================================================================
-# Report-side builders shared by test_report.py and test_delivery_engine.py
+# Shared builders — the one spelling of each shape. Files that still carry a
+# hand-built literal are swept as they are touched; never add a second builder.
 # ===========================================================================
 
-
-def _make_new_article(
-    url_hash: str,
-    americhem_impact_score: int,
-    commercial_segment: str = "Enterprise / Cross-Segment",
-    sentiment_tag: str = "Neutral",
-    headline: str = "Test Headline",
-) -> dict:
-    """Build a fully-populated new-style article with all relevance fields."""
-    return {
+def stub_row(url_hash: str = "abc", americhem_impact_score: int = 8, **overrides) -> dict:
+    """A stored `daily_intelligence` row as delivery reads it — new-style
+    (relevance fields, no `sentiment_score`); any key can be overridden or added."""
+    row = {
         "url_hash": url_hash,
         "americhem_impact_score": americhem_impact_score,
-        "sentiment_tag": sentiment_tag,
+        "sentiment_tag": "Neutral",
         "impact_rationale": "Direct feedstock cost effect.",
-        "commercial_segment": commercial_segment,
-        "headline": headline,
+        "commercial_segment": "Enterprise / Cross-Segment",
+        "headline": "Test Headline",
         "americhem_impact": "Some impact.",
         "entities_mentioned": ["TestCorp"],
         "source_url": "https://news.com/article",
         "category": "markets",
-        # No sentinel_score — new-style row
     }
+    row.update(overrides)
+    return row
 
 
-_APPENDIX_CFG = {"reporting": {"visible_impact_threshold": 6}}
+def stub_source(source_id: int, headline: str = "H", url: str = "https://x.com/a",
+                domain: str = "x.com") -> dict:
+    """One `executive_sources` entry (a cited source), keyed by its pack id."""
+    # segment/score are pack-shape only: prompts.py writes them, no renderer reads them.
+    return {"id": source_id, "headline": headline, "url": url, "domain": domain,
+            "segment": "Auto", "score": 7}
 
 
-def _appendix_hashes(model) -> list[str]:
+def appendix_hashes(model: "ReportModel") -> list[str]:
+    """The appendix rows' hashes in display order — what a ranking test asserts on."""
     return [a["url_hash"] for a in model.additional_articles]
 
 
-_VALID_MACRO_OUTLOOK = {
+#: The suite's baseline report config: visible at 6, every other lever at its
+#: code default. Extend it with `{**VISIBLE_6_CFG["reporting"], ...}`; never mutate.
+VISIBLE_6_CFG = {"reporting": {"visible_impact_threshold": 6}}
+
+def stub_macro_signal(**overrides) -> dict:
+    """One valid Macroeconomic Outlook signal (a citable `direction` +
+    canonical `affected_segments` + one citation)."""
+    signal = {
+        "indicator": "Manufacturing PMI",
+        "direction": "Declining",
+        "americhem_implication": "Downside risk for engineered-resin demand.",
+        "affected_segments": ["Industrial"],
+        "citation_source_ids": [1],
+    }
+    signal.update(overrides)
+    return signal
+
+
+VALID_MACRO_OUTLOOK = {
     "current_condition": "Industrial demand softening as construction cools.",
-    "signals": [
-        {"indicator": "Manufacturing PMI", "direction": "Declining",
-         "americhem_implication": "Downside risk for engineered-resin demand.",
-         "affected_segments": ["Industrial"], "citation_source_ids": [1]},
-    ],
+    "signals": [stub_macro_signal()],
 }
 
 
-def _src(id, headline="H", url="https://x.com/a", domain="x.com"):
-    return {"id": id, "headline": headline, "url": url, "domain": domain,
-            "segment": "Auto", "score": 7}
+def stub_llm_insight(**overrides) -> "FakeLLM":
+    """A FakeLLM answering one per-article insight: `stub_insight`'s minimal
+    payload plus any relevance fields the test adds."""
+    from llm import FakeLLM  # local: the one deliberate lazy import — keeps openai off narrow runs
+
+    return FakeLLM(returns=stub_insight("https://news.com/article", **overrides))
+
+
+def stub_http_response(status: int, *, json: Optional[dict] = None, text: Optional[str] = None) -> MagicMock:
+    """A `requests.Response` stand-in: `status_code`, `ok`, `text`, `json()`,
+    and a `raise_for_status` that raises `HTTPError(response=resp)` at >= 400."""
+    resp = MagicMock(status_code=status, ok=status < 400,
+                     text=f"body {status}" if text is None else text)
+    resp.json.return_value = json if json is not None else {}
+    if status >= 400:
+        resp.raise_for_status.side_effect = requests.HTTPError(f"HTTP {status}", response=resp)
+    return resp

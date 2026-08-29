@@ -7,12 +7,12 @@ being re-asserted inside every caller. Consumer tests inject ``FakeMailer``
 and assert on the ``EmailMessage`` that crossed the seam (see test_delivery_engine.py).
 """
 from dataclasses import FrozenInstanceError
-from unittest.mock import MagicMock
 
 import pytest
 import requests
 
 import mailer
+from tests.conftest import stub_http_response
 from mailer import (
     BASE_DELAY_S,
     MAX_ATTEMPTS,
@@ -31,20 +31,6 @@ MESSAGE = EmailMessage(
     subject="Americhem Market-Pulse — August 27, 2026",
     html="<html>digest</html>",
 )
-
-
-def _response(status: int) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = status
-    resp.ok = status < 400
-    resp.text = f"body {status}"
-    if status >= 400:
-        err = requests.HTTPError(f"HTTP {status}")
-        err.response = resp
-        resp.raise_for_status = MagicMock(side_effect=err)
-    else:
-        resp.raise_for_status = MagicMock()
-    return resp
 
 
 def _post_returning(monkeypatch, *responses) -> list:
@@ -82,7 +68,7 @@ def test_email_message_is_frozen():
 # ---------------------------------------------------------------------------
 
 def test_resend_mailer_posts_the_message_to_resend_with_bearer_auth(resend, monkeypatch):
-    calls = _post_returning(monkeypatch, _response(200))
+    calls = _post_returning(monkeypatch, stub_http_response(200))
 
     resend.send(MESSAGE)
 
@@ -107,7 +93,7 @@ def test_resend_mailer_posts_the_message_to_resend_with_bearer_auth(resend, monk
 @pytest.mark.parametrize("status", sorted(TRANSIENT_HTTP_CODES))
 def test_resend_mailer_retries_a_transient_status_with_backoff(monkeypatch, status):
     monkeypatch.setenv("SMTP_PASS", "re_test_key")
-    calls = _post_returning(monkeypatch, _response(status), _response(200))
+    calls = _post_returning(monkeypatch, stub_http_response(status), stub_http_response(200))
     slept: list = []
 
     ResendMailer(sleep=slept.append).send(MESSAGE)
@@ -118,7 +104,7 @@ def test_resend_mailer_retries_a_transient_status_with_backoff(monkeypatch, stat
 
 def test_resend_mailer_gives_up_after_max_attempts(monkeypatch):
     monkeypatch.setenv("SMTP_PASS", "re_test_key")
-    calls = _post_returning(monkeypatch, _response(503))
+    calls = _post_returning(monkeypatch, stub_http_response(503))
     slept: list = []
 
     with pytest.raises(requests.HTTPError):
@@ -129,7 +115,7 @@ def test_resend_mailer_gives_up_after_max_attempts(monkeypatch):
 
 
 def test_resend_mailer_raises_at_once_on_a_permanent_http_error(resend, monkeypatch):
-    calls = _post_returning(monkeypatch, _response(403))
+    calls = _post_returning(monkeypatch, stub_http_response(403))
 
     with pytest.raises(requests.HTTPError):
         resend.send(MESSAGE)
@@ -174,7 +160,7 @@ def test_resend_mailer_reads_the_api_key_at_send_time(monkeypatch):
     when constructed — a missing key surfaces as KeyError from send()."""
     monkeypatch.delenv("SMTP_PASS", raising=False)
     adapter = ResendMailer(sleep=lambda s: None)
-    _post_returning(monkeypatch, _response(200))
+    _post_returning(monkeypatch, stub_http_response(200))
 
     with pytest.raises(KeyError):
         adapter.send(MESSAGE)

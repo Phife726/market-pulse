@@ -6,6 +6,7 @@ budget, the synthesis-outage guard, and the ingestion-side repo wiring. Every
 external client is a fake or an in-memory adapter — no live calls.
 """
 
+from functools import partial
 from unittest.mock import MagicMock, patch
 from datetime import datetime
 
@@ -15,7 +16,14 @@ import ingestion_engine
 from llm import FakeLLM
 from run_instant import RunInstant
 from run_budget import RunBudget
-from tests.conftest import RUN_INSTANT as _RUN, stub_insight, stub_target
+from tests.conftest import (
+    RUN_INSTANT as _RUN,
+    stub_http_response,
+    stub_insight,
+    stub_llm_insight,
+    stub_row,
+    stub_target,
+)
 from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
@@ -29,16 +37,6 @@ from ingestion_engine import (
     synthesize_insight,
 )
 from daily_intelligence_repo import InMemoryIntelligenceRepo
-
-
-def _make_openai_mock(sentiment_score: int | float) -> FakeLLM:
-    return FakeLLM(returns={
-        "headline": "Test Headline",
-        "americhem_impact": "Test impact on Americhem.",
-        "sentiment_score": sentiment_score,
-        "source_url": "https://news.com/article",
-        "entities_mentioned": ["Avient"],
-    })
 
 
 # ===========================================================================
@@ -80,7 +78,7 @@ def test_compute_url_hash_collision():
     ],
 )
 def test_sentiment_clamp(raw_score: int, expected: int):
-    with patch("ingestion_engine._llm", return_value=_make_openai_mock(raw_score)):
+    with patch("ingestion_engine._llm", return_value=stub_llm_insight(sentiment_score=raw_score)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -96,30 +94,10 @@ def test_sentiment_clamp(raw_score: int, expected: int):
 # ===========================================================================
 
 
-def _make_openai_mock_no_action(sentiment_score: int) -> FakeLLM:
-    return FakeLLM(returns={
-        "headline": "Test Headline",
-        "americhem_impact": "Test impact on Americhem.",
-        "sentiment_score": sentiment_score,
-        "source_url": "https://news.com/article",
-        "entities_mentioned": ["Avient"],
-    })
-
-
-def _make_openai_mock_invalid_action(sentiment_score: int) -> FakeLLM:
-    return FakeLLM(returns={
-        "headline": "Test Headline",
-        "americhem_impact": "Test impact on Americhem.",
-        "sentiment_score": sentiment_score,
-        "recommended_action": "Do something weird",
-        "source_url": "https://news.com/article",
-        "entities_mentioned": ["Avient"],
-    })
-
-
-@pytest.mark.parametrize("mock_fn", [_make_openai_mock_no_action, _make_openai_mock_invalid_action])
-def test_recommended_action_default(mock_fn):
-    with patch("ingestion_engine._llm", return_value=mock_fn(5)):
+@pytest.mark.parametrize("payload", [{}, {"recommended_action": "Do something weird"}],
+                         ids=["absent", "invalid"])
+def test_recommended_action_default(payload):
+    with patch("ingestion_engine._llm", return_value=stub_llm_insight(sentiment_score=5, **payload)):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -136,7 +114,7 @@ def test_recommended_action_default(mock_fn):
 
 
 def test_article_summary_default():
-    with patch("ingestion_engine._llm", return_value=_make_openai_mock(5)):
+    with patch("ingestion_engine._llm", return_value=stub_llm_insight()):
         result = synthesize_insight(
             article_text="Some article text about the market.",
             source_url="https://news.com/article",
@@ -150,7 +128,7 @@ def test_article_summary_default():
 def test_synthesize_insight_uses_low_temperature():
     # Model + json-format are the adapter's contract (see test_llm.py); the caller
     # owns the temperature it requests across the seam.
-    fake = _make_openai_mock(5)
+    fake = stub_llm_insight()
 
     with patch("ingestion_engine._llm", return_value=fake):
         result = synthesize_insight(
@@ -260,22 +238,11 @@ def test_scrape_fallback_returns_none_on_request_error():
 # ===========================================================================
 
 
-def _make_http_error(status_code: int) -> MagicMock:
-    """Return a requests.HTTPError mock with the given status code."""
-    import requests as _req
-    mock_resp = MagicMock()
-    mock_resp.status_code = status_code
-    err = _req.exceptions.HTTPError(response=mock_resp)
-    return err
-
-
 def test_scrape_article_uses_fallback_on_402(monkeypatch):
     """scrape_article must invoke the fallback when Firecrawl returns HTTP 402."""
-    import requests as _req
 
     # Firecrawl returns 402
-    firecrawl_resp = MagicMock()
-    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+    firecrawl_resp = stub_http_response(402)
 
     # Fallback returns long enough text
     fallback_text = "A" * 600
@@ -292,10 +259,8 @@ def test_scrape_article_uses_fallback_on_402(monkeypatch):
 
 def test_scrape_article_returns_none_when_fallback_content_too_short(monkeypatch):
     """scrape_article must return None when fallback text is below min_length."""
-    import requests as _req
 
-    firecrawl_resp = MagicMock()
-    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+    firecrawl_resp = stub_http_response(402)
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
 
@@ -308,10 +273,8 @@ def test_scrape_article_returns_none_when_fallback_content_too_short(monkeypatch
 
 def test_scrape_article_returns_none_when_fallback_fails(monkeypatch):
     """scrape_article must return None when both Firecrawl (402) and fallback fail."""
-    import requests as _req
 
-    firecrawl_resp = MagicMock()
-    firecrawl_resp.raise_for_status.side_effect = _make_http_error(402)
+    firecrawl_resp = stub_http_response(402)
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
 
@@ -324,10 +287,8 @@ def test_scrape_article_returns_none_when_fallback_fails(monkeypatch):
 
 def test_scrape_article_no_fallback_on_non_402_error(monkeypatch):
     """scrape_article must NOT invoke the fallback for non-402 Firecrawl errors."""
-    import requests as _req
 
-    firecrawl_resp = MagicMock()
-    firecrawl_resp.raise_for_status.side_effect = _make_http_error(500)
+    firecrawl_resp = stub_http_response(500)
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "test_key")
 
@@ -375,15 +336,12 @@ def test_generate_macro_summary_empty_articles_persists_accounting_only_row():
 
 def _macro_articles() -> list[dict]:
     return [
-        {"category": "macro_manufacturing", "headline": "Manufacturing PMI slips into contraction",
-         "americhem_impact_score": 9, "americhem_impact": "Industrial demand softening.",
-         "signal_type": "Macro", "url_hash": "m1", "source_url": "https://x/1"},
-        {"category": "macro_construction", "headline": "Housing starts fall for third month",
-         "americhem_impact_score": 8, "americhem_impact": "Building products demand risk.",
-         "signal_type": "Macro", "url_hash": "m2", "source_url": "https://x/2"},
-        {"category": "competitors", "headline": "Competitor opens new compounding line",
-         "americhem_impact_score": 7, "americhem_impact": "Capacity pressure.",
-         "signal_type": "Competitive", "url_hash": "c1", "source_url": "https://x/3"},
+        stub_row("m1", 9, category="macro_manufacturing", signal_type="Macro", source_url="https://x/1",
+                 headline="Manufacturing PMI slips into contraction", americhem_impact="Industrial demand softening."),
+        stub_row("m2", 8, category="macro_construction", signal_type="Macro", source_url="https://x/2",
+                 headline="Housing starts fall for third month", americhem_impact="Building products demand risk."),
+        stub_row("c1", 7, category="competitors", signal_type="Competitive", source_url="https://x/3",
+                 headline="Competitor opens new compounding line", americhem_impact="Capacity pressure."),
     ]
 
 
@@ -515,10 +473,8 @@ def test_generate_macro_summary_persists_none_when_no_material_signal():
     assert stored["macro_outlook"] is None
 
 
-def _make_macro_mock(payload: dict) -> FakeLLM:
-    return FakeLLM(returns=payload)
-
-
+# Legacy-shaped rows on purpose (`sentiment_score` only): `generate_macro_summary`
+# must accept pre-relevance-upgrade rows, which `stub_row` deliberately never builds.
 def _make_articles(n: int) -> list[dict]:
     return [
         {"category": "competitors", "headline": f"H{i}",
@@ -545,7 +501,7 @@ def test_generate_macro_summary_writes_dominant_condition_when_valid():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         assert generate_macro_summary(_make_articles(5), run=_RUN) is True
     row = _capture_summary(fake_repo)
@@ -573,7 +529,7 @@ def test_generate_macro_summary_coerces_invalid_dominant_condition():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5), run=_RUN)
     row = _capture_summary(fake_repo)
@@ -590,7 +546,7 @@ def test_generate_macro_summary_defaults_low_signal_when_few_articles():
         {"label": "Commercial action",  "body": "Anything."},
     ]}
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2), run=_RUN)
     row = _capture_summary(fake_repo)
@@ -608,7 +564,7 @@ def test_generate_macro_summary_low_signal_coerces_action_body():
         ],
     }
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(2), run=_RUN)
     row = _capture_summary(fake_repo)
@@ -634,7 +590,7 @@ def test_generate_macro_summary_invalid_bullets_set_null(bad_bullets):
     from daily_intelligence_repo import InMemoryIntelligenceRepo
     payload = {"dominant_condition": "Mixed / Watch", "executive_bullets": bad_bullets}
     fake_repo = InMemoryIntelligenceRepo()
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(_make_articles(5), run=_RUN)
     row = _capture_summary(fake_repo)
@@ -1001,28 +957,22 @@ def test_execute_pipeline_rejects_a_budget_built_from_other_targets(monkeypatch)
 # ===========================================================================
 
 
-def _make_openai_mock_with_fields(**overrides) -> FakeLLM:
-    """Return a FakeLLM that outputs a minimal valid insight plus overrides."""
-    base = {
-        "headline": "Test Headline",
-        "americhem_impact": "Direct impact on compounding margins.",
-        "sentiment_score": 5,
-        "sentiment_tag": "Neutral",
-        "americhem_impact_score": 7,
-        "impact_rationale": "Directly affects masterbatch feedstock cost.",
-        "strategic_segment": "Raw Materials / Supply Chain",
-        "source_url": "https://news.com/article",
-        "entities_mentioned": ["Avient"],
-    }
-    base.update(overrides)
-    return FakeLLM(returns=base)
+# The relevance-upgrade payload, legacy `strategic_segment` spelling.
+_relevance_llm_legacy_segment = partial(
+    stub_llm_insight,
+    americhem_impact="Direct impact on compounding margins.",
+    sentiment_tag="Neutral",
+    americhem_impact_score=7,
+    impact_rationale="Directly affects masterbatch feedstock cost.",
+    strategic_segment="Raw Materials / Supply Chain",
+)
 
 
 # --- Sentiment tag validation
 @pytest.mark.parametrize("bad_tag", ["NEGATIVE", "negative", "Bad", "", None, 42])
 def test_synthesize_insight_defaults_invalid_sentiment_tag(bad_tag):
     """Any invalid sentiment_tag must be replaced with 'Neutral'."""
-    mock_client = _make_openai_mock_with_fields(sentiment_tag=bad_tag)
+    mock_client = _relevance_llm_legacy_segment(sentiment_tag=bad_tag)
     with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
@@ -1037,7 +987,7 @@ def test_synthesize_insight_defaults_invalid_sentiment_tag(bad_tag):
 @pytest.mark.parametrize("valid_tag", ["Negative", "Neutral", "Positive"])
 def test_synthesize_insight_preserves_valid_sentiment_tag(valid_tag):
     """Valid sentiment_tag values must be preserved unchanged."""
-    mock_client = _make_openai_mock_with_fields(sentiment_tag=valid_tag)
+    mock_client = _relevance_llm_legacy_segment(sentiment_tag=valid_tag)
     with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
@@ -1061,7 +1011,7 @@ def test_synthesize_insight_preserves_valid_sentiment_tag(valid_tag):
 )
 def test_impact_score_clamped(raw_impact, expected):
     """americhem_impact_score must be clamped to the 1–10 range."""
-    mock_client = _make_openai_mock_with_fields(americhem_impact_score=raw_impact)
+    mock_client = _relevance_llm_legacy_segment(americhem_impact_score=raw_impact)
     with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
@@ -1076,7 +1026,7 @@ def test_impact_score_clamped(raw_impact, expected):
 @pytest.mark.parametrize("bad_value", [None, "high"])
 def test_impact_score_defaults_on_bad_value(bad_value):
     """Non-convertible or missing americhem_impact_score defaults to 5."""
-    mock_client = _make_openai_mock_with_fields(americhem_impact_score=bad_value)
+    mock_client = _relevance_llm_legacy_segment(americhem_impact_score=bad_value)
     with patch("ingestion_engine._llm", return_value=mock_client):
         result = synthesize_insight(
             article_text="Article text.",
@@ -1093,22 +1043,16 @@ def test_impact_score_defaults_on_bad_value(bad_value):
 # ===========================================================================
 
 
-def _make_openai_mock_with_new_fields(**overrides) -> FakeLLM:
-    """FakeLLM that returns the new-style per-article payload."""
-    base = {
-        "headline": "Test Headline",
-        "americhem_impact": "Direct effect on compounding margin.",
-        "sentiment_score": 5,
-        "sentiment_tag": "Neutral",
-        "americhem_impact_score": 7,
-        "impact_rationale": "Direct feedstock cost effect.",
-        "commercial_segment": "Healthcare",
-        "signal_type": "Technology",
-        "source_url": "https://news.com/article",
-        "entities_mentioned": ["Avient"],
-    }
-    base.update(overrides)
-    return FakeLLM(returns=base)
+# The new-style per-article payload (commercial_segment + signal_type).
+_relevance_llm = partial(
+    stub_llm_insight,
+    americhem_impact="Direct effect on compounding margin.",
+    sentiment_tag="Neutral",
+    americhem_impact_score=7,
+    impact_rationale="Direct feedstock cost effect.",
+    commercial_segment="Healthcare",
+    signal_type="Technology",
+)
 
 
 @pytest.mark.parametrize(
@@ -1122,7 +1066,7 @@ def _make_openai_mock_with_new_fields(**overrides) -> FakeLLM:
     ],
 )
 def test_synthesize_insight_preserves_valid_commercial_segment(valid_segment):
-    mock = _make_openai_mock_with_new_fields(commercial_segment=valid_segment)
+    mock = _relevance_llm(commercial_segment=valid_segment)
     with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
@@ -1131,7 +1075,7 @@ def test_synthesize_insight_preserves_valid_commercial_segment(valid_segment):
 
 @pytest.mark.parametrize("bad_segment", [None, "", "  ", "NotASegment", 42])
 def test_synthesize_insight_defaults_invalid_commercial_segment(bad_segment):
-    mock = _make_openai_mock_with_new_fields(commercial_segment=bad_segment)
+    mock = _relevance_llm(commercial_segment=bad_segment)
     with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
@@ -1144,7 +1088,7 @@ def test_synthesize_insight_defaults_invalid_commercial_segment(bad_segment):
      "Supply Chain", "Technology", "Macro", "Other"],
 )
 def test_synthesize_insight_preserves_valid_signal_type(valid_signal):
-    mock = _make_openai_mock_with_new_fields(signal_type=valid_signal)
+    mock = _relevance_llm(signal_type=valid_signal)
     with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
@@ -1153,7 +1097,7 @@ def test_synthesize_insight_preserves_valid_signal_type(valid_signal):
 
 @pytest.mark.parametrize("bad_signal", [None, "", "BAD", 42])
 def test_synthesize_insight_defaults_invalid_signal_type(bad_signal):
-    mock = _make_openai_mock_with_new_fields(signal_type=bad_signal)
+    mock = _relevance_llm(signal_type=bad_signal)
     with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
@@ -1162,7 +1106,7 @@ def test_synthesize_insight_defaults_invalid_signal_type(bad_signal):
 
 def test_synthesize_insight_drops_strategic_segment_field():
     """If the LLM still returns strategic_segment, it must not appear in the result."""
-    mock = _make_openai_mock_with_new_fields(strategic_segment="LegacyValue")
+    mock = _relevance_llm(strategic_segment="LegacyValue")
     with patch("ingestion_engine._llm", return_value=mock):
         result = synthesize_insight("text", "https://news.com/a", "Avient", "competitors")
     assert result is not None
@@ -1190,7 +1134,7 @@ def test_generate_macro_summary_persists_suppression_breakdown_and_samples():
             {"label": "Commercial action",  "body": "C."},
         ],
     }
-    with patch("ingestion_engine._llm", return_value=_make_macro_mock(payload)), \
+    with patch("ingestion_engine._llm", return_value=FakeLLM(returns=payload)), \
          patch("ingestion_engine._repo", lambda: fake_repo):
         generate_macro_summary(
             _make_articles(5),
@@ -1216,7 +1160,7 @@ def test_synthesize_insight_non_english_body_keeps_english_directive():
     body must be forwarded verbatim in the user prompt (no client-side translation)."""
     chinese_body = "中文测试文本 — Teknor Apex 推出含 70% PCR 的 Crealen R PP 汽车内饰再生材料。"
 
-    fake = _make_openai_mock(5)
+    fake = stub_llm_insight()
     with patch("ingestion_engine._llm", return_value=fake):
         result = synthesize_insight(
             article_text=chinese_body,

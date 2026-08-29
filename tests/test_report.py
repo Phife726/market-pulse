@@ -7,13 +7,18 @@ citation set. Tests that render the model to HTML live in
 `test_delivery_engine.py` — a test lives with the module whose output it asserts on.
 """
 
+from functools import partial
+
+import pytest
+
+from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES
 from report import _config_int, assemble_report, _citation_display_map
 from tests.conftest import (
-    _APPENDIX_CFG,
-    _VALID_MACRO_OUTLOOK,
-    _appendix_hashes,
-    _make_new_article,
-    _src,
+    VALID_MACRO_OUTLOOK,
+    VISIBLE_6_CFG,
+    appendix_hashes,
+    stub_row,
+    stub_source,
 )
 
 
@@ -42,7 +47,7 @@ def test_report_macro_outlook_sliced_to_cap():
         "macro_outlook": {"current_condition": "Manufacturing demand mixed.",
                           "signals": signals},
     }
-    rows = [_make_new_article("a", 8, commercial_segment="Packaging",
+    rows = [stub_row("a", 8, commercial_segment="Packaging",
                               headline="Packaging demand firms on brand-owner restocking")]
     model = assemble_report(rows, macro_summary=macro_summary)
 
@@ -69,7 +74,7 @@ def test_assemble_report_per_segment_cap():
         "Supply disruption at key resin plant delays surgical kit output",
     ]
     articles = [
-        _make_new_article(
+        stub_row(
             f"h{i}", americhem_impact_score=10 - i,
             commercial_segment="Healthcare",
             headline=_hc_headlines[i],
@@ -99,7 +104,7 @@ def test_assemble_report_total_articles_cap():
         "Competitive / Customer Signal",
     ]
     articles = [
-        _make_new_article(
+        stub_row(
             f"s{si}_{ai}", americhem_impact_score=8,
             commercial_segment=seg,
             headline=f"Seg{si} Art{ai}",
@@ -129,13 +134,13 @@ def test_report_model_has_additional_articles_tuple():
     """ReportModel carries an additional_articles tuple; empty on the daily
     variant until selection lands, and always empty on no_news."""
     daily = assemble_report(
-        [_make_new_article("a", 8, commercial_segment="Packaging",
+        [stub_row("a", 8, commercial_segment="Packaging",
                            headline="Packaging demand firms on brand-owner restocking")],
-        config={"reporting": {"visible_impact_threshold": 6}},
+        config=VISIBLE_6_CFG,
     )
     assert isinstance(daily.additional_articles, tuple)
 
-    no_news = assemble_report([], config={"reporting": {"visible_impact_threshold": 6}})
+    no_news = assemble_report([], config=VISIBLE_6_CFG)
     assert no_news.variant == "no_news"
     assert no_news.additional_articles == ()
 
@@ -152,69 +157,69 @@ def test_appendix_selects_scores_4_and_5_excludes_3_and_6():
     """Scores 4 and 5 populate the appendix; 3 is below the band; 6 stays a
     visible card and never duplicates into the appendix."""
     rows = [
-        _make_new_article("s6", 6, commercial_segment="Packaging",
+        stub_row("s6", 6, commercial_segment="Packaging",
                           headline="Visible card at the six threshold holds firm"),
-        _make_new_article("s5", 5, commercial_segment="Packaging",
+        stub_row("s5", 5, commercial_segment="Packaging",
                           headline="Near-threshold five signal worth optional reading"),
-        _make_new_article("s4", 4, commercial_segment="Packaging",
+        stub_row("s4", 4, commercial_segment="Packaging",
                           headline="Marginal four signal for the curious reader"),
-        _make_new_article("s3", 3, commercial_segment="Packaging",
+        stub_row("s3", 3, commercial_segment="Packaging",
                           headline="Below-band three signal should never appear"),
     ]
-    model = assemble_report(rows, config=_APPENDIX_CFG)
+    model = assemble_report(rows, config=VISIBLE_6_CFG)
 
     group_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
     assert "s6" in group_hashes
-    assert _appendix_hashes(model) == ["s5", "s4"]
-    assert "s6" not in _appendix_hashes(model)
-    assert "s3" not in _appendix_hashes(model)
+    assert appendix_hashes(model) == ["s5", "s4"]
+    assert "s6" not in appendix_hashes(model)
+    assert "s3" not in appendix_hashes(model)
 
 
 def test_appendix_score_5_ranks_before_score_4():
     """Every score-5 item precedes every score-4 item regardless of insertion
     order."""
     rows = [
-        _make_new_article("a4", 4, commercial_segment="Packaging",
+        stub_row("a4", 4, commercial_segment="Packaging",
                           headline="Alpha four ranked strictly after every five"),
-        _make_new_article("b5", 5, commercial_segment="Packaging",
+        stub_row("b5", 5, commercial_segment="Packaging",
                           headline="Bravo five ranked ahead of any four signal"),
-        _make_new_article("c4", 4, commercial_segment="Industrial",
+        stub_row("c4", 4, commercial_segment="Industrial",
                           headline="Charlie four also trails the five band"),
-        _make_new_article("d5", 5, commercial_segment="Industrial",
+        stub_row("d5", 5, commercial_segment="Industrial",
                           headline="Delta five leads the near-threshold pack"),
     ]
-    model = assemble_report(rows, config=_APPENDIX_CFG)
+    model = assemble_report(rows, config=VISIBLE_6_CFG)
     scores = [a["americhem_impact_score"] for a in model.additional_articles]
     assert scores == [5, 5, 4, 4]
 
 
 def test_appendix_excludes_blank_headline_or_url():
     """A weak-relevance row without a usable headline or source URL is excluded."""
-    good = _make_new_article("good", 5, commercial_segment="Packaging",
+    good = stub_row("good", 5, commercial_segment="Packaging",
                              headline="Usable near-threshold signal with a real link")
-    blank_headline = _make_new_article("bh", 5, commercial_segment="Packaging",
+    blank_headline = stub_row("bh", 5, commercial_segment="Packaging",
                                        headline="   ")
-    no_url = _make_new_article("nu", 5, commercial_segment="Packaging",
+    no_url = stub_row("nu", 5, commercial_segment="Packaging",
                                headline="Weak signal that lost its source url somehow")
     no_url["source_url"] = ""
-    model = assemble_report([good, blank_headline, no_url], config=_APPENDIX_CFG)
-    assert _appendix_hashes(model) == ["good"]
+    model = assemble_report([good, blank_headline, no_url], config=VISIBLE_6_CFG)
+    assert appendix_hashes(model) == ["good"]
 
 
 def test_appendix_excludes_delivery_suppressed_rows():
     """A product-listing URL is suppressed before eligibility, so it never
     reaches the appendix even at a qualifying score."""
-    listing = _make_new_article("list", 5, commercial_segment="Packaging",
+    listing = stub_row("list", 5, commercial_segment="Packaging",
                                 headline="Shop our new masterbatch color range online")
     listing["source_url"] = "https://vendor.com/product/masterbatch-blue"
-    real = _make_new_article("real", 5, commercial_segment="Packaging",
+    real = stub_row("real", 5, commercial_segment="Packaging",
                              headline="Genuine near-threshold packaging demand note")
     config = {
         "reporting": {"visible_impact_threshold": 6},
         "delivery_suppression": {"url_patterns_product_listing": ["/product/"]},
     }
     model = assemble_report([listing, real], config=config)
-    assert _appendix_hashes(model) == ["real"]
+    assert appendix_hashes(model) == ["real"]
 
 
 def test_appendix_never_includes_non_template_enterprise_cross_segment_low_impact():
@@ -223,13 +228,13 @@ def test_appendix_never_includes_non_template_enterprise_cross_segment_low_impac
     score-5 cross-segment row with an ordinary So-What can never appear in
     the appendix. (The RULE 6 low-exposure templates are the one exemption —
     see the mirror test below.)"""
-    cross = _make_new_article("cross", 5,
+    cross = stub_row("cross", 5,
                               commercial_segment="Enterprise / Cross-Segment",
                               headline="Cross-segment corporate note below the bar")
-    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+    keep = stub_row("keep", 5, commercial_segment="Packaging",
                              headline="Packaging-specific near-threshold signal kept")
-    model = assemble_report([cross, keep], config=_APPENDIX_CFG)
-    assert _appendix_hashes(model) == ["keep"]
+    model = assemble_report([cross, keep], config=VISIBLE_6_CFG)
+    assert appendix_hashes(model) == ["keep"]
 
 
 def test_appendix_includes_low_exposure_template_enterprise_rows():
@@ -238,19 +243,17 @@ def test_appendix_includes_low_exposure_template_enterprise_rows():
     scored in the supporting band; the prompt promises it reaches the
     appendix, so rule 1 must not drop it. It ranks below every higher-scoring
     row and never becomes a visible card."""
-    adjacent = {**_make_new_article("adjacent", 3,
+    adjacent = stub_row("adjacent", 3,
                                     commercial_segment="Enterprise / Cross-Segment",
-                                    headline="Recycled PET bottle demand climbs in Europe"),
-                "americhem_impact": "Adjacent market — no direct Americhem participation indicated."}
-    limited = {**_make_new_article("limited", 4,
+                                    headline="Recycled PET bottle demand climbs in Europe", americhem_impact="Adjacent market — no direct Americhem participation indicated.")
+    limited = stub_row("limited", 4,
                                    commercial_segment="Enterprise / Cross-Segment",
-                                   headline="Bank raises passive stake in Huntsman"),
-               "americhem_impact": "Limited direct exposure — passive shareholding change only."}
-    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+                                   headline="Bank raises passive stake in Huntsman", americhem_impact="Limited direct exposure — passive shareholding change only.")
+    keep = stub_row("keep", 5, commercial_segment="Packaging",
                              headline="Packaging-specific near-threshold signal kept")
     config = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3}}
     model = assemble_report([adjacent, limited, keep], config=config)
-    assert _appendix_hashes(model) == ["keep", "limited", "adjacent"]
+    assert appendix_hashes(model) == ["keep", "limited", "adjacent"]
     assert model.surfaced_count == 0
     assert dict(model.ledger.breakdown).get("enterprise_cross_segment_low_impact", 0) == 0
 
@@ -259,13 +262,15 @@ _TEMPLATE_CFG = {"reporting": {"visible_impact_threshold": 6,
                                "supporting_impact_threshold": 3}}
 
 
-def _template_row(url_hash, score, *, segment="Enterprise / Cross-Segment",
-                  headline, created_at=None, opener="Limited direct exposure"):
-    row = {**_make_new_article(url_hash, score, commercial_segment=segment, headline=headline),
-           "americhem_impact": f"{opener} — {headline.lower()} only."}
-    if created_at:
-        row["created_at"] = created_at
-    return row
+def _template_row(url_hash: str, score: int, *, headline: str,
+                  opener: str = LOW_EXPOSURE_TEMPLATE_PREFIXES[-1], **overrides) -> dict:
+    """A row whose So-What opens with a RULE 6 low-exposure template; any
+    `stub_row` key (including the computed `americhem_impact`) can be overridden."""
+    return stub_row(url_hash, score, **{
+        "headline": headline,
+        "americhem_impact": f"{opener} — {headline.lower()} only.",
+        **overrides,
+    })
 
 
 def test_appendix_ranks_low_exposure_template_rows_after_every_non_template_row():
@@ -274,42 +279,39 @@ def test_appendix_ranks_low_exposure_template_rows_after_every_non_template_row(
     recency. (Production data: the cap binds daily and is decided within the
     score-4 tier by recency, where macro-group template rows — stored last,
     so newest — would otherwise win.)"""
-    packaging3 = {**_make_new_article("pkg3", 3, commercial_segment="Packaging",
-                                      headline="Barrier film converter adds a line"),
-                  "created_at": "2026-08-27T10:30:00+00:00"}
+    packaging3 = stub_row("pkg3", 3, commercial_segment="Packaging",
+                                      headline="Barrier film converter adds a line", created_at="2026-08-27T10:30:00+00:00")
     template4 = _template_row("tpl4", 4, headline="Bitcoin futures top eighty thousand",
                               created_at="2026-08-27T10:45:00+00:00")
     model = assemble_report([template4, packaging3], config=_TEMPLATE_CFG)
-    assert _appendix_hashes(model) == ["pkg3", "tpl4"]
+    assert appendix_hashes(model) == ["pkg3", "tpl4"]
 
 
 def test_appendix_ranks_template_rows_last_regardless_of_segment():
     """The rule keys on the So-What, not the segment: a Packaging row that
     admits limited exposure is also last-resort reading."""
-    pkg_template = _template_row("pkgtpl", 5, segment="Packaging",
+    pkg_template = _template_row("pkgtpl", 5, commercial_segment="Packaging",
                                  headline="Pouch maker names a new regional director")
-    industrial3 = _make_new_article("ind3", 3, commercial_segment="Industrial",
+    industrial3 = stub_row("ind3", 3, commercial_segment="Industrial",
                                     headline="Rotomolder books winter capacity")
     model = assemble_report([pkg_template, industrial3], config=_TEMPLATE_CFG)
-    assert _appendix_hashes(model) == ["ind3", "pkgtpl"]
+    assert appendix_hashes(model) == ["ind3", "pkgtpl"]
 
 
 def test_appendix_cap_pushes_template_rows_out_first():
     """On a full day the cap drops template rows before any non-template row —
     they fill the appendix only when there is room."""
     real = [
-        {**_make_new_article("r1", 4, commercial_segment="Packaging",
-                             headline="Recycled content mandate reshapes film sourcing"),
-         "created_at": "2026-08-27T10:20:00+00:00"},
-        {**_make_new_article("r2", 4, commercial_segment="Healthcare",
-                             headline="Medical tubing extruder wins device contract"),
-         "created_at": "2026-08-27T10:25:00+00:00"},
+        stub_row("r1", 4, commercial_segment="Packaging",
+                             headline="Recycled content mandate reshapes film sourcing", created_at="2026-08-27T10:20:00+00:00"),
+        stub_row("r2", 4, commercial_segment="Healthcare",
+                             headline="Medical tubing extruder wins device contract", created_at="2026-08-27T10:25:00+00:00"),
     ]
     template = _template_row("tpl", 4, headline="Dow edges lower as Nasdaq rises",
                              created_at="2026-08-27T10:50:00+00:00")
     config = {"reporting": {**_TEMPLATE_CFG["reporting"], "max_additional_articles": 2}}
     model = assemble_report([template, *real], config=config)
-    assert _appendix_hashes(model) == ["r2", "r1"]
+    assert appendix_hashes(model) == ["r2", "r1"]
     assert dict(model.ledger.breakdown)["weak_relevance"] == 1
 
 
@@ -323,7 +325,7 @@ def test_appendix_template_rows_keep_impact_then_recency_order_among_themselves(
                       created_at="2026-08-27T10:50:00+00:00", opener="Adjacent market"),
     ]
     model = assemble_report(rows, config=_TEMPLATE_CFG)
-    assert _appendix_hashes(model) == ["t4new", "t4old", "t3old"]
+    assert appendix_hashes(model) == ["t4new", "t4old", "t3old"]
 
 
 def test_appendix_capped_at_max():
@@ -343,7 +345,7 @@ def test_appendix_capped_at_max():
         "Medical tubing extruder wins implantable device contract",
     ]
     rows = [
-        _make_new_article(f"x{i}", 5, commercial_segment="Packaging", headline=h)
+        stub_row(f"x{i}", 5, commercial_segment="Packaging", headline=h)
         for i, h in enumerate(headlines)
     ]
     config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
@@ -354,50 +356,50 @@ def test_appendix_capped_at_max():
 def test_appendix_deterministic_recency_then_headline_then_hash():
     """Within a score band, order is recency desc (published_at, else
     created_at), then normalized headline asc, then url_hash asc."""
-    newer = _make_new_article("z_hash", 5, commercial_segment="Packaging",
+    newer = stub_row("z_hash", 5, commercial_segment="Packaging",
                               headline="Zulu newer signal by publication timestamp")
     newer["published_at"] = "2026-07-16T09:00:00+00:00"
-    older = _make_new_article("a_hash", 5, commercial_segment="Packaging",
+    older = stub_row("a_hash", 5, commercial_segment="Packaging",
                               headline="Alpha older signal by publication timestamp")
     older["published_at"] = "2026-07-15T09:00:00+00:00"
     # Two undated rows tie on recency -> ordered by normalized headline, then hash.
-    undated_b = _make_new_article("h2", 5, commercial_segment="Packaging",
+    undated_b = stub_row("h2", 5, commercial_segment="Packaging",
                                   headline="Betamax undated near-threshold packaging note")
-    undated_a = _make_new_article("h1", 5, commercial_segment="Packaging",
+    undated_a = stub_row("h1", 5, commercial_segment="Packaging",
                                   headline="Anchor undated near-threshold packaging note")
-    model = assemble_report([undated_b, older, undated_a, newer], config=_APPENDIX_CFG)
+    model = assemble_report([undated_b, older, undated_a, newer], config=VISIBLE_6_CFG)
     # newer (dated) and older (dated) lead by recency desc; undated tie last,
     # ordered by headline (Anchor < Betamax).
-    assert _appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
+    assert appendix_hashes(model) == ["z_hash", "a_hash", "h1", "h2"]
 
 
 def test_appendix_recency_ignores_unparseable_published_at():
     """A non-ISO published_at must not be used for recency: it falls back to
     created_at, so it can't spuriously outrank a real recent date. (Aligns the
     selector with the renderer, which already drops unparseable published_at.)"""
-    garbage = _make_new_article("garbage", 5, commercial_segment="Packaging",
+    garbage = stub_row("garbage", 5, commercial_segment="Packaging",
                                 headline="Bogus timestamp near-threshold packaging note")
     garbage["published_at"] = "Yesterday"                       # unparseable
     garbage["created_at"] = "2026-07-10T00:00:00+00:00"         # real, older
-    real_recent = _make_new_article("recent", 5, commercial_segment="Industrial",
+    real_recent = stub_row("recent", 5, commercial_segment="Industrial",
                                     headline="Genuinely recent near-threshold industrial note")
     real_recent["published_at"] = "2026-07-15T00:00:00+00:00"   # real, newer
-    model = assemble_report([garbage, real_recent], config=_APPENDIX_CFG)
+    model = assemble_report([garbage, real_recent], config=VISIBLE_6_CFG)
     # real_recent (Jul 15) must lead; garbage falls back to created_at (Jul 10).
-    assert _appendix_hashes(model) == ["recent", "garbage"]
+    assert appendix_hashes(model) == ["recent", "garbage"]
 
 
 def test_appendix_ranks_cap_overflow_ahead_of_weak_relevance():
     """Capped-out visible-band rows (impact >= 6) precede weak-relevance
     (4-5) rows in the appendix — the existing impact-desc sort, wider band."""
     articles = [
-        _make_new_article("v0", 10, commercial_segment="Healthcare",
+        stub_row("v0", 10, commercial_segment="Healthcare",
                           headline="Hospital network merger squeezes specialty polymer volumes"),
-        _make_new_article("v1", 9, commercial_segment="Healthcare",
+        stub_row("v1", 9, commercial_segment="Healthcare",
                           headline="FDA clears new implantable-grade compound for cardiac devices"),
-        _make_new_article("v2", 7, commercial_segment="Healthcare",
+        stub_row("v2", 7, commercial_segment="Healthcare",
                           headline="Aging population drives record demand for medical-grade resins"),
-        _make_new_article("w0", 5, commercial_segment="Packaging",
+        stub_row("w0", 5, commercial_segment="Packaging",
                           headline="Beverage brands trial mono-material caps in European pilot"),
     ]
     config = {"reporting": {"visible_impact_threshold": 6,
@@ -413,11 +415,11 @@ def test_appendix_overflow_does_not_alter_ledger_counts():
     weak_relevance, and below_impact_threshold still counts only
     suppression-surviving below-visible rows."""
     articles = [
-        _make_new_article("v0", 10, commercial_segment="Healthcare",
+        stub_row("v0", 10, commercial_segment="Healthcare",
                           headline="Hospital network merger squeezes specialty polymer volumes"),
-        _make_new_article("v1", 7, commercial_segment="Healthcare",
+        stub_row("v1", 7, commercial_segment="Healthcare",
                           headline="FDA clears new implantable-grade compound for cardiac devices"),
-        _make_new_article("w0", 4, commercial_segment="Packaging",
+        stub_row("w0", 4, commercial_segment="Packaging",
                           headline="Beverage brands trial mono-material caps in European pilot"),
     ]
     config = {"reporting": {"visible_impact_threshold": 6,
@@ -450,10 +452,10 @@ _APPENDIX_ACCT_HEADLINES = [
 
 def test_appendix_displayed_rows_not_counted_weak_relevance():
     """A score-5 row shown in the appendix is not counted as weak_relevance."""
-    row = _make_new_article("shown", 5, commercial_segment="Packaging",
+    row = stub_row("shown", 5, commercial_segment="Packaging",
                             headline="Near-threshold packaging note shown in appendix")
-    model = assemble_report([row], config=_APPENDIX_CFG)
-    assert _appendix_hashes(model) == ["shown"]
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert appendix_hashes(model) == ["shown"]
     # record_count is a no-op at 0, so the key is simply absent.
     assert model.ledger.breakdown.get("weak_relevance", 0) == 0
 
@@ -462,7 +464,7 @@ def test_appendix_capped_out_rows_counted_weak_relevance():
     """Eligible score-5 rows pushed out by the appendix cap are counted as
     weak_relevance (in neither the main groups nor the appendix)."""
     rows = [
-        _make_new_article(f"w{i}", 5, commercial_segment="Packaging", headline=h)
+        stub_row(f"w{i}", 5, commercial_segment="Packaging", headline=h)
         for i, h in enumerate(_APPENDIX_ACCT_HEADLINES)  # 12 rows
     ]
     config = {"reporting": {"visible_impact_threshold": 6, "max_additional_articles": 10}}
@@ -475,14 +477,14 @@ def test_below_impact_threshold_unchanged_by_appendix():
     """below_impact_threshold still counts every suppression-surviving row below
     the visible threshold, including rows the appendix now displays."""
     rows = [
-        _make_new_article("s5", 5, commercial_segment="Packaging",
+        stub_row("s5", 5, commercial_segment="Packaging",
                           headline="Five-band signal that lands in the appendix"),
-        _make_new_article("s4", 4, commercial_segment="Packaging",
+        stub_row("s4", 4, commercial_segment="Packaging",
                           headline="Four-band signal that also lands in appendix"),
-        _make_new_article("s3", 3, commercial_segment="Packaging",
+        stub_row("s3", 3, commercial_segment="Packaging",
                           headline="Three-band signal below the supporting floor"),
     ]
-    model = assemble_report(rows, config=_APPENDIX_CFG)
+    model = assemble_report(rows, config=VISIBLE_6_CFG)
     # All three are below the visible threshold (6) and survive suppression.
     assert model.ledger.breakdown["below_impact_threshold"] == 3
     # Two of them are surfaced in the appendix — that overlap is intentional.
@@ -500,11 +502,8 @@ _EXCLUDE_CFG = {"reporting": {"visible_impact_threshold": 6,
                                                               "macro_energy_freight"]}}
 
 
-def _macro_row(url_hash, score, *, category="macro_inflation_rates", headline,
-               segment="Enterprise / Cross-Segment"):
-    return {**_make_new_article(url_hash, score, commercial_segment=segment, headline=headline),
-            "category": category,
-            "americhem_impact": f"Limited direct exposure — {headline.lower()} commentary only."}
+# A template row discovered by a macro group (appendix-excluded category).
+_macro_row = partial(_template_row, category="macro_inflation_rates")
 
 
 def test_appendix_excludes_configured_categories():
@@ -512,10 +511,10 @@ def test_appendix_excludes_configured_categories():
     never reach Additional Articles, whatever their score in the band — they
     exist to feed the Macroeconomic Outlook, not to be headline rows."""
     macro = _macro_row("macro", 4, headline="Lower energy prices fail to fix inflation pressures")
-    keep = _make_new_article("keep", 3, commercial_segment="Packaging",
+    keep = stub_row("keep", 3, commercial_segment="Packaging",
                              headline="Barrier film converter adds a line")
     model = assemble_report([macro, keep], config=_EXCLUDE_CFG)
-    assert _appendix_hashes(model) == ["keep"]
+    assert appendix_hashes(model) == ["keep"]
 
 
 def test_appendix_exclusion_matches_category_exactly_not_by_prefix():
@@ -527,7 +526,7 @@ def test_appendix_exclusion_matches_category_exactly_not_by_prefix():
     unlisted = _macro_row("unlisted", 4, category="macro_automotive",
                           headline="Light-vehicle sales pace slows in July")
     model = assemble_report([listed, unlisted], config=_EXCLUDE_CFG)
-    assert _appendix_hashes(model) == ["unlisted"]
+    assert appendix_hashes(model) == ["unlisted"]
 
 
 def test_appendix_exclusion_is_recorded_in_the_ledger_with_samples():
@@ -537,7 +536,7 @@ def test_appendix_exclusion_is_recorded_in_the_ledger_with_samples():
     m1 = _macro_row("m1", 4, headline="Lower energy prices fail to fix inflation pressures")
     m2 = _macro_row("m2", 3, category="macro_energy_freight",
                     headline="Russian tanker freight rates surge")
-    keep = _make_new_article("keep", 5, commercial_segment="Packaging",
+    keep = stub_row("keep", 5, commercial_segment="Packaging",
                              headline="Packaging-specific near-threshold signal kept")
     model = assemble_report([m1, m2, keep], config=_EXCLUDE_CFG)
     assert dict(model.ledger.breakdown).get("appendix_excluded_category") == 2
@@ -550,9 +549,8 @@ def test_appendix_exclusion_is_recorded_in_the_ledger_with_samples():
 def test_appendix_exclusion_never_touches_visible_cards():
     """Appendix-only: a macro-group row scored at/above the visible threshold
     is still a visible card and is not counted under the new reason."""
-    macro6 = {**_macro_row("macro6", 7, headline="Fed cuts rates; resin buyers expect cheaper credit",
-                           segment="Building & Construction"),
-              "americhem_impact": "Cheaper credit lifts housing starts and construction resin pull-through."}
+    macro6 = _macro_row("macro6", 7, headline="Fed cuts rates; resin buyers expect cheaper credit",
+                           commercial_segment="Building & Construction", americhem_impact="Cheaper credit lifts housing starts and construction resin pull-through.")
     model = assemble_report([macro6], config=_EXCLUDE_CFG)
     group_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
     assert group_hashes == {"macro6"}
@@ -564,8 +562,7 @@ def test_appendix_exclusion_only_counts_rows_that_would_have_been_appendix_rows(
     supporting band, or dropped by delivery suppression) is not double-counted
     under the new reason — the reason names the appendix decision only."""
     below_band = _macro_row("low", 2, headline="Crypto index drifts lower on thin volume")
-    non_template_cross = {**_macro_row("cross", 4, headline="Bitcoin futures top eighty thousand"),
-                          "americhem_impact": "Ordinary So-What, so rule 1 drops it first."}
+    non_template_cross = _macro_row("cross", 4, headline="Bitcoin futures top eighty thousand", americhem_impact="Ordinary So-What, so rule 1 drops it first.")
     model = assemble_report([below_band, non_template_cross], config=_EXCLUDE_CFG)
     assert "appendix_excluded_category" not in dict(model.ledger.breakdown)
     assert dict(model.ledger.breakdown).get("enterprise_cross_segment_low_impact") == 1
@@ -582,7 +579,7 @@ def test_appendix_exclusion_absent_or_malformed_config_excludes_nothing():
         cfg = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
                              **reporting}}
         model = assemble_report([macro], config=cfg)
-        assert _appendix_hashes(model) == ["macro"], reporting
+        assert appendix_hashes(model) == ["macro"], reporting
         assert "appendix_excluded_category" not in dict(model.ledger.breakdown)
 
 
@@ -599,37 +596,59 @@ def test_appendix_excluded_rows_still_count_as_weak_relevance():
 
 
 def test_report_model_carries_macro_outlook():
-    row = _make_new_article("v", 8, commercial_segment="Packaging",
+    row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card to make a daily model")
-    macro = {"dominant_condition": "Demand Softness", "macro_outlook": _VALID_MACRO_OUTLOOK}
-    model = assemble_report([row], macro_summary=macro, config=_APPENDIX_CFG)
-    assert model.macro_outlook == _VALID_MACRO_OUTLOOK
+    macro = {"dominant_condition": "Demand Softness", "macro_outlook": VALID_MACRO_OUTLOOK}
+    model = assemble_report([row], macro_summary=macro, config=VISIBLE_6_CFG)
+    assert model.macro_outlook == VALID_MACRO_OUTLOOK
 
 
 def test_report_model_macro_outlook_none_when_absent():
-    row = _make_new_article("v", 8, commercial_segment="Packaging",
+    row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card with no macro outlook")
     model = assemble_report([row], macro_summary={"dominant_condition": "Mixed / Watch"},
-                            config=_APPENDIX_CFG)
+                            config=VISIBLE_6_CFG)
     assert model.macro_outlook is None
 
 
 def test_report_model_macro_outlook_none_when_malformed():
-    row = _make_new_article("v", 8, commercial_segment="Packaging",
+    row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card with malformed outlook")
     for bad in ({}, {"current_condition": "x", "signals": []},
                 {"current_condition": "  ", "signals": [{"indicator": "PMI"}]},
                 {"signals": [{"indicator": "PMI"}]}, "nope", None):
         model = assemble_report([row], macro_summary={"macro_outlook": bad},
-                                config=_APPENDIX_CFG)
+                                config=VISIBLE_6_CFG)
         assert model.macro_outlook is None, bad
 
 
 def test_report_model_no_news_macro_outlook_none():
-    model = assemble_report([], macro_summary={"macro_outlook": _VALID_MACRO_OUTLOOK},
-                            config=_APPENDIX_CFG)
+    model = assemble_report([], macro_summary={"macro_outlook": VALID_MACRO_OUTLOOK},
+                            config=VISIBLE_6_CFG)
     assert model.variant == "no_news"
     assert model.macro_outlook is None
+
+
+# ===========================================================================
+# Visibility is tone-blind: materiality decides, sentiment_tag never does
+# ===========================================================================
+
+
+@pytest.mark.parametrize("score, expected_cards, expected_appendix", [
+    (4, set(), {"neg", "pos"}),   # supporting band: both in the appendix
+    (6, {"neg", "pos"}, set()),   # at visible: both are cards
+])
+def test_visibility_is_tone_blind(score, expected_cards, expected_appendix):
+    """The same materiality with the tag flipped lands in the same place —
+    the invariant behind 'filter on americhem_impact_score, not sentiment_tag'."""
+    rows = [
+        stub_row("neg", score, sentiment_tag="Negative", commercial_segment="Packaging", headline="Neg"),
+        stub_row("pos", score, sentiment_tag="Positive", commercial_segment="Packaging", headline="Pos"),
+    ]
+    model = assemble_report(rows, config=VISIBLE_6_CFG)
+    cards = {row["url_hash"] for group in model.groups.values() for row in group}
+    assert cards == expected_cards
+    assert set(appendix_hashes(model)) == expected_appendix
 
 
 # ===========================================================================
@@ -650,7 +669,7 @@ def test_assemble_report_uncapped_per_segment_when_null():
     """With max_visible_articles_per_segment: null, every visible article in a
     segment survives — no per-segment drop."""
     articles = [
-        _make_new_article(
+        stub_row(
             f"h{i}", americhem_impact_score=10 - i,
             commercial_segment="Healthcare",
             headline=_UNCAPPED_HC_HEADLINES[i],
@@ -691,7 +710,7 @@ def test_assemble_report_uncapped_total_when_null():
         ("Engineered Resins", "Glass-filled nylon pricing climbs on feedstock tightness"),
     ]
     articles = [
-        _make_new_article(
+        stub_row(
             f"u{i}", americhem_impact_score=8,
             commercial_segment=seg, headline=headline,
         )
@@ -712,7 +731,7 @@ def test_assemble_report_uncapped_by_default():
     """Built-in defaults (config=None) impose no caps: all 5 visible articles
     in one segment survive."""
     articles = [
-        _make_new_article(
+        stub_row(
             f"h{i}", americhem_impact_score=8,
             commercial_segment="Healthcare",
             headline=_UNCAPPED_HC_HEADLINES[i],
@@ -726,7 +745,7 @@ def test_assemble_report_uncapped_by_default():
 def test_assemble_report_integer_cap_still_enforced():
     """An integer cap in config still caps — the knob is retained for rollback."""
     articles = [
-        _make_new_article(
+        stub_row(
             f"h{i}", americhem_impact_score=10 - i,
             commercial_segment="Healthcare",
             headline=_UNCAPPED_HC_HEADLINES[i],
@@ -768,7 +787,7 @@ def test_config_int_returns_default_for_missing_key():
 def test_config_int_returns_default_and_warns_for_bad_value(caplog):
     import logging
     cfg = {"visible_impact_threshold": "high"}
-    with caplog.at_level(logging.WARNING, logger="delivery_engine"):
+    with caplog.at_level(logging.WARNING, logger="report"):
         result = _config_int(cfg, "visible_impact_threshold", 6)
     assert result == 6
     assert "visible_impact_threshold" in caplog.text
@@ -802,21 +821,10 @@ def _supp_config(**overrides) -> dict:
     return {"delivery_suppression": base}
 
 
-def _row(**overrides) -> dict:
-    base = {
-        "url_hash": overrides.get("url_hash", "abc"),
-        "source_url": "https://example.com/article",
-        "headline": "Default Headline",
-        "americhem_impact": "Effect.",
-        "americhem_impact_score": 8,
-        "sentiment_tag": "Neutral",
-        "commercial_segment": "Healthcare",
-        "signal_type": "Customer",
-        "entities_mentioned": ["Acme"],
-        "recommended_action": "Monitor",
-    }
-    base.update(overrides)
-    return base
+# The suppression tests' default row: a segment-specific, high-impact row that
+# no rule touches unless the test says otherwise.
+_row = partial(stub_row, commercial_segment="Healthcare", signal_type="Customer",
+               recommended_action="Monitor")
 
 
 def test_apply_delivery_suppression_drops_enterprise_low_impact():
@@ -962,16 +970,14 @@ def test_apply_delivery_suppression_preserves_input_order_of_kept_rows():
 def test_appendix_keeps_the_segment_row_when_a_template_duplicates_it():
     """End to end: with the exemption on, a template duplicate never costs the
     appendix its segment-specific row."""
-    template = {**_make_new_article("tpl", 4, commercial_segment=_ENTERPRISE,
-                                    headline="Recycled PET bottle demand climbs in Europe"),
-                "source_url": "https://a.example/tpl",
-                "americhem_impact": "Adjacent market — no direct Americhem participation indicated."}
-    real = {**_make_new_article("pkg", 3, commercial_segment="Packaging",
-                                headline="Recycled PET bottle demand climbs in Europe"),
-            "source_url": "https://b.example/pkg"}
+    template = stub_row("tpl", 4, commercial_segment=_ENTERPRISE,
+                        headline="Recycled PET bottle demand climbs in Europe", source_url="https://a.example/tpl",
+                        americhem_impact="Adjacent market — no direct Americhem participation indicated.")
+    real = stub_row("pkg", 3, commercial_segment="Packaging",
+                                headline="Recycled PET bottle demand climbs in Europe", source_url="https://b.example/pkg")
     config = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3}}
     model = assemble_report([template, real], config=config)
-    assert _appendix_hashes(model) == ["pkg"]
+    assert appendix_hashes(model) == ["pkg"]
 
 
 def test_rule1_exemption_config_switch_off_restores_the_drop():
@@ -1146,13 +1152,13 @@ def test_citation_display_map_renumbers_by_first_appearance():
         {"label": "Supply chain watch", "body": "B.", "citation_source_ids": [8, 2]},
         {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
     ]
-    sources = [_src(5), _src(8), _src(2)]
+    sources = [stub_source(5), stub_source(8), stub_source(2)]
     assert _citation_display_map(bullets, sources) == {5: 1, 8: 2, 2: 3}
 
 
 def test_citation_display_map_ignores_ids_without_a_source():
     bullets = [{"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 99]}]
-    assert _citation_display_map(bullets, [_src(5)]) == {5: 1}
+    assert _citation_display_map(bullets, [stub_source(5)]) == {5: 1}
 
 
 # ===========================================================================
@@ -1177,11 +1183,11 @@ _MERGE_CFG = {
 def test_ground_transportation_merges_aerospace_separate():
     """Automotive + Non-Automotive rows collapse into one display group;
     Aerospace keeps its own section."""
-    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+    auto = stub_row("auto", 8, commercial_segment="Transportation - Automotive",
                              headline="EV platform retooling lifts under-hood compound demand")
-    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+    non_auto = stub_row("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
                                  headline="Rail freight operators standardize on flame-retardant interiors")
-    aero = _make_new_article("aero", 9, commercial_segment="Transportation - Aerospace",
+    aero = stub_row("aero", 9, commercial_segment="Transportation - Aerospace",
                              headline="Aircraft interior supplier qualifies new lightweight composite")
 
     model = assemble_report([auto, non_auto, aero], config=_MERGE_CFG)
@@ -1209,13 +1215,13 @@ def test_ground_transportation_cap_applies_post_merge():
         "Off-highway equipment maker requalifies hydraulic seals",
     ]
     autos = [
-        _make_new_article(f"auto{i}", americhem_impact_score=10 - i,
+        stub_row(f"auto{i}", americhem_impact_score=10 - i,
                           commercial_segment="Transportation - Automotive",
                           headline=auto_headlines[i])
         for i in range(4)
     ]
     non_autos = [
-        _make_new_article(f"non{i}", americhem_impact_score=6,
+        stub_row(f"non{i}", americhem_impact_score=6,
                           commercial_segment="Transportation - Non-Automotive",
                           headline=non_auto_headlines[i])
         for i in range(3)
@@ -1236,13 +1242,13 @@ def test_ground_transportation_cap_applies_post_merge():
 def test_absent_segment_display_groups_no_merge():
     """With no segment_display_groups the two ground-transport segments stay
     separate — a config-only rollback restores today's behavior exactly."""
-    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+    auto = stub_row("auto", 8, commercial_segment="Transportation - Automotive",
                              headline="EV platform retooling lifts under-hood compound demand")
-    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+    non_auto = stub_row("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
                                  headline="Rail freight operators standardize on flame-retardant interiors")
 
     no_key = assemble_report([auto, non_auto],
-                             config={"reporting": {"visible_impact_threshold": 6}})
+                             config=VISIBLE_6_CFG)
     empty_map = assemble_report([auto, non_auto],
                                 config={"reporting": {"visible_impact_threshold": 6,
                                                       "segment_display_groups": {}}})
@@ -1265,7 +1271,7 @@ def test_unknown_segment_label_in_mapping_ignored():
             },
         },
     }
-    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+    auto = stub_row("auto", 8, commercial_segment="Transportation - Automotive",
                              headline="EV platform retooling lifts under-hood compound demand")
     model = assemble_report([auto], config=cfg)
 
@@ -1277,9 +1283,9 @@ def test_merged_group_is_single_synthesis_candidate():
     """A merged group with 2+ articles appears once, under the display label, in
     synthesis_candidates — so thematic synthesis produces one paragraph for the
     combined section (not one per canonical segment)."""
-    auto = _make_new_article("auto", 8, commercial_segment="Transportation - Automotive",
+    auto = stub_row("auto", 8, commercial_segment="Transportation - Automotive",
                              headline="EV platform retooling lifts under-hood compound demand")
-    non_auto = _make_new_article("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
+    non_auto = stub_row("nonauto", 7, commercial_segment="Transportation - Non-Automotive",
                                  headline="Rail freight operators standardize on flame-retardant interiors")
 
     model = assemble_report([auto, non_auto], config=_MERGE_CFG)
@@ -1293,18 +1299,18 @@ def test_surfaced_count_equals_sum_of_final_group_sizes_through_merge():
     """The surfaced_count invariant (== sum of final group sizes) holds through
     the merge, even with mixed segments and a cap forcing overflow."""
     auto = [
-        _make_new_article(f"auto{i}", americhem_impact_score=9 - i,
+        stub_row(f"auto{i}", americhem_impact_score=9 - i,
                           commercial_segment="Transportation - Automotive",
                           headline=f"Automotive compound development milestone number {i}")
         for i in range(4)
     ]
     non_auto = [
-        _make_new_article(f"non{i}", americhem_impact_score=6,
+        stub_row(f"non{i}", americhem_impact_score=6,
                           commercial_segment="Transportation - Non-Automotive",
                           headline=f"Rail and heavy-truck polymer qualification update {i}")
         for i in range(3)
     ]
-    aero = _make_new_article("aero", 9, commercial_segment="Transportation - Aerospace",
+    aero = stub_row("aero", 9, commercial_segment="Transportation - Aerospace",
                              headline="Aircraft interior supplier qualifies new lightweight composite")
 
     model = assemble_report(auto + non_auto + [aero], config=_MERGE_CFG)
@@ -1325,7 +1331,7 @@ def test_appendix_rows_carry_display_label():
         "Fuel-system component maker requalifies a barrier polymer",
     ]
     autos = [
-        _make_new_article(f"auto{i}", americhem_impact_score=10 - i,
+        stub_row(f"auto{i}", americhem_impact_score=10 - i,
                           commercial_segment="Transportation - Automotive",
                           headline=_auto_headlines[i])
         for i in range(6)  # 6 visible-band (score 10..8..6..5) but distinct headlines
@@ -1359,7 +1365,7 @@ def test_macro_outlook_affected_segments_show_display_label():
             }],
         },
     }
-    rows = [_make_new_article("v", 8, commercial_segment="Transportation - Automotive",
+    rows = [stub_row("v", 8, commercial_segment="Transportation - Automotive",
                               headline="EV platform retooling lifts under-hood compound demand")]
     model = assemble_report(rows, macro_summary=macro_summary, config=_MERGE_CFG)
 

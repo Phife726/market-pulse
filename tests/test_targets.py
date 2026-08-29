@@ -8,11 +8,34 @@ degradation policy), the macro groups, the priority-segment split, per-group
 """
 
 import textwrap
-from pathlib import Path as _Path
+from functools import cache
+from pathlib import Path
 
-import yaml as _yaml
+import yaml
 from run_budget import RunBudget
 from ingestion_engine import load_targets
+
+_TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
+_CONFIG_PATH = _TARGETS_PATH.with_name("market_pulse_config.yaml")
+
+
+# The real control files, parsed once per session — lazily, so a broken file
+# fails the pins that read it by name instead of erroring the whole module at
+# collection. Absolute paths, so the file runs from any working directory;
+# every reader is read-only.
+@cache
+def _real_targets_yaml() -> dict:
+    return yaml.safe_load(_TARGETS_PATH.read_text())
+
+
+@cache
+def _real_config_yaml() -> dict:
+    return yaml.safe_load(_CONFIG_PATH.read_text())
+
+
+@cache
+def _real_targets() -> list[dict]:
+    return load_targets(str(_TARGETS_PATH))
 
 
 # ===========================================================================
@@ -241,16 +264,10 @@ _MACRO_GROUP_KEYS = [
 ]
 
 
-def _load_targets_yaml() -> dict:
-    import yaml
-    with open("targets.yaml") as fh:
-        return yaml.safe_load(fh)
-
-
 def test_targets_yaml_has_active_macro_concept_groups():
     """The dedicated macro concept groups are present, active, and load as
     concept targets covering the seven macro domains."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     categories = {t["category"] for t in targets}
     assert set(_MACRO_GROUP_KEYS) <= categories
 
@@ -258,7 +275,7 @@ def test_targets_yaml_has_active_macro_concept_groups():
 def test_targets_yaml_generic_economic_group_removed():
     """The old generic `economic` group is absorbed by the dedicated macro
     groups and no longer exists (do not run both)."""
-    cfg = _load_targets_yaml()
+    cfg = _real_targets_yaml()
     assert "economic" not in cfg
 
 
@@ -266,14 +283,14 @@ def test_targets_yaml_macro_groups_are_last_in_file_order():
     """Macro groups occupy the final positions in file order — targets process
     in file order, so a deadline-limited run sacrifices macro before entity
     coverage (graceful degradation by construction)."""
-    cfg = _load_targets_yaml()
+    cfg = _real_targets_yaml()
     keys = [k for k in cfg if k != "discovery"]
     assert keys[-len(_MACRO_GROUP_KEYS):] == _MACRO_GROUP_KEYS
 
 
 def test_macro_groups_are_concept_mode():
     """Each macro group is a concept-mode group (one combined OR query)."""
-    cfg = _load_targets_yaml()
+    cfg = _real_targets_yaml()
     for key in _MACRO_GROUP_KEYS:
         assert cfg[key]["search_mode"] == "concept"
         assert cfg[key]["active"] is True
@@ -306,9 +323,9 @@ _PRIORITY_SEGMENT_KEYS = [
 def test_targets_yaml_transportation_split_into_three():
     """The combined `transportation` group is replaced by three separate active
     concept targets whose keys mirror the commercial_segments config keys."""
-    cfg = _load_targets_yaml()
+    cfg = _real_targets_yaml()
     assert "transportation" not in cfg
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     concept_names = {t["name"] for t in targets if t["search_mode"] == "concept"}
     assert set(_TRANSPORTATION_SPLIT_KEYS) <= concept_names
 
@@ -316,7 +333,7 @@ def test_targets_yaml_transportation_split_into_three():
 def test_targets_yaml_priority_segments_have_raised_volume():
     """Each priority-segment concept group carries results_per_entity 4; the
     global default stays 2 for everything else."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     by_name = {t["name"]: t for t in targets}
     for key in _PRIORITY_SEGMENT_KEYS:
         assert by_name[key]["results_per_entity"] == 4, key
@@ -325,7 +342,7 @@ def test_targets_yaml_priority_segments_have_raised_volume():
 def test_targets_yaml_macro_groups_stay_at_global_volume():
     """Macro groups must NOT be raised — that would inflate the tail reserve
     and shrink entity coverage."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     by_name = {t["name"]: t for t in targets}
     for key in _MACRO_GROUP_KEYS:
         assert by_name[key]["results_per_entity"] == 2, key
@@ -334,7 +351,7 @@ def test_targets_yaml_macro_groups_stay_at_global_volume():
 def test_targets_yaml_building_construction_excludes_real_estate():
     """building_construction has a non-empty query, carries no real-estate term
     as a positive (include_any) match, and excludes real-estate noise."""
-    cfg = _load_targets_yaml()
+    cfg = _real_targets_yaml()
     bc = cfg["building_construction"]
     include_blob = " ".join(bc.get("include_any", [])).lower()
     assert include_blob.strip()
@@ -348,14 +365,14 @@ def test_targets_yaml_building_construction_excludes_real_estate():
     # business"). Home-sale phrasing still catches the original noise.
     assert "sold" not in excludes
     assert any("sold" in e for e in excludes)
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     bc_query = next(t["query"] for t in targets if t["name"] == "building_construction")
     assert bc_query.strip()
 
 
 def test_targets_yaml_all_concept_queries_nonempty():
     """Every active concept target must produce a non-empty, well-formed query."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     for t in targets:
         if t["search_mode"] == "concept":
             assert t["query"].strip(), t["name"]
@@ -386,7 +403,7 @@ _TIER1_PRIORITY_ORDER = [
 def test_tier1_priority_segments_are_first_eight_in_order():
     """The first eight loaded targets are the Tier 1 priority segments in the
     exact required order — so a budget-exhausted run keeps them first."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     first_eight = [t["name"] for t in targets[:8]]
     assert first_eight == _TIER1_PRIORITY_ORDER
 
@@ -394,7 +411,7 @@ def test_tier1_priority_segments_are_first_eight_in_order():
 def test_all_entity_targets_follow_every_tier1_target():
     """Every entity target sits below every Tier 1 target — Tier 2 (entities)
     is sacrificed before Tier 1 when the budget runs out mid-list."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     tier1_indices = [
         i for i, t in enumerate(targets) if t["name"] in _TIER1_PRIORITY_ORDER
     ]
@@ -408,14 +425,14 @@ def test_all_entity_targets_follow_every_tier1_target():
 def test_macro_groups_are_the_trailing_loaded_targets():
     """The final loaded targets are exactly the macro_* groups (macro-last
     invariant), so macro coverage is sacrificed first of all."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     trailing = [t["name"] for t in targets[-len(_MACRO_GROUP_KEYS):]]
     assert trailing == _MACRO_GROUP_KEYS
 
 
 def test_known_inactive_entities_stay_absent():
     """Reordering must not resurrect paused/duplicate entities."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     names = {t["name"] for t in targets}
     for inactive in ("Polymax", "Performance Plastics", "Lexmark", "AdvanSix Resin"):
         assert inactive not in names
@@ -423,7 +440,7 @@ def test_known_inactive_entities_stay_absent():
 
 def test_all_loaded_queries_nonempty_after_reorder():
     """Every loaded target (entity and concept) still produces a query."""
-    targets = load_targets("targets.yaml")
+    targets = _real_targets()
     assert targets
     for t in targets:
         assert t["query"].strip(), t["name"]
@@ -439,7 +456,7 @@ def test_tail_reserve_defaults_leave_headroom_for_tail_groups():
     priority groups at 4 plus the thirteen other concept/macro groups at 2 —
     the per-group override must reach the reserve — and it leaves the entity
     tier a majority of the cap; the clock reserve sits inside the deadline."""
-    budget = RunBudget.for_targets(load_targets("targets.yaml"))
+    budget = RunBudget.for_targets(_real_targets())
     assert budget.concept_demand_ahead[0] == 8 * 4 + 13 * 2
     assert budget.concept_demand_ahead[0] < budget.max_scrapes / 2
     assert 0 < budget.tail_reserve_seconds < budget.deadline_seconds
@@ -455,11 +472,8 @@ def test_config_appendix_exclusions_match_the_macro_groups_in_targets():
     set of macro_* concept groups in targets.yaml, so adding a macro group
     without listing it here fails CI instead of leaking its rows into the
     appendix — and a stale entry for a removed group is caught too."""
-    import yaml
-    with open("market_pulse_config.yaml") as fh:
-        cfg = yaml.safe_load(fh)
-    with open("targets.yaml") as fh:
-        targets = yaml.safe_load(fh)
+    cfg = _real_config_yaml()
+    targets = _real_targets_yaml()
     macro_groups = {k for k in targets if k.startswith("macro_")}
     assert macro_groups, "targets.yaml has no macro_* groups"
     assert set(cfg["reporting"]["appendix_exclude_categories"]) == macro_groups
@@ -474,11 +488,9 @@ def test_config_has_commercial_segments_and_signal_types():
     """market_pulse_config.yaml must expose the new commercial_segments,
     signal_types, macro_conditions, executive_bullet_labels, and
     delivery_suppression blocks with the expected labels."""
-    import yaml
 
     from insight import VALID_COMMERCIAL_SEGMENTS
-    with open("market_pulse_config.yaml") as fh:
-        cfg = yaml.safe_load(fh)
+    cfg = _real_config_yaml()
 
     segments = {s["label"] for s in cfg["commercial_segments"].values()}
     assert segments == set(VALID_COMMERCIAL_SEGMENTS)
@@ -513,11 +525,9 @@ def test_config_pins_the_appendix_levers_and_the_prompt_band():
     the RULE 6 template band is derived from it (issue #65): pin both so a
     silent edit or a rollback to the code defaults is visible in CI, and
     prove the assembled production prompt binds the templates to 3–4."""
-    import yaml
 
     import prompts
-    with open("market_pulse_config.yaml") as fh:
-        cfg = yaml.safe_load(fh)
+    cfg = _real_config_yaml()
 
     rep = cfg["reporting"]
     assert rep["supporting_impact_threshold"] == 3
@@ -541,7 +551,6 @@ def test_config_pins_the_appendix_levers_and_the_prompt_band():
 # ===========================================================================
 
 
-_TARGETS_PATH = _Path(__file__).resolve().parents[1] / "targets.yaml"
 
 
 _NEW_CONCEPT_GROUPS = [
@@ -559,29 +568,20 @@ _BASELINE_ACTIVE_ENTITY_TARGETS = 107
 _BASELINE_ACTIVE_CONCEPT_TARGETS = 10
 
 
-def _load_real_config() -> dict:
-    with open(_TARGETS_PATH, "r") as fh:
-        return _yaml.safe_load(fh)
-
-
-def _load_real_targets() -> list[dict]:
-    return load_targets(str(_TARGETS_PATH))
-
-
 def _concept_targets(targets: list[dict]) -> list[dict]:
     return [t for t in targets if "zoominfo_news" not in t]
 
 
 def test_targets_yaml_parses_and_discovery_settings_locked():
     """Discovery tuning must not drift as part of coverage changes."""
-    config = _load_real_config()
+    config = _real_targets_yaml()
     assert config["discovery"]["results_per_entity"] == 2
     assert config["discovery"]["lookback_hours"] == 24
     assert config["discovery"]["min_article_length"] == 500
 
 
 def test_targets_yaml_new_concept_groups_exist_and_are_active():
-    config = _load_real_config()
+    config = _real_targets_yaml()
     for group in _NEW_CONCEPT_GROUPS:
         assert group in config, f"missing concept group: {group}"
         assert config[group]["search_mode"] == "concept"
@@ -590,7 +590,7 @@ def test_targets_yaml_new_concept_groups_exist_and_are_active():
 
 def test_targets_yaml_entity_groups_precede_new_concept_groups():
     """All entity-mode groups must appear before the three new concept groups."""
-    config = _load_real_config()
+    config = _real_targets_yaml()
     keys = [k for k in config if k != "discovery"]
     entity_idx = [
         i for i, k in enumerate(keys)
@@ -607,12 +607,12 @@ def test_targets_yaml_floriculture_term_absent():
 
 def test_targets_yaml_fibers_no_mandatory_textiles():
     """fibers must not force every result to contain 'textiles'."""
-    config = _load_real_config()
+    config = _real_targets_yaml()
     assert config["fibers"]["include_all"] == []
 
 
 def test_targets_yaml_innovation_query_contents():
-    targets = {t["name"]: t for t in _load_real_targets()}
+    targets = {t["name"]: t for t in _real_targets()}
     query = targets["masterbatch_additives_innovation"]["query"]
     assert '"new functional additive"' in query
     assert '"new additive masterbatch"' in query
@@ -621,7 +621,7 @@ def test_targets_yaml_innovation_query_contents():
 
 
 def test_targets_yaml_regional_queries_have_geographic_anchors():
-    targets = {t["name"]: t for t in _load_real_targets()}
+    targets = {t["name"]: t for t in _real_targets()}
     europe = targets["europe_polymer_signals"]["query"]
     assert '"European masterbatch"' in europe
     assert '"EU plastics regulation"' in europe
@@ -636,20 +636,20 @@ def test_targets_yaml_active_concept_targets_count():
     groups, minus the absorbed generic `economic` group, plus the 7 dedicated
     macro groups, plus 2 net from the transportation split (1 combined group
     replaced by 3)."""
-    concepts = _concept_targets(_load_real_targets())
+    concepts = _concept_targets(_real_targets())
     assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS) + 2
 
 
 def test_targets_yaml_entity_targets_unchanged():
     """Coverage expansion must not touch entity monitoring."""
-    targets = _load_real_targets()
+    targets = _real_targets()
     entities = [t for t in targets if "zoominfo_news" in t]
     assert len(entities) == _BASELINE_ACTIVE_ENTITY_TARGETS
 
 
 def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():
-    config = _load_real_config()
-    targets = {t["name"]: t for t in _load_real_targets()}
+    config = _real_targets_yaml()
+    targets = {t["name"]: t for t in _real_targets()}
     for group in _NEW_CONCEPT_GROUPS:
         assert "zoominfo_company_id" not in config[group]
         assert "zoominfo_company_id" not in targets[group]

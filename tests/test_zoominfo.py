@@ -14,6 +14,7 @@ import discovery
 import ingestion_engine
 import zoominfo_client
 from discovery import FakeDiscoveryProvider
+from tests.conftest import stub_http_response
 from ingestion_engine import (
     compute_url_hash,
     discover_candidates,
@@ -58,14 +59,6 @@ def _zi_target(company_id=12345678, zoominfo_news=True) -> dict:
     }
 
 
-def _post_mock(json_payload: dict, status_code: int = 200) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = status_code
-    resp.json.return_value = json_payload
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
 @pytest.fixture(autouse=True)
 def _reset_zoominfo_token_cache():
     """Keep the in-process OAuth token cache from leaking across tests."""
@@ -75,23 +68,12 @@ def _reset_zoominfo_token_cache():
 
 
 def _token_resp(access_token: str = "oauth-access-token", expires_in=3600) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = {
+    return stub_http_response(200, json={
         "access_token": access_token,
         "expires_in": expires_in,
         "token_type": "Bearer",
         "scope": "api:data:company api:data:news",
-    }
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
-def _error_resp(status: int) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = status
-    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
-    return resp
+    })
 
 
 def _routed_post(token_resp: MagicMock, news_resp: MagicMock):
@@ -236,7 +218,7 @@ def test_discover_company_news_success_returns_candidates(monkeypatch):
             ],
         }
     }
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=12345678,
             publishing_date_start="2026-06-12",
@@ -264,7 +246,7 @@ def test_discover_company_news_success_returns_candidates(monkeypatch):
 def test_discover_company_news_does_not_log_token(monkeypatch, caplog):
     """The bearer token must never appear in logs."""
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "super-secret-token")
-    with patch("zoominfo_client.requests.post", return_value=_post_mock({"data": {"news": []}})), \
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json={"data": {"news": []}})), \
          caplog.at_level("DEBUG"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=12345678,
@@ -313,7 +295,7 @@ def test_summarize_response_shape_omits_values():
 def test_200_logs_response_shape_summary(monkeypatch, caplog):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
     payload = {"data": [{"title": "t", "url": "https://n/x", "publishedDate": "2026-06-13"}]}
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)), \
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)), \
          caplog.at_level("INFO"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=5670215, publishing_date_start="2026-06-12", page_size=5
@@ -345,7 +327,7 @@ def test_jsonapi_data_attributes_extracted(monkeypatch):
             "categories": ["PRODUCT"],
         }},
     ])
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=5670215, publishing_date_start="2026-06-01", page_size=25
         )
@@ -368,7 +350,7 @@ def test_jsonapi_item_without_attributes_falls_back(monkeypatch):
         {"title": "Flat headline", "url": "https://news.example.com/flat",
          "publishedDate": "2026-06-13"},
     ])
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
         )
@@ -387,7 +369,7 @@ def test_jsonapi_data_count_positive_yields_candidates(monkeypatch):
         }}
         for i in range(20)
     ]
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=_jsonapi_payload(items))):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
         )
@@ -401,7 +383,7 @@ def test_jsonapi_item_missing_url_or_title_skipped(monkeypatch):
         {"attributes": {"articleUrl": "https://news.example.com/no-title"}},
         {"attributes": {"headline": "good", "articleUrl": "https://news.example.com/good"}},
     ]
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=_jsonapi_payload(items))):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
         )
@@ -415,7 +397,7 @@ def test_jsonapi_malformed_item_does_not_break_response(monkeypatch):
         {"attributes": "also-not-a-dict"},
         {"attributes": {"headline": "good", "articleUrl": "https://news.example.com/good"}},
     ]
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=_jsonapi_payload(items))):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-01", page_size=25
         )
@@ -432,7 +414,7 @@ def test_first_data_item_shape_logs_keys_only(monkeypatch, caplog):
         "publishedDate": "2026-06-13",
         "source": "ReutersValue",
     }}]
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(_jsonapi_payload(items))), \
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=_jsonapi_payload(items))), \
          caplog.at_level("INFO"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=5670215, publishing_date_start="2026-06-01", page_size=25
@@ -468,7 +450,7 @@ def test_request_uses_published_shape(monkeypatch):
     data.attributes with ZoomInfo Enrich News field names."""
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
     monkeypatch.delenv("ZOOMINFO_NEWS_ENDPOINT", raising=False)
-    mock = _post_mock({"data": {"news": []}})
+    mock = stub_http_response(200, json={"data": {"news": []}})
     with patch("zoominfo_client.requests.post", return_value=mock) as post:
         zoominfo_client.discover_company_news(
             zoominfo_company_id=12345678,
@@ -504,7 +486,7 @@ def test_request_uses_published_shape(monkeypatch):
 
 def test_request_passes_page_size_through(monkeypatch):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    mock = _post_mock({"data": {"news": []}})
+    mock = stub_http_response(200, json={"data": {"news": []}})
     with patch("zoominfo_client.requests.post", return_value=mock) as post:
         zoominfo_client.discover_company_news(
             zoominfo_company_id=999,
@@ -520,7 +502,7 @@ def test_request_body_uses_documented_company_id(monkeypatch):
     """Enrich News expects companyId (a documented identifier), not the
     undocumented zoominfoCompanyId that triggered HTTP 400."""
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    mock = _post_mock({"data": {"news": []}})
+    mock = stub_http_response(200, json={"data": {"news": []}})
     with patch("zoominfo_client.requests.post", return_value=mock) as post:
         zoominfo_client.discover_company_news(
             zoominfo_company_id=357374413, publishing_date_start="2026-06-12", page_size=5
@@ -533,7 +515,7 @@ def test_request_body_uses_documented_company_id(monkeypatch):
 def test_request_body_omits_publishing_date_start(monkeypatch):
     """The live API rejects publishingDateStart — it must not be sent."""
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    mock = _post_mock({"data": {"news": []}})
+    mock = stub_http_response(200, json={"data": {"news": []}})
     with patch("zoominfo_client.requests.post", return_value=mock) as post:
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -557,7 +539,7 @@ def test_client_side_date_filter_drops_old_keeps_undated(monkeypatch):
         {"title": "old", "url": "https://n/old", "publishedDate": "2026-05-01"},
         {"title": "undated", "url": "https://n/undated"},
     ]}}
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
         )
@@ -572,24 +554,16 @@ def test_client_side_date_filter_keeps_all_when_cutoff_unparseable(monkeypatch):
     payload = {"data": {"news": [
         {"title": "old", "url": "https://n/old", "publishedDate": "2020-01-01"},
     ]}}
-    with patch("zoominfo_client.requests.post", return_value=_post_mock(payload)):
+    with patch("zoominfo_client.requests.post", return_value=stub_http_response(200, json=payload)):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="not-a-date", page_size=5
         )
     assert len(result) == 1  # no usable cutoff -> keep everything
 
 
-def _bad_request_resp(text: str) -> MagicMock:
-    resp = MagicMock()
-    resp.status_code = 400
-    resp.text = text
-    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
-    return resp
-
-
 def test_bad_request_400_logs_sanitized_snippet_and_returns_empty(monkeypatch, caplog):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    resp = _bad_request_resp('{"error":"invalid field foo"}')
+    resp = stub_http_response(400, text='{"error":"invalid field foo"}')
     with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("ERROR"):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=357374413, publishing_date_start="2026-06-12", page_size=5
@@ -601,7 +575,7 @@ def test_bad_request_400_logs_sanitized_snippet_and_returns_empty(monkeypatch, c
 
 def test_bad_request_400_snippet_capped_at_500(monkeypatch, caplog):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    resp = _bad_request_resp("x" * 1000)
+    resp = stub_http_response(400, text="x" * 1000)
     with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("ERROR"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -612,7 +586,7 @@ def test_bad_request_400_snippet_capped_at_500(monkeypatch, caplog):
 
 def test_bad_request_400_does_not_log_token(monkeypatch, caplog):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "secret-bearer-xyz")
-    resp = _bad_request_resp("bad request body")
+    resp = stub_http_response(400, text="bad request body")
     with patch("zoominfo_client.requests.post", return_value=resp), caplog.at_level("DEBUG"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -623,10 +597,7 @@ def test_bad_request_400_does_not_log_token(monkeypatch, caplog):
 @pytest.mark.parametrize("status", [401, 403])
 def test_discover_company_news_auth_error_returns_empty(monkeypatch, status):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    resp = MagicMock()
-    resp.status_code = status
-    err = requests.exceptions.HTTPError(response=resp)
-    resp.raise_for_status.side_effect = err
+    resp = stub_http_response(status)
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=12345678,
@@ -639,10 +610,7 @@ def test_discover_company_news_auth_error_returns_empty(monkeypatch, status):
 @pytest.mark.parametrize("status", [429, 500, 503])
 def test_discover_company_news_retryable_error_returns_empty(monkeypatch, status):
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "test-token")
-    resp = MagicMock()
-    resp.status_code = status
-    err = requests.exceptions.HTTPError(response=resp)
-    resp.raise_for_status.side_effect = err
+    resp = stub_http_response(status)
     with patch("zoominfo_client.requests.post", return_value=resp):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=12345678,
@@ -679,7 +647,7 @@ def test_client_credentials_preferred_over_bearer(monkeypatch):
     """When both are configured, OAuth wins and the bearer token is ignored."""
     _set_client_creds(monkeypatch)
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "static-bearer")
-    post, rec = _routed_post(_token_resp(access_token="oauth-token"), _post_mock({"data": {"news": []}}))
+    post, rec = _routed_post(_token_resp(access_token="oauth-token"), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -690,7 +658,7 @@ def test_client_credentials_preferred_over_bearer(monkeypatch):
 
 def test_token_request_uses_http_basic_and_form_grant(monkeypatch):
     _set_client_creds(monkeypatch, "cid-123", "secret-xyz")
-    post, rec = _routed_post(_token_resp(), _post_mock({"data": {"news": []}}))
+    post, rec = _routed_post(_token_resp(), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -705,7 +673,7 @@ def test_token_request_uses_http_basic_and_form_grant(monkeypatch):
 def test_access_token_used_for_news_request(monkeypatch):
     _set_client_creds(monkeypatch)
     payload = {"data": {"news": [{"title": "t", "url": "https://news.example.com/x"}]}}
-    post, rec = _routed_post(_token_resp(access_token="abc123"), _post_mock(payload))
+    post, rec = _routed_post(_token_resp(access_token="abc123"), stub_http_response(200, json=payload))
     with patch("zoominfo_client.requests.post", side_effect=post):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -717,7 +685,7 @@ def test_access_token_used_for_news_request(monkeypatch):
 def test_token_cached_across_calls(monkeypatch):
     """One token call should cover multiple company lookups in a process."""
     _set_client_creds(monkeypatch)
-    post, rec = _routed_post(_token_resp(expires_in=3600), _post_mock({"data": {"news": []}}))
+    post, rec = _routed_post(_token_resp(expires_in=3600), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -732,7 +700,7 @@ def test_token_cached_across_calls(monkeypatch):
 @pytest.mark.parametrize("status", [401, 403])
 def test_token_auth_failure_degrades(monkeypatch, status):
     _set_client_creds(monkeypatch)
-    post, rec = _routed_post(_error_resp(status), _post_mock({"data": {"news": []}}))
+    post, rec = _routed_post(stub_http_response(status), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -744,7 +712,7 @@ def test_token_auth_failure_degrades(monkeypatch, status):
 @pytest.mark.parametrize("status", [429, 500, 503])
 def test_token_retryable_failure_degrades(monkeypatch, status):
     _set_client_creds(monkeypatch)
-    post, rec = _routed_post(_error_resp(status), _post_mock({"data": {"news": []}}))
+    post, rec = _routed_post(stub_http_response(status), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -765,11 +733,8 @@ def test_token_transport_error_degrades(monkeypatch):
 
 def test_malformed_token_response_degrades(monkeypatch):
     _set_client_creds(monkeypatch)
-    bad = MagicMock()
-    bad.status_code = 200
-    bad.raise_for_status = MagicMock()
-    bad.json.return_value = {"no_access_token": "here"}
-    post, rec = _routed_post(bad, _post_mock({"data": {"news": []}}))
+    bad = stub_http_response(200, json={"no_access_token": "here"})
+    post, rec = _routed_post(bad, stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -780,7 +745,7 @@ def test_malformed_token_response_degrades(monkeypatch):
 
 def test_client_secret_and_access_token_not_logged(monkeypatch, caplog):
     _set_client_creds(monkeypatch, "cid-123", "super-secret-value")
-    post, _ = _routed_post(_token_resp(access_token="tok-do-not-log"), _post_mock({"data": {"news": []}}))
+    post, _ = _routed_post(_token_resp(access_token="tok-do-not-log"), stub_http_response(200, json={"data": {"news": []}}))
     with patch("zoominfo_client.requests.post", side_effect=post), caplog.at_level("DEBUG"):
         zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
@@ -794,7 +759,7 @@ def test_bearer_fallback_when_no_client_creds(monkeypatch):
     monkeypatch.delenv("ZOOMINFO_CLIENT_SECRET", raising=False)
     monkeypatch.setenv("ZOOMINFO_BEARER_TOKEN", "static-bearer")
     payload = {"data": {"news": [{"title": "t", "url": "https://news.example.com/x"}]}}
-    post, rec = _routed_post(_token_resp(), _post_mock(payload))
+    post, rec = _routed_post(_token_resp(), stub_http_response(200, json=payload))
     with patch("zoominfo_client.requests.post", side_effect=post):
         result = zoominfo_client.discover_company_news(
             zoominfo_company_id=1, publishing_date_start="2026-06-12", page_size=5
