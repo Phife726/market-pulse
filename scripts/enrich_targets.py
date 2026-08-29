@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import target_enricher as te  # noqa: E402
+from targets import load_targets  # noqa: E402
 import zoominfo_client  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -50,30 +51,10 @@ class _DefaultClient:
 
 
 def load_targets_for_enrichment(targets_path: str) -> list[dict]:
-    """Return active entity-mode targets only (concept groups are out of scope).
-
-    Each dict carries name, optional zoominfo_company_id, and optional
-    domain/hq_country/hq_state resolution hints if present in targets.yaml.
-    """
-    with open(targets_path, "r") as fh:
-        config = yaml.safe_load(fh) or {}
-    out: list[dict] = []
-    for group_name, group_cfg in config.items():
-        if group_name == "discovery" or not isinstance(group_cfg, dict):
-            continue
-        if group_cfg.get("search_mode", "entity") != "entity":
-            continue
-        for entity in group_cfg.get("entities", []):
-            if not entity.get("active", False):
-                continue
-            out.append({
-                "name": entity["name"],
-                "zoominfo_company_id": entity.get("zoominfo_company_id"),
-                "domain": entity.get("domain"),
-                "hq_country": entity.get("hq_country"),
-                "hq_state": entity.get("hq_state"),
-            })
-    return out
+    """Active entity-mode targets (concept groups are out of scope), read
+    through the targets catalogue — each carries the name, the optional
+    zoominfo_company_id and the resolution hints enrichment reads."""
+    return [t for t in load_targets(targets_path) if t["search_mode"] == "entity"]
 
 
 def _resolve(target: dict, client) -> dict:

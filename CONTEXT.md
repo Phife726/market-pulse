@@ -257,6 +257,24 @@ zero-I/O purity is untouched.
   is an ingestion ledger taxonomy code, including `synthesis_failed` for an
   unusable LLM response), or `Error` (a technical store failure — an error,
   not a suppression). There is no run-terminating outcome by design.
+- **Target** (`targets.py`) — one unit of discovery work the ingestion loop
+  runs, as a plain dict (like Insight and candidates): an **entity target** (one
+  active company under an entity-mode group — one Serper query per name) or a
+  **concept target** (one active concept-mode group — one combined OR query).
+  Carries `name`, `category` (its group key — the discovery category rows are
+  stored under), `search_mode`, the pre-built `query`, the discovery settings,
+  and for entities the ZoomInfo id/flag and the resolution hints
+  (`domain` / `hq_country` / `hq_state`) the enrichment utility reads.
+  **Targets catalogue** — `load_targets(path)`, the one parser of
+  `targets.yaml`; every consumer (the ingestion engine, the enrichment and
+  probe scripts) reads targets through it. Shape errors in the control file
+  (an entity without a name, an unknown `search_mode`, a concept group with
+  no `include_any`, a non-list where a list belongs) raise `TargetsError`
+  naming the group — the run fails at t=0 like a missing secret does, instead
+  of silently dropping coverage. Policy rules (tier order, macro groups last)
+  are not validated here; they are pins against the shipped file.
+  *Avoid*: group (a group is a section of the YAML; a target is what the loop
+  runs), search target.
 - **Run budget** (`run_budget.py`, `RunBudget`) — what one ingestion run may
   spend, as a frozen value: the two hard limits — the **scrape cap** (attempted
   scrapes, the API-cost guard) and the **pipeline deadline** (elapsed wall

@@ -14,6 +14,7 @@ from daily_intelligence_repo import _repo
 from llm import _llm
 from run_instant import RunInstant
 from run_budget import RunBudget, SkipEntity, Stop
+from targets import load_targets
 import insight
 import prompts
 # The macro summary's schema/validation + pure assembly live in macro_summary.py
@@ -24,7 +25,6 @@ import config
 from discovery import _discovery_providers
 
 import requests
-import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -32,57 +32,6 @@ logger = logging.getLogger(__name__)
 
 FIRECRAWL_WALL_CLOCK_TIMEOUT = 20  # hard per-request ceiling; prevents keepalive-induced hangs
 _SEMANTIC_DUPLICATE_THRESHOLD: int = 88
-
-
-_MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
-    "source set 238658",
-    "PR wires",
-    "Targeted News Search",
-    "US Federal News",
-    "specific Asia PR feed",
-    "specific processing feeds",
-    "Financial Times feeds",
-    "financial markups",
-})
-
-
-def build_query(
-    mode: str,
-    name: Optional[str] = None,
-    include_any: Optional[list[str]] = None,
-    include_all: Optional[list[str]] = None,
-    exclude_any: Optional[list[str]] = None,
-) -> str:
-    """Build a Serper.dev search query string from group field semantics.
-
-    Supports two modes:
-    - ``entity``: wraps ``name`` in quotes as the primary search term.
-    - ``concept``: ORs all ``include_any`` terms into a single combined query.
-
-    ``include_all`` terms are ANDed into every query. ``exclude_any`` terms
-    become ``-"term"`` operators; entries in ``_MOODY_INTERNAL_EXCLUDES``
-    (Moody's platform-level source identifiers) are silently dropped.
-
-    Returns:
-        A query string ready to pass as Serper's ``q`` parameter.
-    """
-    parts: list[str] = []
-
-    if mode == "entity":
-        parts.append(f'"{name}"')
-    elif mode == "concept":
-        if include_any:
-            or_terms = " OR ".join(f'"{t}"' for t in include_any)
-            parts.append(f"({or_terms})")
-
-    for term in (include_all or []):
-        parts.append(f'"{term}"')
-
-    for term in (exclude_any or []):
-        if term not in _MOODY_INTERNAL_EXCLUDES:
-            parts.append(f'-"{term}"')
-
-    return " ".join(parts)
 
 
 class _TextExtractor(HTMLParser):
@@ -125,88 +74,6 @@ def _scrape_fallback(url: str) -> Optional[str]:
     return text if text else None
 
 
-
-
-def load_targets(config_path: str) -> list[dict]:
-    """Load active search targets from a YAML config file.
-
-    Supports two search modes:
-    - ``entity``: one Serper query per active company name under ``entities:``.
-    - ``concept``: one combined OR query for the whole group (``active: true``
-      required at group level).
-
-    Returns:
-        List of target dicts, each containing ``name``, ``category``,
-        ``query`` (pre-built Serper query string), and discovery settings.
-    """
-    with open(config_path, "r") as fh:
-        config = yaml.safe_load(fh)
-    discovery = config.get("discovery", {})
-    results_per_entity: int = discovery.get("results_per_entity", 2)
-    lookback_hours: int = discovery.get("lookback_hours", 24)
-    min_article_length: int = discovery.get("min_article_length", 500)
-
-    targets: list[dict] = []
-    for group_name, group_cfg in config.items():
-        if group_name == "discovery" or not isinstance(group_cfg, dict):
-            continue
-        mode: str = group_cfg.get("search_mode", "entity")
-        include_all: list[str] = group_cfg.get("include_all", [])
-        exclude_any: list[str] = group_cfg.get("exclude_any", [])
-
-        if mode == "entity":
-            for entity in group_cfg.get("entities", []):
-                if not entity.get("active", False):
-                    continue
-                # Optional ZoomInfo enrichment: news defaults on when an id is
-                # mapped, off when no id exists. Concept groups never get these.
-                zoominfo_company_id = entity.get("zoominfo_company_id")
-                targets.append({
-                    "name": entity["name"],
-                    "category": group_name,
-                    "search_mode": "entity",
-                    "query": build_query(
-                        "entity",
-                        name=entity["name"],
-                        include_all=include_all,
-                        exclude_any=exclude_any,
-                    ),
-                    "results_per_entity": results_per_entity,
-                    "lookback_hours": lookback_hours,
-                    "min_article_length": min_article_length,
-                    "zoominfo_company_id": zoominfo_company_id,
-                    "zoominfo_news": entity.get("zoominfo_news", True),
-                })
-
-        elif mode == "concept":
-            if not group_cfg.get("active", False):
-                continue
-            # Concept groups may declare their own results_per_entity to raise
-            # discovery volume for priority segments; absent one, inherit the
-            # global discovery value. Concept-only — a stray override on an
-            # entity group is ignored (raising entity volume is not intended,
-            # and macro groups stay at the global value so the tail reserve's
-            # concept demand — RunBudget.concept_demand_ahead — is not inflated).
-            group_results_per_entity: int = group_cfg.get(
-                "results_per_entity", results_per_entity
-            )
-            targets.append({
-                "name": group_name,
-                "category": group_name,
-                "search_mode": "concept",
-                "query": build_query(
-                    "concept",
-                    include_any=group_cfg.get("include_any", []),
-                    include_all=include_all,
-                    exclude_any=exclude_any,
-                ),
-                "results_per_entity": group_results_per_entity,
-                "lookback_hours": lookback_hours,
-                "min_article_length": min_article_length,
-            })
-
-    logger.info("Loaded %d active targets from %s", len(targets), config_path)
-    return targets
 
 
 def _discovery_metadata(candidate: dict) -> dict:

@@ -18,6 +18,7 @@ guard cannot quietly drift away from the harness it is guarding.
 """
 import ast
 import inspect
+import logging
 import os
 from dataclasses import dataclass
 from types import ModuleType
@@ -62,7 +63,7 @@ INGESTION = Harness(
         # harness tests exercise (a run where every synthesis call fails).
         "SynthesisOutageError",
         # Log-only sinks
-        "_log_stats", "_log_provider_yield", "logger.info", "logger.warning", "logger.error",
+        "_log_stats", "_log_provider_yield",
         # Registry: reset by the autouse _reset_discovery_providers fixture
         "_discovery_providers",
         # Read at use time; tests drive it with monkeypatch.setenv instead
@@ -88,8 +89,6 @@ DELIVERY = Harness(
         "delivery_window", "assemble_report", "render_report",
         "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
         "EmailMessage", "SuppressionLedger.from_row",
-        # Log-only sinks
-        "logger.info", "logger.warning", "logger.error",
     }),
 )
 
@@ -122,15 +121,19 @@ def _pipeline_seam_calls(h: Harness) -> set:
         f"{h.engine.__name__} no longer defines {sorted(missing)} — this guard walks "
         "the real pipeline functions, so update the Harness.functions tuple."
     )
-    namespace = set(vars(h.engine))
+    namespace = vars(h.engine)
     calls = set()
     for func_name in h.functions:
         for node in ast.walk(functions[func_name]):
             if not isinstance(node, ast.Call):
                 continue
             name = _qualified(node)
-            if name and name.split(".")[0] in namespace:
-                calls.add(name)
+            base = name.split(".")[0]
+            if not name or base not in namespace:
+                continue
+            if isinstance(namespace[base], logging.Logger):
+                continue  # a log sink is never a seam the harness needs
+            calls.add(name)
     return calls
 
 
@@ -201,3 +204,11 @@ def test_harness_stubs_nothing_the_pipeline_no_longer_calls(h: Harness):
         f"{h.fixture} still stubs {sorted(stale)}, which "
         f"{list(h.functions)} no longer call."
     )
+
+
+@pytest.mark.parametrize("h", [INGESTION, DELIVERY], ids=lambda h: h.fixture)
+def test_deliberately_real_names_only_calls_the_pipeline_makes(h: Harness):
+    """The allowlist is the guard's one escape hatch: an entry the pipeline no
+    longer calls is a stale wave-through, and must go the way a stale stub does."""
+    stale = h.deliberately_real - _pipeline_seam_calls(h)
+    assert not stale, f"{h.engine.__name__} no longer calls {sorted(stale)} — drop them from deliberately_real."

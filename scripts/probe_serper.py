@@ -6,7 +6,7 @@ public companies such as Kimberly-Clark and Avient returned no news) while
 Serper kept answering HTTP 200. `discovery.discover_urls` sent the
 non-standard hour-count window ``tbs=qdr:h24``; the documented "past day"
 value is ``qdr:d``. This script issues each entity's *production* query —
-resolved from ``targets.yaml`` via ``ingestion_engine.load_targets`` so the
+resolved from ``targets.yaml`` via ``targets.load_targets`` so the
 group's ``include_all`` / ``exclude_any`` operators are present; a name that
 is not an active target falls back to a bare ``build_query`` and is marked
 ``bare`` in the output — under each window and prints a side-by-side table
@@ -32,11 +32,11 @@ from typing import Optional
 import requests
 
 # When run as `python scripts/probe_serper.py`, sys.path[0] is scripts/, not
-# the repo root — add the repo root so ingestion_engine imports.
+# the repo root — add the repo root so `targets` imports.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO_ROOT)
 
-from ingestion_engine import build_query, load_targets  # noqa: E402
+from targets import build_query, load_targets  # noqa: E402
 
 TARGETS_PATH = os.path.join(_REPO_ROOT, "targets.yaml")
 
@@ -98,7 +98,7 @@ def resolve_queries(entities: list[str], targets: list[dict]) -> list[tuple[str,
     by_name = {t["name"]: t["query"] for t in targets if t.get("search_mode") == "entity"}
     return [
         (name, by_name[name], "targets.yaml") if name in by_name
-        else (name, build_query("entity", name=name), "bare")
+        else (name, build_query(name=name), "bare")
         for name in entities
     ]
 
