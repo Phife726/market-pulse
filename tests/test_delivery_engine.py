@@ -169,6 +169,15 @@ def test_send_email_test_mode_prefixes_subject(fake_mailer):
     assert fake_mailer.sent[0].subject == "[TEST] Americhem Market-Pulse \u2014 August 27, 2026"
 
 
+def test_send_email_reads_the_test_marker_from_the_renderer(fake_mailer, monkeypatch):
+    """The subject's marker is `renderer.TEST_MARKER`, not a same-spelled
+    literal: respelling the constant respells the subject."""
+    monkeypatch.setattr("delivery_engine.TEST_MARKER", "[QA] ")
+    _send_email("<html>x</html>", run=_TEST_RUN)
+
+    assert fake_mailer.sent[0].subject.startswith("[QA] Americhem Market-Pulse")
+
+
 def test_send_email_production_mode_subject_unchanged(fake_mailer):
     """A production run instant dates the subject and adds no [TEST] prefix."""
     _send_email("<html>x</html>", run=_RUN)

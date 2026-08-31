@@ -23,15 +23,22 @@ from tests.conftest import (
     stub_row,
     stub_source,
 )
+import insight
 import renderer
+from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, label_for
 from renderer import (
+    _link,
     _render_card,
-    render_report,
-    _safe_http_url,
-    _render_executive_bullets,
-    _render_sources_footer,
+    _section,
     _render_exec_summary,
+    _render_executive_bullets,
+    _render_qa_debug_section,
+    _render_segment_watch_section,
+    _render_sources_footer,
     _render_sources_section,
+    _safe_http_url,
+    _section_header_row,
+    render_report,
 )
 from report import assemble_report, _citation_display_map
 
@@ -444,8 +451,6 @@ def test_render_card_links_a_well_formed_url_unchanged():
 def test_sentiment_tag_maps_cover_exactly_the_schema_vocabulary():
     """The glyph map, the color map, and the Insight schema's tag vocabulary are
     three definitions of one list — a fourth tag must not silently lose its cue."""
-    import renderer
-    import insight
     assert set(renderer._SENTIMENT_TAG_GLYPHS) == set(renderer._SENTIMENT_TAG_COLORS)
     assert set(renderer._SENTIMENT_TAG_GLYPHS) == set(insight.VALID_SENTIMENT_TAGS)
 
@@ -583,7 +588,6 @@ def test_macro_section_shares_one_citation_numbering_space():
 def test_section_header_is_full_width_not_squeezed():
     """Section headers span the full width with an underline — no `nowrap`
     title cell that a narrow client squeezes into a 3-line wrap."""
-    from renderer import _section_header_row
     hdr = _section_header_row("Additional Articles to Explore",
                               title_color="#5a6678", rule_color="#E5E7EB")
     assert "Additional Articles to Explore" in hdr
@@ -872,7 +876,6 @@ def test_render_report_tolerates_accounting_only_macro_summary():
 
 
 def test_render_segment_watch_section_displays_meta_strip_with_signal():
-    from renderer import _render_segment_watch_section
     groups = {
         "Healthcare": [{
             "url_hash": "a",
@@ -896,7 +899,6 @@ def test_render_segment_watch_section_displays_meta_strip_with_signal():
 
 
 def test_render_segment_watch_section_omits_signal_for_legacy_row():
-    from renderer import _render_segment_watch_section
     groups = {
         "Healthcare": [{
             "url_hash": "a",
@@ -915,7 +917,6 @@ def test_render_segment_watch_section_omits_signal_for_legacy_row():
 
 
 def test_render_segment_watch_section_critical_badge_for_legacy_low_score():
-    from renderer import _render_segment_watch_section
     groups = {
         "Enterprise / Cross-Segment": [{
             "url_hash": "a",
@@ -931,7 +932,6 @@ def test_render_segment_watch_section_critical_badge_for_legacy_low_score():
 
 
 def test_render_segment_watch_section_renders_synthesis_paragraph():
-    from renderer import _render_segment_watch_section
     groups = {
         "Packaging": [
             {"url_hash": "a", "headline": "A", "source_url": "https://x/a",
@@ -950,7 +950,6 @@ def test_render_segment_watch_section_renders_synthesis_paragraph():
 
 
 def test_render_executive_bullets_renders_three_labeled_bullets():
-    from renderer import _render_executive_bullets
     bullets = [
         {"label": "Market pressure",    "body": "Techmer raised prices."},
         {"label": "Supply chain watch", "body": "Mitsubishi restructuring."},
@@ -966,7 +965,6 @@ def test_render_executive_bullets_renders_three_labeled_bullets():
 
 
 def test_render_exec_summary_uses_structured_bullets_when_present():
-    from renderer import _render_exec_summary
     macro = {
         "dominant_condition": "Competitive Pressure",
         "executive_bullets": [
@@ -984,7 +982,6 @@ def test_render_exec_summary_uses_structured_bullets_when_present():
 
 
 def test_render_exec_summary_falls_back_to_legacy_when_bullets_null():
-    from renderer import _render_exec_summary
     macro = {
         "dominant_condition": "Mixed / Watch",
         "executive_bullets": None,
@@ -996,7 +993,6 @@ def test_render_exec_summary_falls_back_to_legacy_when_bullets_null():
 
 
 def test_render_exec_summary_no_summary_returns_empty():
-    from renderer import _render_exec_summary
     assert _render_exec_summary(None) == ""
     assert _render_exec_summary({}) == ""
 
@@ -1124,7 +1120,6 @@ def test_qa_debug_section_absent_in_production():
 
 
 def test_render_qa_debug_section_uses_friendly_labels():
-    from renderer import _render_qa_debug_section
     macro = {
         "screened_count": 87,
         "surfaced_count": 6,
@@ -1149,7 +1144,6 @@ def test_render_qa_debug_section_includes_relevance_gate_drops():
     """The ZoomInfo relevance-gate code must get a labeled breakdown row so its
     count is visible during the test-pipeline validation run (not just folded
     into the suppressed total)."""
-    from renderer import _render_qa_debug_section
     macro = {
         "screened_count": 40,
         "surfaced_count": 5,
@@ -1531,7 +1525,6 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
 def test_render_qa_debug_section_includes_unscrapable_domain():
     """The unscrapable_domain code must get a labeled breakdown row in the QA
     debug section (not just fold into the suppressed total)."""
-    from renderer import _render_qa_debug_section
     macro = {
         "screened_count": 40,
         "surfaced_count": 5,
@@ -1549,8 +1542,6 @@ def test_render_qa_debug_section_lists_every_ledger_code():
     appendix_excluded_category, and synthesis_failed before it) gets a labeled
     row automatically instead of silently folding into the suppressed total.
     Both sides of the comparison are derived — nothing hand-listed."""
-    from renderer import _render_qa_debug_section
-    from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, label_for
     codes = sorted(INGESTION_CODES | DELIVERY_CODES)
     macro = {
         "screened_count": 200,
@@ -1567,8 +1558,6 @@ def test_render_qa_debug_section_lists_every_ledger_code():
 def test_render_qa_debug_section_orders_ingestion_codes_before_delivery_codes():
     """Stable reading order for the QA strip: ingestion-side rows first, then
     delivery-side, each in taxonomy order."""
-    from renderer import _render_qa_debug_section
-    from suppression_ledger import label_for
     macro = {
         "screened_count": 10,
         "surfaced_count": 1,
@@ -1608,6 +1597,79 @@ def test_renderer_imports_only_the_pure_modules_it_presents():
     allowed = {"html", "datetime", "typing", "urllib.parse",
                "report", "scoring", "suppression_ledger"}
     assert imported <= allowed, f"renderer.py imports outside its allow-list: {sorted(imported - allowed)}"
+
+
+# ===========================================================================
+# _link — every link in the email
+# ===========================================================================
+
+
+def test_link_anchors_a_safe_url_and_escapes_it_for_the_attribute():
+    out = _link("https://x.example/a?b=1&c=2", "Text", style="s")
+    assert out == '<a href="https://x.example/a?b=1&amp;c=2" style="s">Text</a>'
+
+
+def test_link_titled_repeats_the_href_as_a_title():
+    out = _link("https://x.example/a", "3", style="s", titled=True)
+    assert out == '<a href="https://x.example/a" title="https://x.example/a" style="s">3</a>'
+
+
+@pytest.mark.parametrize("raw_url", ["javascript:alert(1)", "data:text/html,x", "", None, "://bad"])
+def test_link_unsafe_url_renders_bare_text_by_default(raw_url):
+    assert _link(raw_url, "Text", style="s") == "Text"
+
+
+def test_link_unsafe_url_renders_a_span_when_an_unlinked_style_is_given():
+    assert _link("ftp://x", "Text", style="s", unlinked_style="u") == '<span style="u">Text</span>'
+    # An empty style is still a span: None, not falsiness, means bare text.
+    assert _link("ftp://x", "Text", style="s", unlinked_style="") == '<span style="">Text</span>'
+
+
+def test_link_is_the_one_place_a_url_becomes_an_anchor():
+    """The href rule holds by construction only while every anchor is built
+    here: one `<a href` in the module's source."""
+    assert inspect.getsource(renderer).count("<a href") == 1
+
+
+# ===========================================================================
+# _section — the shell the headed sections share
+# ===========================================================================
+
+
+def test_section_puts_the_header_row_above_the_rows_inside_one_padded_cell():
+    out = _section("WATCH", "<tr><td>ROWS</td></tr>", title_color="#111", rule_color="#222")
+    header = _section_header_row("WATCH", title_color="#111", rule_color="#222")
+    assert out.index("padding:24px 32px 4px 32px") < out.index(header) < out.index("ROWS")
+    assert out.count("<table") == 1 and out.strip().startswith("<tr>") and out.strip().endswith("</tr>")
+
+
+# ===========================================================================
+# The test-mode marker — one constant, read (not copied) by the title
+# ===========================================================================
+
+
+def test_render_report_reads_the_test_marker_from_the_constant(monkeypatch):
+    """A same-spelled literal would pass every `"[TEST]" in html` assertion;
+    respelling the constant proves the title reads it."""
+    monkeypatch.setattr("renderer.TEST_MARKER", "[QA] ")
+    model = assemble_report([], None, VISIBLE_6_CFG)
+    out = render_report(model, today_str="D", test_mode=True)
+    assert "[QA] Market-Pulse" in out and "[TEST]" not in out
+
+
+def test_renderer_public_surface_is_exactly_its_all():
+    """Two public names — `render_report` and `TEST_MARKER` — pinned from the
+    module's own top-level definitions (imports excluded), so the surface
+    cannot widen by accident."""
+    tree = ast.parse(inspect.getsource(renderer))
+    defined = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.Assign):
+            defined.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    public = {n for n in defined if not n.startswith("_")}
+    assert public == set(renderer.__all__) == {"render_report", "TEST_MARKER"}
 
 
 # ===========================================================================

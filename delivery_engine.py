@@ -17,7 +17,7 @@ from scoring import tier as _alert_tier
 # rendering in renderer.py (the pure email renderer); tests exercise their
 # internals via those modules directly.
 from report import ReportModel, assemble_report
-from renderer import render_report
+from renderer import TEST_MARKER, render_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -286,7 +286,8 @@ def send_email(html_content: str, *, run: RunInstant) -> None:
 
     Addressing is the consumer's: `SENDER_EMAIL` is the sender and
     `RECIPIENT_EMAILS` (comma-separated) is the only source of the recipient
-    list; the subject's date and `[TEST]` marker come from the run instant.
+    list; the subject's date comes from the run instant and its `[TEST]`
+    marker is `renderer.TEST_MARKER` — the same spelling the body carries.
     Transport and retry are the seam's; its failures propagate, so
     `execute_pipeline` never stamps `delivered_at` for an unsent email.
     """
@@ -297,7 +298,7 @@ def send_email(html_content: str, *, run: RunInstant) -> None:
         raise ValueError("RECIPIENT_EMAILS is set but contains no addresses — nothing to send to")
     subject = f"Americhem Market-Pulse \u2014 {run.subject_date}"
     if run.test_mode:
-        subject = f"[TEST] {subject}"
+        subject = f"{TEST_MARKER}{subject}"
 
     _mailer().send(EmailMessage(
         sender=os.environ["SENDER_EMAIL"],
