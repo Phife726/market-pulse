@@ -110,7 +110,13 @@ def _bool_setting(owner: str, cfg: dict, key: str, default: bool) -> bool:
 
 
 def load_targets(config_path: str) -> list[dict]:
-    """Load active search targets from `targets.yaml`.
+    """`parse_targets` over the file at `config_path` — the catalogue's one read."""
+    with open(config_path, "r") as fh:
+        return parse_targets(fh.read(), source=config_path)
+
+
+def parse_targets(text: str, *, source: str) -> list[dict]:
+    """Parse `text` — the `targets.yaml` document — into the active search targets.
 
     Two search modes:
     - ``entity``: one Serper query per active company name under ``entities:``.
@@ -133,12 +139,16 @@ def load_targets(config_path: str) -> list[dict]:
         list belongs, a non-integer discovery setting, a non-boolean switch,
         or a file that yields no active target at all. The whole file is
         validated, inactive entries included: a paused group must not rot
-        until someone re-enables it.
+        until someone re-enables it. A document that is not even YAML is the
+        first shape error, not a parser traceback. `source` names the text in
+        errors and the log; `load_targets` is this over a file.
     """
-    with open(config_path, "r") as fh:
-        config = yaml.safe_load(fh)
+    try:
+        config = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise TargetsError(f"{source}: not valid YAML — {exc}") from exc
     if not isinstance(config, dict):
-        raise TargetsError(f"{config_path}: expected a mapping of groups, got {type(config).__name__}")
+        raise TargetsError(f"{source}: expected a mapping of groups, got {type(config).__name__}")
     discovery = config.get("discovery")
     if discovery is not None and not isinstance(discovery, dict):
         raise TargetsError(f"'discovery' must be a mapping, got {type(discovery).__name__}")
@@ -219,6 +229,6 @@ def load_targets(config_path: str) -> list[dict]:
             raise TargetsError(f"{owner}: unknown search_mode '{mode}' (expected 'entity' or 'concept')")
 
     if not targets:
-        raise TargetsError(f"{config_path}: no active targets — nothing for a run to do")
-    logger.info("Loaded %d active targets from %s", len(targets), config_path)
+        raise TargetsError(f"{source}: no active targets — nothing for a run to do")
+    logger.info("Loaded %d active targets from %s", len(targets), source)
     return targets

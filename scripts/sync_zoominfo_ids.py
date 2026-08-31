@@ -4,6 +4,9 @@ the metadata companion) turns on for the newly enriched companies.
 
 Comment-preserving: patches by line insertion, never round-trips the whole YAML.
 Dry-run by default (prints a unified diff, writes nothing); --write applies.
+Both modes post-condition the result through `targets.parse_targets`: the input
+must load, and the output must load to the input's targets plus exactly the
+fills the catalogue expects — otherwise exit 1, nothing written.
 Only fills entities that are (a) active, (b) currently missing an id, and
 (c) present with an id in an active target_metadata.yaml record whose ZoomInfo
 status is approved/verified.
@@ -19,10 +22,19 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import os
 import re
 import sys
+from itertools import zip_longest
+from typing import Optional
 
 import yaml
+
+# When run as `python scripts/sync_zoominfo_ids.py`, sys.path[0] is scripts/,
+# not the repo root, so the catalogue must be put on the path explicitly.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from targets import TargetsError, parse_targets  # noqa: E402
 
 # ZoomInfo statuses that gate a record for sync into targets.yaml. `verified` is
 # written by the enricher for precurated/domain (high-confidence) matches;
@@ -45,7 +57,7 @@ def load_resolved_ids(metadata_path: str) -> dict[str, int]:
         metadata_status = rec.get("metadata_record_status", "active")
         zoominfo_status = rec.get("zoominfo_metadata_status")
         if (
-            cid
+            isinstance(cid, int) and not isinstance(cid, bool) and cid
             and metadata_status == "active"
             and zoominfo_status in APPROVED_ZOOMINFO_STATUSES
         ):
@@ -103,23 +115,68 @@ def patch_targets(targets_path: str, ids: dict[str, int]) -> tuple[str, str, lis
     return "".join(lines), "".join(out), filled
 
 
+def post_condition(current: str, proposed: str, ids: dict[str, int], filled: list[str],
+                   *, source: str) -> Optional[str]:
+    """Why `proposed` must not be written, or None. Both texts must load under
+    the catalogue's rules, and `proposed` must load to the current targets
+    with `zoominfo_company_id` set on exactly the entities the catalogue says
+    are fillable — active, id-less, resolved in `ids`. The patcher's own
+    report (`filled`) is checked against that plan first, so a walker that
+    silently fills nothing is refused with a message that says so: meaning,
+    not just syntax."""
+    proposed_source = f"{source} (proposed)"
+    try:
+        before = parse_targets(current, source=source)
+    except TargetsError as exc:
+        return f"{source} is already rejected by the loader — fix it before syncing: {exc}"
+    try:
+        # The idempotent re-run proposes the text it was given: one parse.
+        after = before if proposed == current else parse_targets(proposed, source=proposed_source)
+    except TargetsError as exc:
+        return (f"{proposed_source} is rejected by the loader — a bug in this script's "
+                f"line patcher, not in the input: {exc}")
+
+    fills: list[str] = []
+    expected: list[dict] = []
+    for t in before:
+        if t["search_mode"] == "entity" and t["zoominfo_company_id"] is None and t["name"] in ids:
+            fills.append(t["name"])
+            t = {**t, "zoominfo_company_id": ids[t["name"]]}
+        expected.append(t)
+    mismatch = f"{proposed_source} does not mean what the patcher reported"
+    if set(filled) != set(fills):
+        return (f"{mismatch}: it filled {sorted(set(filled))}, the catalogue expected "
+                f"{sorted(set(fills))} — an entity the line walker cannot match (quoted name, "
+                f"trailing comment, `active: True`, a `zoominfo_company_id: null` placeholder)? "
+                f"Nothing is written until every expected fill lands.")
+    for i, (want, got) in enumerate(zip_longest(expected, after)):
+        if want != got:
+            if want is None or got is None:
+                return f"{mismatch}: {len(after)} targets loaded, {len(expected)} expected"
+            changed = sorted(k for k in set(want) | set(got) if want.get(k) != got.get(k))
+            return (f"{mismatch}: target #{i + 1} {want['name']!r} differs in {changed} — "
+                    f"expected {[want.get(k) for k in changed]}, loaded {[got.get(k) for k in changed]}")
+    return None
+
+
 def run(*, targets_path: str, metadata_path: str, write: bool) -> int:
     ids = load_resolved_ids(metadata_path)
     old, new, filled = patch_targets(targets_path, ids)
+    problem = post_condition(old, new, ids, filled, source=targets_path)
 
-    if write:
+    if not write:
+        sys.stdout.writelines(difflib.unified_diff(
+            old.splitlines(keepends=True), new.splitlines(keepends=True),
+            fromfile=targets_path + " (current)", tofile=targets_path + " (proposed)",
+        ))
+    if problem:
+        print(f"\n{problem}\nNothing written.", file=sys.stderr)
+        return 1
+    if write and filled:   # the post-condition guarantees `new` is `old` plus the fills
         with open(targets_path, "w") as fh:
             fh.write(new)
-        print(f"Wrote {len(filled)} id(s) into {targets_path}: "
-              f"{', '.join(filled) or '(none)'}")
-        return 0
-
-    sys.stdout.writelines(difflib.unified_diff(
-        old.splitlines(keepends=True), new.splitlines(keepends=True),
-        fromfile=targets_path + " (current)", tofile=targets_path + " (proposed)",
-    ))
-    print(f"\n# would fill {len(filled)} id(s): {', '.join(filled) or '(none)'}",
-          file=sys.stderr)
+    verb, stream = ("Wrote", sys.stdout) if write else ("\n# would fill", sys.stderr)
+    print(f"{verb} {len(filled)} id(s) into {targets_path}: {', '.join(filled) or '(none)'}", file=stream)
     return 0
 
 

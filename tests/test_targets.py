@@ -1,6 +1,7 @@
 """The two non-technical control files as shipped — `targets.yaml` and
-`market_pulse_config.yaml` — and `targets.py`, the catalogue: `load_targets`
-(the one parser of the first file, fail-fast on shape errors), `build_query`.
+`market_pulse_config.yaml` — and `targets.py`, the catalogue: `load_targets` /
+`parse_targets` (the one parser of the first file — over a path or over text in
+hand — fail-fast on shape errors, invalid YAML included), `build_query`.
 
 Contract tests here read the REAL control files: group order (the four-tier
 degradation policy), the macro groups, the priority-segment split, per-group
@@ -14,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 from run_budget import RunBudget
-from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, load_targets
+from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, load_targets, parse_targets
 from tests.conftest import stub_target
 
 _TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
@@ -295,6 +296,13 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
             - name: Avient
               active: false
         """, "no active targets", id="nothing-active"),
+    pytest.param("""\
+        competitors:
+          entities:
+            - name: A
+          zoominfo_company_id: 1
+            - name: B
+        """, "not valid YAML", id="not-yaml"),
 ])
 def test_load_targets_rejects_shape_errors_naming_the_group(tmp_path, body, needle):
     with pytest.raises(TargetsError, match=needle):
@@ -876,3 +884,22 @@ def test_build_query_concept_mode_no_include_all():
         exclude_any=[],
     )
     assert result == '("automotive industry")'
+
+
+# ===========================================================================
+# parse_targets — the catalogue over text already in hand
+# ===========================================================================
+
+
+def test_parse_targets_is_load_targets_without_the_file():
+    """One parser, two entry points: the file loader is the text parser plus
+    its one read, so a writer holding proposed text (scripts/sync_zoominfo_ids)
+    validates through the same rules the cron applies at t=0."""
+    text = _TARGETS_PATH.read_text(encoding="utf-8")
+    assert parse_targets(text, source=str(_TARGETS_PATH)) == _real_targets()
+
+
+def test_parse_targets_names_its_source_in_the_error():
+    with pytest.raises(TargetsError, match=r"^targets\.yaml \(proposed\): expected a mapping"):
+        parse_targets("- just\n- a list\n", source="targets.yaml (proposed)")
+
