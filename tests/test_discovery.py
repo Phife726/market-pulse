@@ -6,6 +6,8 @@ DiscoveryProvider Protocol lets a FakeDiscoveryProvider stand in for Serper /
 ZoomInfo at the consumer, and each production adapter is tested directly for
 its own eligibility / discovery / gate behaviour.
 """
+from functools import partial
+
 import pytest
 
 import discovery
@@ -16,22 +18,14 @@ from discovery import (
     ZoomInfoProvider,
     FakeDiscoveryProvider,
 )
+from tests.conftest import stub_target
 
 
-def _target(**overrides) -> dict:
-    base = {
-        "name": "Magna International",
-        "category": "customers",
-        "query": '"Magna International"',
-        "results_per_entity": 2,
-        "lookback_hours": 24,
-        "min_article_length": 500,
-        "search_mode": "entity",
-        "zoominfo_company_id": 12345678,
-        "zoominfo_news": True,
-    }
-    base.update(overrides)
-    return base
+#: This section's default target: a ZoomInfo-eligible entity (an id mapped,
+#: news on) as `load_targets` maps it.
+# `name` is bound as a KEYWORD so a call can override it (`_target(name=...)`).
+_target = partial(
+    stub_target, name="Magna International", category="customers", zoominfo_company_id=12345678)
 
 
 # ===========================================================================
@@ -43,7 +37,7 @@ def test_serper_provider_name_and_always_eligible():
     assert p.name == "serper"
     assert p.eligible(_target()) is True
     # Even a concept target with no company id is Serper-eligible.
-    assert p.eligible(_target(zoominfo_company_id=None, search_mode="concept")) is True
+    assert p.eligible(stub_target("Anything", search_mode="concept")) is True
 
 
 def test_serper_provider_discover_builds_neutral_shape(monkeypatch):

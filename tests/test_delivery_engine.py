@@ -8,6 +8,7 @@ mailer.
 """
 
 from dataclasses import replace
+from functools import partial
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta
 
@@ -20,6 +21,7 @@ from tests.conftest import (
     VALID_MACRO_OUTLOOK,
     VISIBLE_6_CFG,
     stub_row,
+    stub_summary_row,
 )
 from delivery_engine import (
     synthesize_thematic_paragraphs,
@@ -27,6 +29,11 @@ from delivery_engine import (
     send_email as _send_email,
 )
 from daily_intelligence_repo import InMemoryIntelligenceRepo
+
+
+# These tests drive the pipeline end-to-end, so their rows are the shape
+# ingestion stores: a segment-specific, visible row carrying a signal type.
+_row = partial(stub_row, signal_type="Customer", entities_mentioned=["Acme"])
 
 
 # ===========================================================================
@@ -433,11 +440,8 @@ def test_prepare_report_surfaced_count_is_post_cap(monkeypatch):
     from daily_intelligence_repo import InMemoryIntelligenceRepo
 
     rows = [
-        {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
-         "americhem_impact_score": 8, "sentiment_tag": "Neutral",
-         "signal_type": "Customer", "headline": f"HC {i}",
-         "americhem_impact": "Effect.", "source_url": f"https://x/{i}",
-         "entities_mentioned": ["Acme"]}
+        _row(f"h{i}", 8, commercial_segment="Healthcare", headline=f"HC {i}",
+             americhem_impact="Effect.", source_url=f"https://x/{i}")
         for i in range(5)
     ]
     config = {
@@ -450,11 +454,7 @@ def test_prepare_report_surfaced_count_is_post_cap(monkeypatch):
 
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {}, "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
@@ -470,16 +470,10 @@ def test_prepare_report_writes_delivery_suppression_counts_back(monkeypatch):
     from daily_intelligence_repo import InMemoryIntelligenceRepo
 
     rows = [
-        {"url_hash": "low", "commercial_segment": "Healthcare",
-         "americhem_impact_score": 4, "sentiment_tag": "Neutral",
-         "signal_type": "Customer", "headline": "Below threshold",
-         "americhem_impact": ".", "source_url": "https://x/1",
-         "entities_mentioned": ["Acme"]},
-        {"url_hash": "high", "commercial_segment": "Packaging",
-         "americhem_impact_score": 8, "sentiment_tag": "Positive",
-         "signal_type": "Customer", "headline": "Surfaced",
-         "americhem_impact": ".", "source_url": "https://x/2",
-         "entities_mentioned": ["Acme"]},
+        _row("low", 4, commercial_segment="Healthcare", headline="Below threshold",
+             americhem_impact=".", source_url="https://x/1"),
+        _row("high", 8, commercial_segment="Packaging", sentiment_tag="Positive",
+             headline="Surfaced", americhem_impact=".", source_url="https://x/2"),
     ]
     config = {
         "reporting": {
@@ -490,11 +484,7 @@ def test_prepare_report_writes_delivery_suppression_counts_back(monkeypatch):
     }
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {}, "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
@@ -510,20 +500,12 @@ def test_prepare_report_update_filtered_by_run_date_and_run_mode(monkeypatch):
     """The update() call must be filtered by run_date AND run_mode."""
     from daily_intelligence_repo import InMemoryIntelligenceRepo
 
-    rows = [{
-        "url_hash": "a", "commercial_segment": "Healthcare",
-        "americhem_impact_score": 8, "sentiment_tag": "Neutral",
-        "signal_type": "Customer", "headline": "H", "americhem_impact": ".",
-        "source_url": "https://x/a", "entities_mentioned": ["Acme"],
-    }]
+    rows = [_row("a", 8, commercial_segment="Healthcare", headline="H",
+                 americhem_impact=".", source_url="https://x/a")]
 
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "test",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {}, "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today, run_mode="test"))
     update_calls = []
     real_update = fake.update_delivery_counts
 
@@ -560,18 +542,12 @@ def test_prepare_report_synthesis_sees_only_final_capped_groups(monkeypatch):
         "Aging population drives record demand for medical-grade resins",
     ]
     rows = [
-        {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
-         "americhem_impact_score": 9 - i, "sentiment_tag": "Neutral",
-         "signal_type": "Customer", "headline": hc_headlines[i],
-         "americhem_impact": f"Healthcare impact {i}.",
-         "source_url": f"https://x/h{i}", "entities_mentioned": ["Acme"]}
+        _row(f"h{i}", 9 - i, commercial_segment="Healthcare", headline=hc_headlines[i],
+             americhem_impact=f"Healthcare impact {i}.", source_url=f"https://x/h{i}")
         for i in range(3)
     ] + [
-        {"url_hash": "p0", "commercial_segment": "Packaging",
-         "americhem_impact_score": 8, "sentiment_tag": "Neutral",
-         "signal_type": "Customer", "headline": "Single packaging signal",
-         "americhem_impact": "Packaging impact.",
-         "source_url": "https://x/p0", "entities_mentioned": ["Acme"]},
+        _row("p0", 8, commercial_segment="Packaging", headline="Single packaging signal",
+             americhem_impact="Packaging impact.", source_url="https://x/p0"),
     ]
     config = {
         "reporting": {
@@ -624,18 +600,11 @@ def _seed_delivery_repo(run_mode: str) -> "InMemoryIntelligenceRepo":
         "FDA clears new implantable-grade compound for cardiac devices",
     ]
     for i, headline in enumerate(headlines):
-        fake.upsert_insight({
-            "url_hash": f"wire{i}", "headline": headline,
-            "americhem_impact_score": 8, "sentiment_tag": "Neutral",
-            "signal_type": "Customer", "commercial_segment": "Healthcare",
-            "americhem_impact": "Wiring effect.", "source_url": f"https://x/wire{i}",
-            "entities_mentioned": ["Acme"],
-        })
-    fake.upsert_summary({
-        "run_date": _RUN.run_date, "run_mode": run_mode,
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {}, "suppression_samples": [],
-    })
+        fake.upsert_insight(_row(f"wire{i}", 8, headline=headline,
+                                 commercial_segment="Healthcare",
+                                 americhem_impact="Wiring effect.",
+                                 source_url=f"https://x/wire{i}"))
+    fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date, run_mode=run_mode))
     return fake
 
 
@@ -740,12 +709,7 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
 
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": prior,
-        "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today, suppression_breakdown=prior))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     ledger = (SuppressionLedger.for_delivery()
@@ -773,12 +737,7 @@ def test_update_delivery_summary_counts_idempotent_on_retry(monkeypatch):
 
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {"duplicate_url": 10},
-        "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today, suppression_breakdown={"duplicate_url": 10}))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     ledger = (SuppressionLedger.for_delivery()
@@ -814,12 +773,7 @@ def test_update_delivery_summary_counts_preserves_unknown_prior_keys(monkeypatch
     prior = {"some_future_reason": 99, "duplicate_url": 5}
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": prior,
-        "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today, suppression_breakdown=prior))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
@@ -842,12 +796,7 @@ def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
 
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {},
-        "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=today))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     ledger = (SuppressionLedger.for_delivery()
@@ -961,12 +910,10 @@ def test_update_delivery_summary_counts_merges_with_prior(monkeypatch):
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
     # Seed a prior row mimicking ingestion having already written.
-    fake.upsert_summary({
-        "run_date": today, "run_mode": "production",
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {"duplicate_url": 5, "below_impact_threshold": 9},
-        "suppression_samples": [{"reason": "duplicate_url", "url": "u", "title": "t"}],
-    })
+    fake.upsert_summary(stub_summary_row(
+        run_date=today,
+        suppression_breakdown={"duplicate_url": 5, "below_impact_threshold": 9},
+        suppression_samples=[{"reason": "duplicate_url", "url": "u", "title": "t"}]))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     new_ledger = (

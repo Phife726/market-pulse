@@ -22,6 +22,7 @@ if TYPE_CHECKING:  # annotations only — keep openai/report off narrow runs
 from run_budget import RunBudget  # noqa: E402
 from targets import ENTITY_OPTIONAL_KEYS  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
+from prompts import EXEC_BULLET_LABELS  # noqa: E402
 
 #: The repository root — the structural guards read module sources by path.
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -308,6 +309,39 @@ VALID_MACRO_OUTLOOK = {
     "current_condition": "Industrial demand softening as construction cools.",
     "signals": [stub_macro_signal()],
 }
+
+
+def stub_macro_llm(**overrides) -> dict:
+    """The raw macro-summary dict as the LLM returns it — what
+    `macro_summary.assemble_macro_content` consumes. Content only: the stored
+    row's `executive_sources` and accounting columns are added downstream
+    (see `stub_summary_row`). The bullet labels come from the prompt's own
+    constant, so a relabelling is an import-time change here, not a payload
+    that silently stops validating."""
+    parsed = {
+        "dominant_condition": "Mixed / Watch",
+        "executive_bullets": [{"label": label, "body": "Body."} for label in EXEC_BULLET_LABELS],
+        "macro_outlook": {**VALID_MACRO_OUTLOOK, "signals": [stub_macro_signal()]},
+    }
+    parsed.update(overrides)
+    return parsed
+
+
+def stub_summary_row(*, run_date: str, run_mode: str = "production", **overrides) -> dict:
+    """A `daily_summaries` seed row: the accounting columns every run writes,
+    keyed on the run instant's `run_date` + `run_mode`. For scaffolding — a
+    test whose subject is the row's *content* (the run-mode fallback ranking,
+    the accounting-only shape) should keep its own literal."""
+    row = {
+        "run_date": run_date,
+        "run_mode": run_mode,
+        "executive_summary": "x",
+        "macro_sentiment": "x",
+        "suppression_breakdown": {},
+        "suppression_samples": [],
+    }
+    row.update(overrides)
+    return row
 
 
 def stub_llm_insight(**overrides) -> "FakeLLM":

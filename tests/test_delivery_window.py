@@ -25,7 +25,7 @@ import delivery_engine
 from daily_intelligence_repo import InMemoryIntelligenceRepo
 from delivery_engine import delivery_window, fetch_todays_intelligence
 from run_instant import RunInstant
-from tests.conftest import RUN_INSTANT, TEST_RUN_INSTANT
+from tests.conftest import RUN_INSTANT, TEST_RUN_INSTANT, stub_summary_row
 
 # Thursday 2026-08-27 14:01 UTC — the late start that motivated the fix.
 T = RUN_INSTANT.now
@@ -46,11 +46,7 @@ def _row(url_hash: str, created_at: datetime) -> dict:
 
 
 def _summary(fake: InMemoryIntelligenceRepo, run_date: str, run_mode: str = "production") -> None:
-    fake.upsert_summary({
-        "run_date": run_date, "run_mode": run_mode,
-        "executive_summary": "x", "macro_sentiment": "x",
-        "suppression_breakdown": {}, "suppression_samples": [],
-    })
+    fake.upsert_summary(stub_summary_row(run_date=run_date, run_mode=run_mode))
 
 
 # ---------------------------------------------------------------------------
