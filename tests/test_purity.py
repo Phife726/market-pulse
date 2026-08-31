@@ -3,7 +3,8 @@
 One table, `PURE_MODULES`, is the list of pure modules and the source of
 truth for it. Each row's source is parsed and walked (function-local
 imports included) for the three things a pure module never does: import
-anything outside the closed set of harmless libraries and the other rows;
+anything outside the closed set of harmless libraries and the other rows
+(a zero-I/O row may not import a file-backed one — the read is inherited);
 read the clock; open a file beyond the count its row declares. A new pure
 module is one row (and a module whose docstring calls itself pure must have
 one); a new library, harmless or not, must be classified before a pure module
@@ -91,6 +92,13 @@ def test_pure_module_imports_only_harmless_libraries_and_other_pure_modules(name
         f"harmless, add it to HARMLESS_LIBRARIES, and if it is a pure repo module, give it a row")
     forbidden = imported & PURE_MODULES[name].forbids
     assert not forbidden, f"{name} imports {sorted(forbidden)}, which its row forgoes"
+    if not PURE_MODULES[name].reads_files:
+        # A file read is inherited through an import: a zero-I/O row may not
+        # import a file-backed row (Codex review on #84).
+        file_backed = imported & {n for n, p in PURE_MODULES.items() if p.reads_files}
+        assert not file_backed, (
+            f"{name} imports {sorted(file_backed)}, which read files — "
+            f"take the parsed value as a parameter")
 
 
 @pytest.mark.parametrize("name", sorted(PURE_MODULES))
