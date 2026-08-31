@@ -290,11 +290,13 @@ zero-I/O purity is untouched.
   stored under), `search_mode`, the pre-built `query`, the discovery settings,
   and for entities the ZoomInfo id/flag and the resolution hints
   (`domain` / `hq_country` / `hq_state`) the enrichment utility reads.
-  **Targets catalogue** — `load_targets(path)`, the one parser of
+  **Targets catalogue** — `load_targets(path)` (and `parse_targets(text)`, the
+  same parser over text already in hand), the one parser of
   `targets.yaml`; every consumer (the ingestion engine, the enrichment and
   probe scripts) reads targets through it. Shape errors in the control file
-  (an entity without a name, an unknown `search_mode`, a concept group with
-  no `include_any`, a non-list where a list belongs) raise `TargetsError`
+  (a document that is not valid YAML, an entity without a name, an unknown
+  `search_mode`, a concept group with no `include_any`, a non-list where a
+  list belongs) raise `TargetsError`
   naming the group — the run fails at t=0 like a missing secret does, instead
   of silently dropping coverage. Policy rules (tier order, macro groups last)
   are not validated here; they are pins against the shipped file.

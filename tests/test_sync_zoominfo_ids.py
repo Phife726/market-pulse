@@ -1,7 +1,17 @@
 """Tests for scripts/sync_zoominfo_ids.py — the target_metadata -> targets.yaml
-id bridge. No live calls; pure text/dict fixtures."""
-import textwrap
+id bridge. No live calls; pure text/dict fixtures.
 
+Resolution gating (active + approved/verified only, int ids only), the
+line-level patch (active, id-less entities; idempotent), and the
+post-condition through the targets catalogue: an input the loader rejects, a
+patch that would not load, a patch that loads to something other than the
+current targets plus exactly the fills the catalogue expects (wrong value,
+a walker that silently fills nothing, a same-named curated copy in another
+group) — each refused with exit 1 and nothing written."""
+import textwrap
+from typing import Callable
+
+import pytest
 import yaml
 
 import sync_zoominfo_ids as sync
@@ -113,7 +123,7 @@ def test_write_persists_and_is_idempotent(tmp_path):
     targets = _targets(tmp_path)
     ids = sync.load_resolved_ids(str(_metadata(tmp_path)))
 
-    sync.run(targets_path=str(targets), metadata_path=str(_metadata(tmp_path)), write=True)
+    assert sync.run(targets_path=str(targets), metadata_path=str(_metadata(tmp_path)), write=True) == 0
     after_first = targets.read_text()
     assert "zoominfo_company_id: 73040436" in after_first
 
@@ -121,3 +131,141 @@ def test_write_persists_and_is_idempotent(tmp_path):
     _, new2, filled2 = sync.patch_targets(str(targets), ids)
     assert filled2 == []
     assert new2 == after_first
+
+
+# ===========================================================================
+# The post-condition: the proposed text must load, and mean what the
+# catalogue expects — the patcher's report included
+# ===========================================================================
+
+
+def _bad_patch(old_text: str, id_line: str) -> Callable:
+    """A patcher stand-in: `old_text` with `id_line` inserted after the first
+    `- name: Teknor Apex` line — mis-indented or misplaced by the caller's
+    choice — reporting Teknor Apex as filled."""
+    def patch(targets_path: str, ids: dict) -> tuple[str, str, list[str]]:
+        lines = old_text.splitlines(keepends=True)
+        i = next(k for k, l in enumerate(lines) if "name: Teknor Apex" in l)
+        return old_text, "".join(lines[: i + 1] + [id_line] + lines[i + 1:]), ["Teknor Apex"]
+    return patch
+
+
+def test_refuses_an_input_the_loader_already_rejects(tmp_path, capsys):
+    targets = _write(tmp_path, "targets.yaml", """\
+        industry:
+          search_mode: concept
+          active: true
+        """)   # a concept group without include_any: the cron would fail at t=0
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+
+    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
+
+    assert rc == 1
+    assert targets.read_text() == before
+    err = capsys.readouterr().err
+    assert "already rejected by the loader" in err and "include_any" in err
+
+
+@pytest.mark.parametrize("write", [True, False], ids=["write", "dry-run"])
+def test_refuses_a_patch_the_loader_rejects(tmp_path, capsys, monkeypatch, write):
+    """Valid input, invalid output can only be a patcher bug: nothing is
+    written, the error says so, exit 1 — and the dry-run still prints the
+    diff, which is the evidence."""
+    targets, metadata = _targets(tmp_path), _metadata(tmp_path)
+    before = targets.read_text()
+    monkeypatch.setattr(sync, "patch_targets",
+                        _bad_patch(before, "    zoominfo_company_id: 111\n"))   # a sibling of the entity, not a field
+
+    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=write)
+
+    out, err = capsys.readouterr()
+    assert rc == 1
+    assert targets.read_text() == before
+    assert "rejected by the loader" in err and "patcher" in err
+    if write:
+        assert out == ""                                 # --write prints no diff
+    else:
+        assert "+    zoominfo_company_id: 111" in out    # dry-run: the evidence, then the refusal
+
+
+def test_post_condition_pins_meaning_not_just_syntax(tmp_path, capsys, monkeypatch):
+    """A patch that loads fine but carries a value the metadata never resolved
+    is refused: the loaded targets must equal the current targets plus
+    exactly the fills the catalogue expects."""
+    targets, metadata = _targets(tmp_path), _metadata(tmp_path)
+    before = targets.read_text()
+    monkeypatch.setattr(sync, "patch_targets",
+                        _bad_patch(before, "      zoominfo_company_id: 999\n"))
+
+    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
+
+    assert rc == 1
+    assert targets.read_text() == before
+    err = capsys.readouterr().err
+    assert "does not mean what the patcher reported" in err and "Teknor Apex" in err
+
+
+def test_post_condition_refuses_a_patcher_that_silently_fills_nothing(tmp_path, capsys):
+    """`active: True` is a boolean the catalogue accepts and the line-walker's
+    literal `active: true` does not see: the real patcher fills nothing and
+    reports nothing, and the post-condition — planned from the catalogue,
+    not from the report — refuses."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: True
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+
+    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
+
+    assert rc == 1
+    assert targets.read_text() == before
+    err = capsys.readouterr().err
+    assert "it filled []" in err and "expected ['Teknor Apex']" in err
+
+
+def test_same_name_in_two_groups_fills_only_the_id_less_copy(tmp_path):
+    """The plan is per target, not per name: a curated copy of an entity in
+    another group keeps its id, and the post-condition expects exactly that."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+              zoominfo_company_id: 111
+        customers:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+        """)
+    metadata = _metadata(tmp_path)
+
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    from targets import load_targets
+    ids = [(t["category"], t["zoominfo_company_id"]) for t in load_targets(str(targets))]
+    assert ids == [("competitors", 111), ("customers", sync.load_resolved_ids(str(metadata))["Teknor Apex"])]
+
+
+def test_string_or_boolean_ids_in_metadata_are_not_resolved(tmp_path):
+    """An id must be an int: a hand-typed "123" or a stray `true` would be
+    written as a different value than the catalogue later reads."""
+    metadata = _write(tmp_path, "target_metadata.yaml", """\
+        targets:
+          Quoted Co:
+            zoominfo_company_id: "123"
+            zoominfo_metadata_status: approved
+          Bool Co:
+            zoominfo_company_id: true
+            zoominfo_metadata_status: approved
+          Real Co:
+            zoominfo_company_id: 123
+            zoominfo_metadata_status: approved
+        """)
+    assert sync.load_resolved_ids(str(metadata)) == {"Real Co": 123}
