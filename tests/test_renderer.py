@@ -1575,31 +1575,6 @@ def test_render_qa_debug_section_orders_ingestion_codes_before_delivery_codes():
 
 
 # ===========================================================================
-# The module's import contract — pure by construction
-# ===========================================================================
-
-
-def test_renderer_imports_only_the_pure_modules_it_presents():
-    """renderer.py is the pure email renderer: same (model, today_str,
-    test_mode) -> same bytes. That holds only while it imports no clock,
-    config, seam or logger — so the allow-list is pinned from the module's
-    own source — every import, function-local ones included — and a new
-    `import config` / `from llm import` / `import logging` fails here, not
-    in a QA email."""
-    tree = ast.parse(inspect.getsource(renderer))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module)
-
-    allowed = {"html", "datetime", "typing", "urllib.parse",
-               "report", "scoring", "suppression_ledger"}
-    assert imported <= allowed, f"renderer.py imports outside its allow-list: {sorted(imported - allowed)}"
-
-
-# ===========================================================================
 # _link — every link in the email
 # ===========================================================================
 

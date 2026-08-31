@@ -6,8 +6,8 @@ suppression -> visibility filter -> segment grouping -> per-segment cap ->
 total cap -> weak-relevance accounting) produces it, and the pure renderer
 (`renderer.render_report`) plus the daily_summaries write-back consume
 it. Same species as `insight.py` / `scoring.py`: no I/O, no clock, no env
-reads, and no imports of the repo or LLM seams — purity is enforced by the
-import graph.
+reads, and no imports of the repo or LLM seams — purity is pinned
+structurally in tests/test_purity.py.
 
 Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 `delivery_engine.prepare_report` fills it via the LLM seam.
