@@ -1,14 +1,17 @@
 """renderer.py — the pure email renderer.
 
 The function from a report model to the email's HTML (see **Renderer** in
-CONTEXT.md). `render_report(model, *, today_str, test_mode)` is the one public
+CONTEXT.md). `render_report(model, *, today_str, test_mode)` is the one
 entry point; `delivery_engine.execute_pipeline` calls it between
-`prepare_report` and `send_email`. Everything below it is the layout — the
+`prepare_report` and `send_email`. The only other public name is
+`TEST_MARKER`, the `[TEST] ` spelling `send_email` imports for the subject so
+the subject and the title carry one marker. Everything below is the layout — the
 section renderers in the order the email shows them, the card, the citation
 markers and Sources footer, the test-mode markings, the no-news variant —
 plus the two rules every section follows: every interpolated data value is
 HTML-escaped, trusted or not (`tests/test_renderer.py` poisons every field
-and renders the whole email), and every href passes `_safe_http_url` (an
+and renders the whole email), and every href passes `_safe_http_url` — inside
+`_link`, the one place a URL becomes an anchor — (an
 unsafe URL renders its text unlinked).
 
 Pure and deterministic: same (model, today_str, test_mode) -> same bytes. No
@@ -31,6 +34,8 @@ from report import (
     structured_exec_bullets as _structured_exec_bullets,
 )
 
+__all__ = ["render_report", "TEST_MARKER"]
+
 # ---------------------------------------------------------------------------
 # Americhem brand constants
 # ---------------------------------------------------------------------------
@@ -44,8 +49,12 @@ _LOGO_URL = (
 )
 
 # ---------------------------------------------------------------------------
-# Test-mode banner row (inserted into the email HTML when MARKET_PULSE_RUN_MODE=test)
+# Test-mode markings (MARKET_PULSE_RUN_MODE=test): the title/subject marker
+# and the banner row. The subject is composed by delivery_engine.send_email,
+# which imports the marker from here so the two spellings cannot drift.
 # ---------------------------------------------------------------------------
+
+TEST_MARKER = "[TEST] "
 
 _TEST_BANNER_ROW = (
     f'<tr><td style="background-color:{_BRAND_AMBER};padding:8px 32px;font-size:11px;'
@@ -77,6 +86,33 @@ def _section_header_row(title: str, *, title_color: str, rule_color: str) -> str
         f'font-family:Arial,sans-serif;">{title}</td>'
         f'</tr>'
     )
+
+
+def _section(title: str, rows: str, *, title_color: str, rule_color: str) -> str:
+    """The shell around a headed section: the outer row / cell / table with
+    the section header row above `rows` (the section table's own `<tr>`s).
+    The executive summary (its own padding, no header) and the Sources row
+    deliberately do not use it."""
+    return f"""
+      <tr>
+        <td style="padding:24px 32px 4px 32px;">
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            {_section_header_row(title, title_color=title_color, rule_color=rule_color)}
+            {rows}
+          </table>
+        </td>
+      </tr>"""
+
+
+def _single_cell(inner: str) -> str:
+    """One row holding one cell — the `rows` of a section whose content is a
+    single block (the outlook, the appendix, the QA block) rather than a
+    list of rows (Commercial Segment Watch)."""
+    return f"""<tr>
+              <td>
+{inner}
+              </td>
+            </tr>"""
 
 
 # ---------------------------------------------------------------------------
@@ -133,10 +169,9 @@ def _render_card(item: dict) -> str:
     `recommended_action` and `impact_rationale` are deliberately not shown here —
     the action is consumed by the suppression policy, not the reader.
     Untrusted values are HTML-escaped and the href passes through
-    _safe_http_url (an unsafe URL renders the headline unlinked)."""
+    _safe_http_url inside _link (an unsafe URL renders the headline unlinked)."""
     meta = _render_meta_strip(item)
     headline = html.escape(item.get("headline", "") or "")
-    url = _safe_http_url(item.get("source_url"))
     americhem_impact = html.escape(item.get("americhem_impact", "") or "")
     tag = item.get("sentiment_tag") or ""
     glyph = _SENTIMENT_TAG_GLYPHS.get(tag)
@@ -155,11 +190,8 @@ def _render_card(item: dict) -> str:
         f'font-size:14px;font-weight:700;color:{_BRAND_NAVY};'
         f'font-family:Arial,sans-serif;text-decoration:none;line-height:1.35;'
     )
-    if url:
-        safe = html.escape(url, quote=True)
-        headline_html = f'<a href="{safe}" style="{headline_style}">{headline}</a>'
-    else:
-        headline_html = f'<span style="{headline_style}">{headline}</span>'
+    headline_html = _link(item.get("source_url"), headline,
+                          style=headline_style, unlinked_style=headline_style)
     return (
         f'<tr><td style="padding:6px 0 10px 0;">'
         f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
@@ -213,15 +245,8 @@ def _render_segment_watch_section(
             f'</td></tr>'
         )
 
-    return f"""
-      <tr>
-        <td style="padding:24px 32px 4px 32px;">
-          <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            {_section_header_row("COMMERCIAL SEGMENT WATCH", title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)}
-            {blocks_html}
-          </table>
-        </td>
-      </tr>"""
+    return _section("COMMERCIAL SEGMENT WATCH", blocks_html,
+                    title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +288,7 @@ def _render_additional_articles_section(items: list[dict]) -> str:
     One row per item: linked headline plus a meta line (segment · Impact X/10 ·
     source · date). Deliberately omits the 'So what' narrative — this is
     optional reading, visually distinct from surfaced intelligence. All
-    untrusted values are HTML-escaped and hrefs pass through _safe_http_url."""
+    untrusted values are HTML-escaped and hrefs pass through _link's guard."""
     if not items:
         return ""
 
@@ -282,19 +307,8 @@ def _render_additional_articles_section(items: list[dict]) -> str:
         meta_parts = [p for p in (segment, score_txt, source, date) if p]
         meta = ' <span style="color:#9CA3AF;">&middot;</span> '.join(meta_parts)
 
-        url = _safe_http_url(item.get("source_url"))
-        if url:
-            safe = html.escape(url, quote=True)
-            headline_html = (
-                f'<a href="{safe}" style="font-size:13px;font-weight:600;'
-                f'color:{_BRAND_NAVY};font-family:Arial,sans-serif;'
-                f'text-decoration:none;line-height:1.35;">{headline}</a>'
-            )
-        else:
-            headline_html = (
-                f'<span style="font-size:13px;font-weight:600;color:{_BRAND_NAVY};'
-                f'font-family:Arial,sans-serif;line-height:1.35;">{headline}</span>'
-            )
+        headline_html = _link(item.get("source_url"), headline,
+                              style=_APPENDIX_LINK_STYLE, unlinked_style=_APPENDIX_UNLINKED_STYLE)
 
         rows_html += (
             f'<tr><td style="padding:5px 0 7px 0;">'
@@ -304,19 +318,9 @@ def _render_additional_articles_section(items: list[dict]) -> str:
             f'</td></tr>'
         )
 
-    return f"""
-      <tr>
-        <td style="padding:24px 32px 4px 32px;">
-          <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            {_section_header_row("Additional Articles to Explore", title_color="#5a6678", rule_color="#E5E7EB")}
-            <tr>
-              <td>
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>"""
+    listing = f'                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>'
+    return _section("Additional Articles to Explore", _single_cell(listing),
+                    title_color="#5a6678", rule_color="#E5E7EB")
 
 
 # ---------------------------------------------------------------------------
@@ -373,14 +377,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
             f'</td></tr>'
         )
 
-    return f"""
-      <tr>
-        <td style="padding:24px 32px 4px 32px;">
-          <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            {_section_header_row("QA &middot; Suppression Summary", title_color="#9CA3AF", rule_color="#E5E7EB")}
-            <tr>
-              <td>
-                <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
+    summary = f"""                <p style="margin:0 0 8px 0;font-size:12px;color:#374151;
                            font-family:Arial,sans-serif;">
                   Screened: {html.escape(str(screened)) if screened is not None else '?'} &nbsp;&middot;&nbsp;
                   Surfaced: {html.escape(str(surfaced)) if surfaced is not None else '?'} &nbsp;&middot;&nbsp;
@@ -401,12 +398,9 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
                 </p>
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
                   {samples_html}
-                </table>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>"""
+                </table>"""
+    return _section("QA &middot; Suppression Summary", _single_cell(summary),
+                    title_color="#9CA3AF", rule_color="#E5E7EB")
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +419,30 @@ def _safe_http_url(url: Optional[str]) -> str:
     return url if scheme in ("http", "https") else ""
 
 
+#: The plain in-text link style (citation markers, the Sources footer), and
+#: the appendix headline's linked / unlinked styles.
+_LINK_STYLE = f"color:{_BRAND_NAVY};text-decoration:none;"
+_APPENDIX_LINK_STYLE = (f"font-size:13px;font-weight:600;color:{_BRAND_NAVY};"
+                        f"font-family:Arial,sans-serif;text-decoration:none;line-height:1.35;")
+_APPENDIX_UNLINKED_STYLE = (f"font-size:13px;font-weight:600;color:{_BRAND_NAVY};"
+                            f"font-family:Arial,sans-serif;line-height:1.35;")
+
+
+def _link(raw_url: Optional[str], inner: str, *, style: str,
+          unlinked_style: Optional[str] = None, titled: bool = False) -> str:
+    """Every link in the email: `inner` (already escaped) as an anchor when
+    `raw_url` passes `_safe_http_url`, otherwise unlinked — a `<span>` in
+    `unlinked_style` when given, else bare text. The href guard lives here,
+    so no site can place an unguarded URL. `titled` repeats the href as a
+    title attribute (the citation markers, whose visible text is a number)."""
+    url = _safe_http_url(raw_url)
+    if not url:
+        return inner if unlinked_style is None else f'<span style="{unlinked_style}">{inner}</span>'
+    safe = html.escape(url, quote=True)
+    title = f' title="{safe}"' if titled else ""
+    return f'<a href="{safe}"{title} style="{style}">{inner}</a>'
+
+
 def _render_citation_marker(cited_ids: Optional[list], citations: CitationSet) -> str:
     """Grouped inline citation, e.g. [1, 2]. Each number links to its source URL
     (http/https only; otherwise plain text). Returns '' when nothing to show."""
@@ -433,15 +451,7 @@ def _render_citation_marker(cited_ids: Optional[list], citations: CitationSet) -
         n = citations.display_number(cid)
         if n is None:
             continue
-        url = _safe_http_url(citations.source(cid).get("url"))
-        if url:
-            safe = html.escape(url, quote=True)
-            parts.append(
-                f'<a href="{safe}" title="{safe}" '
-                f'style="color:{_BRAND_NAVY};text-decoration:none;">{n}</a>'
-            )
-        else:
-            parts.append(str(n))
+        parts.append(_link(citations.source(cid).get("url"), str(n), style=_LINK_STYLE, titled=True))
     if not parts:
         return ""
     inner = ", ".join(parts)
@@ -498,14 +508,7 @@ def _render_sources_footer(sources: Optional[list[dict]] = None, display_map: Op
         headline = html.escape(src.get("headline") or "Headline unavailable")
         domain = html.escape(src.get("domain") or "source link")
         label = f"[{n}] {headline} &mdash; {domain}"
-        url = _safe_http_url(src.get("url"))
-        if url:
-            safe = html.escape(url, quote=True)
-            entry = (
-                f'<a href="{safe}" style="color:{_BRAND_NAVY};text-decoration:none;">{label}</a>'
-            )
-        else:
-            entry = label
+        entry = _link(src.get("url"), label, style=_LINK_STYLE)
         rows += (
             f'<tr><td style="padding:1px 0;font-size:11px;color:#5a6678;'
             f"font-family:Arial,sans-serif;line-height:1.5;\">{entry}</td></tr>"
@@ -569,23 +572,12 @@ def _render_macro_outlook_section(macro_outlook: dict | None, citations: Citatio
             f'</td></tr>'
         )
 
-    return f"""
-      <tr>
-        <td style="padding:24px 32px 4px 32px;">
-          <table width="100%" cellpadding="0" cellspacing="0" border="0">
-            {_section_header_row("MACROECONOMIC OUTLOOK", title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)}
-            <tr>
-              <td>
-                <p style="margin:0 0 8px 0;font-size:13px;color:#1a2a45;
+    outlook = f"""                <p style="margin:0 0 8px 0;font-size:13px;color:#1a2a45;
                            font-family:Georgia,'Times New Roman',serif;line-height:1.6;">
                   {current}
                 </p>
-                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>"""
+                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>"""
+    return _section("MACROECONOMIC OUTLOOK", _single_cell(outlook), title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)
 
 
 def _render_exec_summary(macro_summary: dict | None,
@@ -711,7 +703,7 @@ def render_report(
     synthesis is empty renders bullets-only — that IS the fallback, so tests
     may render an unprepared model directly. test_mode=True adds the [TEST]
     title prefix, the amber banner row, and the QA suppression summary."""
-    title_prefix = "[TEST] " if test_mode else ""
+    title_prefix = TEST_MARKER if test_mode else ""
     test_banner_row = _TEST_BANNER_ROW if test_mode else ""
 
     if model.variant == "no_news":
