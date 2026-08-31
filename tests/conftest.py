@@ -2,6 +2,7 @@ import os
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Union
 from unittest.mock import MagicMock
 
@@ -21,6 +22,9 @@ if TYPE_CHECKING:  # annotations only — keep openai/report off narrow runs
 from run_budget import RunBudget  # noqa: E402
 from targets import ENTITY_OPTIONAL_KEYS  # noqa: E402
 from run_instant import RunInstant  # noqa: E402
+
+#: The repository root — the structural guards read module sources by path.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)

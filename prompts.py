@@ -2,7 +2,7 @@
 
 Text assembly only: callers keep validation, the LLM seam (`llm.py`) keeps
 transport. Config enters as a dict (same discipline as `report.py`); no I/O,
-no clock, no env reads — purity is enforced by the import graph (this module
+no clock, no env reads — purity is pinned structurally in tests/test_purity.py (this module
 imports only `insight`, `scoring`, and stdlib).
 
 The unit of exchange is the **prompt spec** (`PromptSpec` / `MacroPrompt`) —

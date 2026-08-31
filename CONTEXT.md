@@ -7,7 +7,7 @@ language; domain terms are specific to the Americhem market-intelligence pipelin
 ## Seams
 
 A **seam** is where an interface lives — a place behaviour can be swapped without
-editing in place. This pipeline has five, each a pure module with a Protocol and
+editing in place. This pipeline has five, each a module with a Protocol and
 production + in-memory adapters (tests inject the fake at the consumer):
 
 - **Repo seam** (`daily_intelligence_repo.py`, `IntelligenceRepo`) — every Supabase
@@ -244,6 +244,18 @@ zero-I/O purity is untouched.
   side effects — write-back + thematic synthesis — exactly once, after
   assembly and before rendering; both are skipped for `no_news`. Rendering a
   model whose synthesis is empty **is** the bullets-only fallback.
+- **Pure module** — a module whose functions decide and never act: same
+  inputs, same result, with no clock, environment, configuration file,
+  network or seam behind them. Structurally: it imports none of the seams,
+  `config` or the **run instant**, makes no ambient clock read, and does no
+  I/O except what it declares (the two file-backed parsers — the **targets
+  catalogue** over `targets.yaml` and the ZoomInfo relevance gate's loader
+  of `target_metadata.yaml` — read one file each and nothing else). Callers hand a pure module the values it
+  needs (a config dict, a date string, a run's elapsed seconds), which is
+  what lets its tests use dict literals and zero patches. Which modules are
+  pure, and that they stay so, is pinned structurally in
+  `tests/test_purity.py` — the table there is the list.
+  *Avoid*: helper module, utility module.
 - **Renderer** (`renderer.py`, `render_report`) — the pure function from a
   **report model** (plus the header date and the test-mode flag the caller
   derives from the **run instant**) to the email's HTML. Owns the layout — the

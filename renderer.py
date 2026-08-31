@@ -17,8 +17,8 @@ unsafe URL renders its text unlinked).
 Pure and deterministic: same (model, today_str, test_mode) -> same bytes. No
 clock, config, seam or logger — the header date and the test-mode flag are
 the caller's to derive from the run instant. Imports only the pure modules
-it presents (`report`, `scoring`, `suppression_ledger`); `tests/test_renderer.py`
-pins that allow-list.
+it presents (`report`, `scoring`, `suppression_ledger`) — the allow-list row in
+`tests/test_purity.py`.
 """
 
 import html
