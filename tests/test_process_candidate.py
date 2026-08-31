@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ingestion_engine
-from tests.conftest import stub_insight
+from tests.conftest import stub_insight, stub_target
 from ingestion_engine import (
     RunContext,
     Stored,
@@ -231,12 +231,7 @@ def test_pipeline_persists_synthesis_failed_in_breakdown(run_ingestion_pipeline)
     the pre-extraction pipeline dropped these on the floor (issue: LLM-None
     gate recorded neither ledger nor yield)."""
     run = run_ingestion_pipeline(
-        targets=[{
-            "name": "TestCorp", "category": "competitors",
-            "query": '"TestCorp"', "results_per_entity": 2,
-            "lookback_hours": 24, "min_article_length": 500,
-            "search_mode": "entity",
-        }],
+        targets=[stub_target("TestCorp", category="competitors")],
         candidates=[make_candidate()],
         insight=None,          # unusable LLM response -> synthesis_failed
     )

@@ -21,6 +21,7 @@ from tests.conftest import (
     stub_insight,
     stub_llm_insight,
     stub_row,
+    stub_macro_llm,
     stub_target,
 )
 from ingestion_engine import (
@@ -141,14 +142,7 @@ def test_synthesize_insight_uses_low_temperature():
 
 
 def test_generate_macro_summary_uses_macro_temperature():
-    fake = FakeLLM(returns={
-        "dominant_condition": "Mixed / Watch",
-        "executive_bullets": [
-            {"label": "Market pressure", "body": "Body."},
-            {"label": "Supply chain watch", "body": "Body."},
-            {"label": "Commercial action", "body": "Body."},
-        ],
-    })
+    fake = FakeLLM(returns=stub_macro_llm())
     fake_repo = InMemoryIntelligenceRepo()
 
     with patch("ingestion_engine._llm", return_value=fake), \
@@ -1189,14 +1183,7 @@ def test_generate_macro_summary_routes_through_repo(monkeypatch):
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
 
     # Inject a FakeLLM returning a valid macro summary.
-    fake_llm = FakeLLM(returns={
-        "dominant_condition": "Mixed / Watch",
-        "executive_bullets": [
-            {"label": "Market pressure", "body": "Some pressure body text."},
-            {"label": "Supply chain watch", "body": "Some supply watch text."},
-            {"label": "Commercial action", "body": "Some commercial text."},
-        ],
-    })
+    fake_llm = FakeLLM(returns=stub_macro_llm())
 
     with patch("ingestion_engine._llm", return_value=fake_llm):
         result = generate_macro_summary([
@@ -1217,14 +1204,7 @@ def test_generate_macro_summary_propagates_repo_write_failure(monkeypatch):
     failing.upsert_summary.side_effect = RuntimeError("DB down")
     monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
 
-    fake_llm = FakeLLM(returns={
-        "dominant_condition": "Mixed / Watch",
-        "executive_bullets": [
-            {"label": "Market pressure", "body": "x"},
-            {"label": "Supply chain watch", "body": "y"},
-            {"label": "Commercial action", "body": "z"},
-        ],
-    })
+    fake_llm = FakeLLM(returns=stub_macro_llm())
 
     with patch("ingestion_engine._llm", return_value=fake_llm):
         with pytest.raises(RuntimeError, match="DB down"):
@@ -1260,10 +1240,7 @@ def test_execute_pipeline_skips_unscrapable_domain_before_scraping(run_ingestion
     """An unscrapable-domain candidate must be suppressed pre-scrape: no
     Firecrawl attempt, and the ledger records unscrapable_domain."""
     run = run_ingestion_pipeline(
-        targets=[{
-            "name": "Acme", "category": "competitor", "query": '"Acme"',
-            "lookback_hours": 24, "results_per_entity": 2, "min_article_length": 500,
-        }],
+        targets=[stub_target("Acme", category="competitor")],
         candidates=[{
             "url": "https://www.linkedin.com/posts/acme-update",
             "title": "Acme update", "provider": "serper",
@@ -1325,12 +1302,7 @@ def _outage_candidate(n: int) -> dict:
     }
 
 
-_OUTAGE_TARGET = {
-    "name": "TestCorp", "category": "competitors",
-    "query": '"TestCorp"', "results_per_entity": 10,
-    "lookback_hours": 24, "min_article_length": 500,
-    "search_mode": "entity",
-}
+_OUTAGE_TARGET = stub_target("TestCorp", category="competitors", results_per_entity=10)
 
 
 def test_synthesis_outage_detected_when_every_attempt_failed():
@@ -1406,8 +1378,7 @@ def test_execute_pipeline_hands_the_run_instant_to_the_macro_summary(run_ingesti
     """The row ingestion writes is keyed on the instant main() read: the
     harness's fixed instant must reach generate_macro_summary verbatim."""
     run = run_ingestion_pipeline(
-        targets=[{"name": "Acme", "category": "competitors", "search_mode": "entity",
-                  "results_per_entity": 2, "min_article_length": 500}],
+        targets=[stub_target("Acme", category="competitors")],
         candidates=[],
     )
     assert run.macro.call_args.kwargs["run"] is _RUN

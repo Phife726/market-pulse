@@ -7,6 +7,8 @@ ZOOMINFO_BEARER_TOKEN is required.
 import textwrap
 from unittest.mock import MagicMock, patch
 
+from functools import partial
+
 import pytest
 import requests
 
@@ -14,7 +16,7 @@ import discovery
 import ingestion_engine
 import zoominfo_client
 from discovery import FakeDiscoveryProvider
-from tests.conftest import stub_http_response
+from tests.conftest import stub_http_response, stub_target
 from ingestion_engine import (
     compute_url_hash,
     discover_candidates,
@@ -45,17 +47,9 @@ def _entity_yaml(extra_entity_lines: str = "") -> str:
     )
 
 
-def _zi_target(company_id=12345678, zoominfo_news=True) -> dict:
-    return {
-        "name": "Magna International",
-        "category": "customers",
-        "query": '"Magna International"',
-        "results_per_entity": 2,
-        "lookback_hours": 24,
-        "min_article_length": 500,
-        "zoominfo_company_id": company_id,
-        "zoominfo_news": zoominfo_news,
-    }
+#: A ZoomInfo-eligible entity target as `load_targets` maps it.
+_zi_target = partial(stub_target, "Magna International",
+                     category="customers", zoominfo_company_id=12345678)
 
 
 @pytest.fixture(autouse=True)
