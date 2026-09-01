@@ -11,10 +11,18 @@ The vocabulary these validators enforce is owned by ``prompts.py`` (the module
 that renders it into the prompt text) and ``insight.py`` — imported, never
 re-defined, so the prompt's promises and the validator's checks stay one
 definition.
+
+The module owns both directions of the schema, the way ``suppression_ledger``
+owns both of the suppression taxonomy: ``assemble_macro_content`` is the write
+face (raw LLM dict -> storable content fields) and ``MacroSummary`` the read
+face (a stored ``daily_summaries`` row -> the typed value delivery, report
+assembly and the renderer all consume).
 """
+from dataclasses import dataclass
 from typing import Optional
 
 import insight
+from suppression_ledger import SuppressionAccounting
 from prompts import (
     VALID_MACRO_CONDITIONS,
     VALID_MACRO_DIRECTIONS,
@@ -186,3 +194,111 @@ def assemble_macro_content(parsed: dict, *, source_pack: list[dict], article_cou
         "executive_summary": executive_summary,
         "macro_sentiment": cond,
     }
+
+
+# ---------------------------------------------------------------------------
+# MacroSummary — the read face of a stored daily_summaries row
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MacroSummary:
+    """One stored ``daily_summaries`` row, read defensively and once.
+
+    The read face of the schema ``assemble_macro_content`` writes. Delivery
+    converts at the fetch — ``fetch_macro_summary`` returns this, not a dict —
+    so nothing downstream (report assembly, the report model, the renderer)
+    holds raw jsonb, and there is no second place for a ``.get()`` on this
+    shape to reappear. ``None`` still means *no row found*, which delivery logs
+    on; a row that exists but carries no brief is ``has_content is False``.
+
+    Every reader is defensive because legacy and half-written rows genuinely
+    reach the renderer: pre-relevance-upgrade rows carry only
+    ``executive_summary``/``macro_sentiment``, and a zero-yield run persists an
+    **accounting-only row** (counts, no content). Contents were validated at
+    ingestion; this is the read that assumes none of it survived.
+
+    ``screened_count``/``surfaced_count`` stay ``Optional`` on purpose: the
+    value types the read but does not pick a fallback, because the two
+    consumers want different ones — report assembly derives ``len(rows)`` for
+    the subtitle's display number, while the QA block reports ``?`` to say the
+    row records none. One rule there would erase a real distinction.
+    """
+    legacy_text: str = ""
+    # The row's two condition columns are kept apart: `condition` composes them
+    # for display, while `has_content` must ask only about the structured one —
+    # a row carrying nothing but the legacy macro_sentiment is not a brief.
+    dominant_condition: str = ""
+    legacy_condition: str = ""
+    bullets: Optional[list[dict]] = None
+    outlook: Optional[dict] = None
+    sources: tuple[dict, ...] = ()
+    screened_count: Optional[int] = None
+    surfaced_count: Optional[int] = None
+    # Frozen, so one shared default instance is safe.
+    suppression: SuppressionAccounting = SuppressionAccounting()
+
+    @classmethod
+    def from_row(cls, row: Optional[dict]) -> "MacroSummary":
+        row = row or {}
+        return cls(
+            legacy_text=row.get("executive_summary") or "",
+            dominant_condition=row.get("dominant_condition") or "",
+            legacy_condition=row.get("macro_sentiment") or "",
+            bullets=_read_bullets(row),
+            outlook=_read_outlook(row),
+            sources=tuple(row.get("executive_sources") or ()),
+            screened_count=row.get("screened_count"),
+            surfaced_count=row.get("surfaced_count"),
+            suppression=SuppressionAccounting.from_row(row),
+        )
+
+    @property
+    def condition(self) -> str:
+        """The one condition rule: the structured column, else the legacy one,
+        else "". It was spelled twice in renderer.py, 130 lines apart."""
+        return self.dominant_condition or self.legacy_condition or ""
+
+    @property
+    def has_content(self) -> bool:
+        """True when the row carries a renderable brief. False for the
+        accounting-only row a zero-yield run persists (issue #43) — the first
+        ranking key of delivery's test-mode production fallback, which must
+        never let an accounting-only row shadow a content-full one.
+
+        Deliberately asks `dominant_condition`, NOT `condition`: the legacy
+        `macro_sentiment` alone is a tone label, not a brief, and counting it
+        would let a sentiment-only row outrank a real one in the QA fallback."""
+        return bool(self.bullets or self.legacy_text or self.outlook
+                    or self.dominant_condition)
+
+
+def _read_bullets(row: dict) -> Optional[list[dict]]:
+    """executive_bullets when it is a non-empty list of dict bullets, else None.
+    A legacy row whose bullets are a list of strings would otherwise render
+    blank "* :" rows instead of falling back to the prose."""
+    bullets = row.get("executive_bullets")
+    if isinstance(bullets, list) and bullets and all(isinstance(b, dict) for b in bullets):
+        return bullets
+    return None
+
+
+def _read_outlook(row: dict) -> Optional[dict]:
+    """A renderable macro_outlook: a dict with a non-empty current_condition and
+    at least one signal. Anything else (missing, None, malformed, empty signals)
+    is None, so the renderer shows no section. Signal *contents* were validated
+    at ingestion by validate_macro_outlook; this is the defensive read of a
+    stored row. Signals are sliced to MAX_MACRO_OUTLOOK_SIGNALS so rows stored
+    before a cap reduction render at most the current cap.
+
+    The report's display-segment remap is deliberately NOT applied here: that is
+    display policy, not schema, and it stays in report.py."""
+    outlook = row.get("macro_outlook")
+    if not isinstance(outlook, dict):
+        return None
+    current = outlook.get("current_condition")
+    signals = outlook.get("signals")
+    if not isinstance(current, str) or not current.strip():
+        return None
+    if not isinstance(signals, list) or not signals:
+        return None
+    return {**outlook, "signals": signals[:MAX_MACRO_OUTLOOK_SIGNALS]}

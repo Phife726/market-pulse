@@ -65,7 +65,7 @@ def test_send_email_refuses_an_empty_recipient_list(fake_mailer, monkeypatch):
 
 
 def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
-    """Delivery's fetch_macro_summary returns the row verbatim, so macro_outlook
+    """Delivery's fetch_macro_summary returns the typed value, so macro_outlook
     (incl. the test-mode production-row fallback) is carried along for free."""
     import delivery_engine
     fake_repo = InMemoryIntelligenceRepo()
@@ -77,7 +77,7 @@ def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
     summary = delivery_engine.fetch_macro_summary(_RUN)
-    assert summary["macro_outlook"] == VALID_MACRO_OUTLOOK
+    assert summary.outlook == VALID_MACRO_OUTLOOK
 
 
 # ===========================================================================
@@ -230,8 +230,7 @@ def test_fetch_macro_summary_filters_by_run_mode_production(monkeypatch):
 
     result = fetch_macro_summary(_RUN)
     assert result is not None
-    assert result["run_mode"] == "production"
-    assert result["executive_summary"] == "Prod summary"
+    assert result.legacy_text == "Prod summary"   # identifies the production row
 
 
 def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
@@ -252,8 +251,7 @@ def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["run_mode"] == "test"
-    assert result["executive_summary"] == "Test summary"
+    assert result.legacy_text == "Test summary"   # identifies the test row
 
 
 def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch):
@@ -274,8 +272,8 @@ def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch)
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["run_mode"] == "production"
-    assert result["executive_sources"]
+    assert result.legacy_text == "Prod summary"   # identifies the production row
+    assert result.sources
 
 
 def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_row(monkeypatch):
@@ -299,7 +297,7 @@ def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["executive_summary"] == "Fresh prod summary"
+    assert result.legacy_text == "Fresh prod summary"
 
 
 def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatch):
@@ -322,7 +320,7 @@ def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatc
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["executive_summary"] == "Rollover test summary"
+    assert result.legacy_text == "Rollover test summary"
 
 
 def test_fetch_macro_summary_test_mode_accounting_only_test_row_does_not_shadow_production(monkeypatch):
@@ -347,7 +345,7 @@ def test_fetch_macro_summary_test_mode_accounting_only_test_row_does_not_shadow_
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["executive_summary"] == "Prod summary"
+    assert result.legacy_text == "Prod summary"
 
 
 def test_fetch_macro_summary_test_mode_accounting_only_production_row_does_not_shadow_test(monkeypatch):
@@ -372,7 +370,7 @@ def test_fetch_macro_summary_test_mode_accounting_only_production_row_does_not_s
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["executive_summary"] == "Rollover test summary"
+    assert result.legacy_text == "Rollover test summary"
 
 
 def test_fetch_macro_summary_test_mode_returns_accounting_only_row_when_no_content_anywhere(monkeypatch):
@@ -391,7 +389,7 @@ def test_fetch_macro_summary_test_mode_returns_accounting_only_row_when_no_conte
 
     result = fetch_macro_summary(_TEST_RUN)
     assert result is not None
-    assert result["screened_count"] == 6
+    assert result.screened_count == 6
 
 
 def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
@@ -427,7 +425,7 @@ def test_fetch_macro_summary_lookback_floor_is_the_run_instants_yesterday(monkey
         "run_date": _RUN.min_summary_date, "run_mode": "production",
         "executive_summary": "Yesterday", "macro_sentiment": "Stable",
     })
-    assert fetch_macro_summary(_RUN)["executive_summary"] == "Yesterday"
+    assert fetch_macro_summary(_RUN).legacy_text == "Yesterday"
 
 
 # ===========================================================================
@@ -879,7 +877,7 @@ def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
 
 
 def test_fetch_macro_summary_routes_through_repo(monkeypatch):
-    """fetch_macro_summary returns repo.fetch_latest_summary verbatim."""
+    """fetch_macro_summary returns repo.fetch_latest_summary as a MacroSummary."""
     from delivery_engine import fetch_macro_summary
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
@@ -891,7 +889,7 @@ def test_fetch_macro_summary_routes_through_repo(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
     got = fetch_macro_summary(_RUN)
     assert got is not None
-    assert got["executive_summary"] == "today's summary"
+    assert got.legacy_text == "today's summary"
 
 
 def test_fetch_macro_summary_returns_none_when_missing(monkeypatch):

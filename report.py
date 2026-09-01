@@ -25,25 +25,11 @@ from insight import (
     VALID_COMMERCIAL_SEGMENTS,
 )
 from scoring import Scoring
-from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES, MAX_MACRO_OUTLOOK_SIGNALS
+from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES
+from macro_summary import MacroSummary
 from suppression_ledger import SuppressionLedger
 
 logger = logging.getLogger(__name__)
-
-
-def structured_exec_bullets(macro_summary: Optional[dict]) -> Optional[list[dict]]:
-    """Return executive_bullets when it's a non-empty list of dict bullets; else
-    None (legacy/empty/malformed rows). The defensive read of a stored row,
-    shared by the renderer's bullets-vs-prose choice and the citation set, so
-    both agree on which bullets exist.
-
-    A legacy/malformed row whose executive_bullets is a list of strings would
-    otherwise render blank "• :" rows and skip the prose fallback.
-    """
-    bullets = (macro_summary or {}).get("executive_bullets")
-    if isinstance(bullets, list) and bullets and all(isinstance(b, dict) for b in bullets):
-        return bullets
-    return None
 
 
 def _citation_display_map(bullets: Optional[list[dict]], sources: Optional[list[dict]],
@@ -119,25 +105,25 @@ class CitationSet:
                 for cid, n in sorted(self.display_map.items(), key=lambda kv: kv[1])]
 
     @classmethod
-    def from_summary(cls, macro_summary: Optional[dict],
+    def from_summary(cls, macro_summary: Optional[MacroSummary],
                      macro_outlook: Optional[dict] = None) -> "CitationSet":
         """The one numbering rule, applied to a stored daily_summaries row.
 
         `macro_outlook` is the *renderable* outlook — pass the report model's
-        (already extracted, already segment-merged) one; omitted, it is
-        extracted from the row. Either way only signals the email actually shows
-        get numbered, so the footer can never list a source no inline marker
-        references. Display segment labels never participate in numbering, so
-        both spellings yield the same numbers — and a row with no renderable
-        outlook re-extracts to None either way, so passing an extracted None is
+        (already extracted, already segment-merged) one; omitted, the value's
+        own unmapped one is used. Either way only signals the email actually
+        shows get numbered, so the footer can never list a source no inline
+        marker references. Display segment labels never participate in
+        numbering, so both spellings yield the same numbers — and a row with no
+        renderable outlook is None either way, so passing an extracted None is
         indistinguishable from omitting the argument.
         """
+        summary = macro_summary or MacroSummary()
         if macro_outlook is None:
-            macro_outlook = _extract_macro_outlook(macro_summary)
-        sources = tuple((macro_summary or {}).get("executive_sources") or ())
+            macro_outlook = summary.outlook
         signals = (macro_outlook or {}).get("signals") or []
-        bullets = structured_exec_bullets(macro_summary)
-        return cls(sources, _citation_display_map(bullets, sources, signals))
+        return cls(summary.sources,
+                   _citation_display_map(summary.bullets, summary.sources, signals))
 
 
 EMPTY_CITATIONS = CitationSet()
@@ -162,7 +148,7 @@ class ReportModel:
     surfaced_count: int
     screened_count: int
     ledger: SuppressionLedger
-    macro_summary: Optional[dict]
+    macro_summary: Optional[MacroSummary]
     synthesis: dict[str, str] = field(default_factory=dict)
     # Optional-discovery appendix: suppression-surviving rows at/above the
     # supporting threshold not shown as visible cards — the weak-relevance band
@@ -567,44 +553,36 @@ def _map_signal_segments(signal: dict, display_map: dict[str, str]) -> dict:
     return {**signal, "affected_segments": mapped}
 
 
-def _resolve_screened_count(macro_summary: Optional[dict], rows: list[dict]) -> int:
-    screened = (macro_summary or {}).get("screened_count")
+def _resolve_screened_count(macro_summary: Optional[MacroSummary], rows: list[dict]) -> int:
+    """The report's fallback for a row that records no screened_count: the rows
+    it was handed. The QA block deliberately answers this differently ('?') —
+    see MacroSummary for why the value leaves the choice to each consumer."""
+    screened = macro_summary.screened_count if macro_summary else None
     return len(rows) if screened is None else screened
 
 
-def _extract_macro_outlook(
-    macro_summary: Optional[dict],
-    display_map: Optional[dict[str, str]] = None,
+def _display_mapped_outlook(
+    outlook: Optional[dict],
+    display_map: dict[str, str],
 ) -> Optional[dict]:
-    """Pull a renderable macro_outlook out of the macro-summary row: a dict with
-    a non-empty current_condition and at least one signal. Anything else
-    (missing, None, malformed, empty signals) becomes None, so the renderer
-    shows no section. Signal *contents* were validated at ingestion
-    (macro_summary.validate_macro_outlook); this is the defensive read of a stored row.
-    Signals are sliced to MAX_MACRO_OUTLOOK_SIGNALS so rows stored before a
-    cap reduction render at most the current cap (returns a new dict — never
-    mutates the stored row)."""
-    outlook = (macro_summary or {}).get("macro_outlook")
-    if not isinstance(outlook, dict):
-        return None
-    current = outlook.get("current_condition")
-    signals = outlook.get("signals")
-    if not isinstance(current, str) or not current.strip():
-        return None
-    if not isinstance(signals, list) or not signals:
-        return None
-    signals = signals[:MAX_MACRO_OUTLOOK_SIGNALS]
-    if display_map:
-        # Remap affected_segments to display labels for render consistency with
-        # the merged section headers. Validation stayed canonical at ingestion.
-        signals = [_map_signal_segments(s if isinstance(s, dict) else {}, display_map)
-                   for s in signals]
-    return {"current_condition": current, "signals": signals}
+    """A renderable outlook with its affected_segments remapped to display
+    labels. The defensive *read* of the stored row lives on MacroSummary; this
+    adds only the segment display merge, which is report policy — the taxonomy
+    and the ingestion-time validation stay canonical."""
+    signals = (outlook or {}).get("signals")
+    # Defensive even though MacroSummary.from_row guarantees a signals list:
+    # the value is public, all-defaulted and frozen, so a hand-built one (or a
+    # future producer) can present an outlook this never validated.
+    if not outlook or not display_map or not isinstance(signals, list):
+        return outlook
+    return {**outlook,
+            "signals": [_map_signal_segments(sig if isinstance(sig, dict) else {}, display_map)
+                        for sig in signals]}
 
 
 def assemble_report(
     rows: list[dict],
-    macro_summary: Optional[dict] = None,
+    macro_summary: Optional[MacroSummary] = None,
     config: Optional[dict] = None,
 ) -> ReportModel:
     """Run the full decision pipeline over fetched Insight rows.
@@ -721,7 +699,8 @@ def assemble_report(
     # 9. The citation set: one numbering space for the executive bullets and the
     #    outlook signals that will actually render, so every renderer reads the
     #    same numbers instead of deriving its own.
-    macro_outlook = _extract_macro_outlook(macro_summary, display_map)
+    macro_outlook = _display_mapped_outlook(
+        macro_summary.outlook if macro_summary else None, display_map)
     citations = CitationSet.from_summary(macro_summary, macro_outlook)
 
     return ReportModel(

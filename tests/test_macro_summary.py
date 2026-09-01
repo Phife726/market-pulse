@@ -9,6 +9,7 @@ from functools import partial
 
 from tests.conftest import stub_macro_signal, stub_source
 from macro_summary import (
+    MacroSummary,
     assemble_macro_content,
     validate_executive_bullets,
     validate_macro_outlook,
@@ -264,3 +265,103 @@ def test_assemble_macro_outlook_none_when_no_material_signal():
         _parsed(macro_outlook={"current_condition": "x", "signals": []}),
         source_pack=_pack(1, 2, 3), article_count=5)
     assert content["macro_outlook"] is None
+
+
+# ---------------------------------------------------------------------------
+# MacroSummary — the read face of a stored daily_summaries row
+# ---------------------------------------------------------------------------
+
+def _stored_row(**over) -> dict:
+    """A content-full stored summary row, as the delivery fetch returns it."""
+    row = {
+        "executive_summary": "Legacy prose.",
+        "macro_sentiment": "Mixed / Watch",
+        "dominant_condition": "Softening",
+        "executive_bullets": [{"label": "Signal", "text": "t", "citation_source_ids": [1]}],
+        "macro_outlook": {"current_condition": "Softening",
+                          "signals": [stub_macro_signal(citation_source_ids=[1])]},
+        "executive_sources": [stub_source(1)],
+        "screened_count": 87,
+        "surfaced_count": 6,
+        "suppression_breakdown": {"duplicate_url": 3},
+        "suppression_samples": [{"reason": "duplicate_url", "url": "u", "title": "t"}],
+    }
+    row.update(over)
+    return row
+
+
+def test_macro_summary_reads_a_stored_row():
+    s = MacroSummary.from_row(_stored_row())
+    assert s.legacy_text == "Legacy prose."
+    assert s.condition == "Softening"
+    assert s.screened_count == 87
+    assert s.surfaced_count == 6
+    assert s.bullets is not None and len(s.bullets) == 1
+    assert s.outlook is not None and len(s.outlook["signals"]) == 1
+    assert [src["id"] for src in s.sources] == [1]
+    assert s.suppression.breakdown == {"duplicate_url": 3}
+    assert len(s.suppression.samples) == 1
+
+
+def test_macro_summary_condition_prefers_structured_then_falls_back_to_legacy():
+    """One rule, one place: dominant_condition, else macro_sentiment, else ''.
+    It was spelled twice in renderer.py, 130 lines apart."""
+    assert MacroSummary.from_row(_stored_row()).condition == "Softening"
+    assert MacroSummary.from_row(
+        _stored_row(dominant_condition=None)).condition == "Mixed / Watch"
+    assert MacroSummary.from_row(
+        _stored_row(dominant_condition=None, macro_sentiment=None)).condition == ""
+
+
+def test_macro_summary_screened_count_stays_optional():
+    """The value types the read; it does not pick a fallback. The report wants a
+    derived number (len(rows)); the QA block wants to say the row records none."""
+    assert MacroSummary.from_row(_stored_row(screened_count=None)).screened_count is None
+    assert MacroSummary.from_row({}).screened_count is None
+    assert MacroSummary.from_row({}).surfaced_count is None
+
+
+def test_macro_summary_has_content_matches_the_accounting_only_row():
+    """Content-fullness is the test-mode fallback's first ranking key. An
+    accounting-only row (zero-yield run) carries counts but no content."""
+    assert MacroSummary.from_row(_stored_row()).has_content is True
+    accounting_only = {"screened_count": 40, "suppression_breakdown": {"scrape_failed": 9}}
+    assert MacroSummary.from_row(accounting_only).has_content is False
+    for field in ("executive_bullets", "executive_summary", "macro_outlook", "dominant_condition"):
+        assert MacroSummary.from_row({field: _stored_row()[field]}).has_content is True
+
+
+def test_macro_summary_legacy_sentiment_alone_is_not_content():
+    """macro_sentiment is a tone label, not a brief. `condition` composes the
+    two columns for display, but has_content must ask only the structured one —
+    otherwise a sentiment-only row outranks a real one in the QA fallback."""
+    sentiment_only = MacroSummary.from_row({"macro_sentiment": "Mixed / Watch"})
+    assert sentiment_only.condition == "Mixed / Watch"   # still displays
+    assert sentiment_only.has_content is False           # but is not a brief
+
+
+def test_macro_summary_condition_columns_are_kept_apart():
+    s = MacroSummary.from_row(_stored_row())
+    assert (s.dominant_condition, s.legacy_condition) == ("Softening", "Mixed / Watch")
+
+
+def test_macro_summary_defends_against_a_ragged_row():
+    """Legacy and malformed rows reach the renderer; every reader stays defensive."""
+    s = MacroSummary.from_row({
+        "executive_bullets": ["not", "dicts"],
+        "macro_outlook": {"current_condition": "", "signals": []},
+        "executive_sources": None,
+        "executive_summary": None,
+    })
+    assert s.bullets is None
+    assert s.outlook is None
+    assert s.sources == ()
+    assert s.legacy_text == ""
+    assert s.condition == ""
+
+
+def test_macro_summary_from_row_of_none_is_empty_but_constructible():
+    s = MacroSummary.from_row(None)
+    assert s.has_content is False
+    assert s.bullets is None and s.outlook is None and s.sources == ()
+    assert s.screened_count is None and s.suppression.breakdown == {}

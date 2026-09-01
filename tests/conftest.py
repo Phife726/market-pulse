@@ -344,6 +344,18 @@ def stub_summary_row(*, run_date: str, run_mode: str = "production", **overrides
     return row
 
 
+def stub_summary(row: Optional[dict] = None, **overrides) -> "MacroSummary":
+    """A stored `daily_summaries` row as `fetch_macro_summary` hands it on —
+    the typed read face, not the raw row. Tests keep building raw rows (that is
+    what the database holds) and pass them through here, which is the seam the
+    delivery engine crosses. For a test whose subject is the row's *content*,
+    build the literal and wrap it; `stub_summary_row` remains the raw-row
+    builder for tests that assert on what was written."""
+    from macro_summary import MacroSummary
+
+    return MacroSummary.from_row({**(row or {}), **overrides})
+
+
 def stub_llm_insight(**overrides) -> "FakeLLM":
     """A FakeLLM answering one per-article insight: `stub_insight`'s minimal
     payload plus any relevance fields the test adds."""
