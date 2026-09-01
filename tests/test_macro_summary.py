@@ -314,8 +314,9 @@ def test_macro_summary_condition_prefers_structured_then_falls_back_to_legacy():
 
 
 def test_macro_summary_screened_count_stays_optional():
-    """The value types the read; it does not pick a fallback. The report wants a
-    derived number (len(rows)); the QA block wants to say the row records none."""
+    """The value types the read; it does not pick a fallback — an absent
+    recorded count is shown as absent (the QA block's '?', the omitted
+    subtitle clause), never replaced with a different quantity."""
     assert MacroSummary.from_row(_stored_row(screened_count=None)).screened_count is None
     assert MacroSummary.from_row({}).screened_count is None
     assert MacroSummary.from_row({}).surfaced_count is None

@@ -333,8 +333,9 @@ def _render_qa_debug_section(macro_summary: Optional[MacroSummary]) -> str:
     """Render the QA suppression summary block. Caller is responsible for gating
     on test mode; this function does not check MARKET_PULSE_RUN_MODE itself.
 
-    Deliberate staleness: the fields come from the macro-summary row fetched at
-    the START of the run — the pre-write-back state — so on the day's first run
+    Deliberate staleness: this block shows the row's **recorded counts**
+    (see CONTEXT.md) — the macro-summary row as fetched at the START of the
+    run, the pre-write-back state — so on the day's first run
     this block shows ingestion-only counts and a stale/None surfaced count.
     Showing this run's post-merge accounting would require re-fetching the row
     after prepare_report's write-back; the email subtitle's surfaced count
@@ -645,17 +646,13 @@ def _render_exec_summary(macro_summary: Optional[MacroSummary],
       </tr>"""
 
 
-def _render_sources_section(macro_summary: Optional[MacroSummary],
-                            citations: CitationSet | None = None) -> str:
+def _render_sources_section(citations: CitationSet) -> str:
     """Render the cited-source list as a full-width row at the very bottom of the
     email. Numbers come from the same citation set as the inline markers in the
     executive summary AND the macro outlook, so the numbering is identical.
     Returns '' when nothing is cited (legacy rows, or no bullet/signal cited
-    anything)."""
-    if macro_summary is None:
-        return ""
-    if citations is None:
-        citations = CitationSet.from_summary(macro_summary)
+    anything) — the citation set is falsy in exactly those cases, so it is the
+    only input this section needs."""
     footer_html = _render_sources_footer(citations=citations)
     if not footer_html:
         return ""
@@ -727,7 +724,7 @@ def render_report(
 
     # Cited-source list, rendered at the very bottom of the email (below the
     # segment-watch content) rather than under the executive summary block.
-    sources_html = _render_sources_section(macro_summary, citations)
+    sources_html = _render_sources_section(citations)
 
     dominant_condition = macro_summary.condition if macro_summary else ""
 
@@ -743,9 +740,14 @@ def render_report(
 
     qa_html = _render_qa_debug_section(macro_summary) if test_mode else ""
 
+    # An absent recorded count omits the clause (CONTEXT.md: recorded counts).
+    screened = model.screened_count
+    screened_clause = (
+        f" from {html.escape(str(screened))} screened items" if screened is not None else ""
+    )
     subtitle = (
         f"{html.escape(today_str)} &nbsp;&middot;&nbsp; "
-        f"{model.surfaced_count} surfaced signals from {html.escape(str(model.screened_count))} screened items"
+        f"{html.escape(str(model.surfaced_count))} surfaced signals{screened_clause}"
     )
 
     return f"""<!DOCTYPE html>
