@@ -50,7 +50,17 @@ production + in-memory adapters (tests inject the fake at the consumer):
   loop. Candidates stay plain dicts (like Insight).
 - **Suppression ledger** (`suppression_ledger.py`, `SuppressionLedger`) — the
   suppression reason taxonomy, `SAMPLES_CAP`, and same-day-retry merge semantics.
-  Pure value type; both engines record into it.
+  Pure value type; both engines record into it. Side-tagged: a ledger only ever
+  accumulates codes its own side owns, so it is the taxonomy's *write* face.
+  **Suppression accounting** (`SuppressionAccounting`) — the same taxonomy read
+  from the other end: what a stored summary row *records*, as against what a run
+  *accumulates*. A stored row is merged and two-sided — delivery's write-back
+  keeps ingestion's codes — so it carries no side at all. It is the one reader of
+  that shape, tolerant of the ways a stored row goes ragged, and what the
+  test-mode QA block renders.
+  *Avoid*: suppression view (the **renderer** entry reserves "view"), suppression
+  report, suppression summary (that names the QA block that renders it, not the
+  value).
 
 Tests inject the in-memory adapter at the consumer module, e.g.
 `monkeypatch.setattr("ingestion_engine._llm", lambda: FakeLLM(returns=...))`.

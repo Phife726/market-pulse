@@ -25,7 +25,7 @@ from tests.conftest import (
 )
 import insight
 import renderer
-from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, label_for
+from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, SAMPLES_CAP, label_for
 from renderer import (
     _link,
     _render_card,
@@ -1745,3 +1745,51 @@ def test_no_news_variant_escapes_the_callers_date():
     out = render_report(assemble_report([], None, VISIBLE_6_CFG), today_str=_poison("today"), test_mode=True)
     assert _sites(out, POISON) == set()
     assert _sites(out, _html.escape(POISON)) == {"today"}
+
+
+# ===========================================================================
+# QA debug section — reads the row through the ledger's own reader
+# ===========================================================================
+
+def test_qa_debug_section_renders_null_sample_fields_as_blank_not_none():
+    """A null jsonb sample field must not surface as the literal 'None' in the
+    QA email. The section reads samples through SuppressionAccounting, whose
+    coercion is the one boundary that decides this."""
+    macro = {
+        "screened_count": 3, "surfaced_count": 0,
+        "suppression_breakdown": {"llm_discard": 1},
+        "suppression_samples": [{"reason": "llm_discard", "url": None, "title": None}],
+    }
+    out = _render_qa_debug_section(macro)
+    assert '[LLM discard] "" — </td>' in out
+
+
+def test_qa_debug_section_survives_an_uninterpretable_count():
+    """The QA block exists to show what went wrong with the data, so garbage in
+    a breakdown value must not raise — the bad code drops, the rest renders."""
+    macro = {
+        "screened_count": 9, "surfaced_count": 1,
+        "suppression_breakdown": {"duplicate_url": "<b>x</b>", "llm_discard": 4},
+        "suppression_samples": [],
+    }
+    out = _render_qa_debug_section(macro)          # used to raise ValueError
+    assert ">4</td>" in out and "Suppressed: 4" in out
+    assert "duplicate URL" not in out
+
+
+def test_qa_debug_section_samples_cap_and_heading_derive_from_samples_cap():
+    """Both the slice and the heading come from SAMPLES_CAP — no hand-copied
+    ten can drift from the taxonomy's cap."""
+    samples = [{"reason": "duplicate_url", "url": f"https://x/{i}", "title": f"T{i}"}
+               for i in range(SAMPLES_CAP + 4)]
+    macro = {
+        "screened_count": 50, "surfaced_count": 2,
+        "suppression_breakdown": {"duplicate_url": len(samples)},
+        "suppression_samples": samples,
+    }
+    out = _render_qa_debug_section(macro)
+    assert f"Last {SAMPLES_CAP} suppressed items" in out
+    assert out.count("[duplicate URL]") == SAMPLES_CAP
+    # FIFO: the newest SAMPLES_CAP survive, the oldest are dropped.
+    assert "T0" not in out
+    assert f"T{SAMPLES_CAP + 3}" in out

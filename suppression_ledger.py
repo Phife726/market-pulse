@@ -1,5 +1,8 @@
 """Pure in-process module owning the suppression reason taxonomy, samples
-cap, and same-day-retry merge semantics. Performs zero I/O."""
+cap, and same-day-retry merge semantics, plus the two faces of that
+taxonomy: `SuppressionLedger`, the side-tagged accumulator both engines
+record into, and `SuppressionAccounting`, the side-less reader of what a
+persisted row records. Performs zero I/O."""
 from dataclasses import dataclass, field
 from typing import Literal, Mapping
 
@@ -63,6 +66,75 @@ class SuppressionSample:
 
     def to_dict(self) -> dict:
         return {"reason": self.reason, "url": self.url, "title": self.title}
+
+    @classmethod
+    def from_dict(cls, raw: Mapping) -> "SuppressionSample":
+        """The read half of to_dict. A missing or explicitly-null field reads as
+        '' — never the literal 'None', which is what a bare str(None) would put
+        in front of a QA reader."""
+        return cls(
+            reason=str(raw.get("reason") or ""),
+            url=str(raw.get("url") or ""),
+            title=str(raw.get("title") or ""),
+        )
+
+
+@dataclass(frozen=True)
+class SuppressionAccounting:
+    """The side-less read face of a `daily_summaries` row's two suppression
+    columns — what the row *records*, as opposed to what a run *accumulates*.
+
+    A persisted row is merged and two-sided (delivery's write-back keeps
+    ingestion's codes), so it has no single owning side; `SuppressionLedger`
+    is the write face and stays side-tagged. This is the one parser of the
+    persisted shape: `SuppressionLedger.from_row` delegates to it, so the
+    same-day-retry merge and the renderer's QA block read by identical rules.
+
+    Tolerant on purpose, because both consumers take the row as the database
+    left it: missing keys, a null or non-list samples value, a non-dict
+    sample, a null sample field, and an uninterpretable count — dropped, not
+    raised, since raising would skip a whole day's delivery accounting over
+    one meaningless code, and crash the QA email that exists to show it.
+
+    Not capped: `SAMPLES_CAP` is a write policy (`record` / `merge_with`
+    enforce it) and pre-capping here would change `merge_with`'s dedupe over
+    an over-cap legacy row. Readers wanting the display slice ask `recent()`.
+    """
+    breakdown: Mapping[str, int] = field(default_factory=dict)
+    samples:   tuple[SuppressionSample, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_row(cls, row: Mapping | None) -> "SuppressionAccounting":
+        if not row:
+            return cls()
+        # The two columns are jsonb: a ragged row can hand us the wrong container
+        # as easily as the wrong value, and both consumers must survive it — the
+        # merge path would otherwise skip a whole day's accounting, and the QA
+        # email would die rendering the very row it exists to show.
+        breakdown_raw = row.get("suppression_breakdown") or {}
+        samples_raw   = row.get("suppression_samples") or []
+        if not isinstance(samples_raw, (list, tuple)):
+            samples_raw = ()
+        try:
+            pairs = list(dict(breakdown_raw).items())
+        except (TypeError, ValueError):
+            pairs = []
+        breakdown: dict[str, int] = {}
+        for code, count in pairs:
+            try:
+                breakdown[str(code)] = int(count)
+            except (TypeError, ValueError):
+                continue
+        samples = tuple(
+            SuppressionSample.from_dict(s) for s in samples_raw if isinstance(s, dict)
+        )
+        return cls(breakdown=breakdown, samples=samples)
+
+    def recent(self, n: int = SAMPLES_CAP) -> tuple[SuppressionSample, ...]:
+        """The newest `n` samples — the FIFO slice `record` and `merge_with`
+        keep on the way out, offered here so a display doesn't re-implement the
+        cap policy against a write constant."""
+        return self.samples[-n:] if n else ()
 
 
 @dataclass(frozen=True)
@@ -175,20 +247,8 @@ class SuppressionLedger:
 
     @classmethod
     def from_row(cls, side: Side, row: Mapping | None) -> "SuppressionLedger":
-        """Reconstruct a ledger from a daily_summaries row (or None → empty).
-        Tolerates missing keys, non-list samples, and missing sample fields."""
-        if not row:
-            return cls(side=side)
-        breakdown_raw = row.get("suppression_breakdown") or {}
-        samples_raw   = row.get("suppression_samples") or []
-        breakdown = {str(k): int(v) for k, v in dict(breakdown_raw).items()}
-        samples = tuple(
-            SuppressionSample(
-                reason=str(s.get("reason", "")),
-                url=str(s.get("url", "")),
-                title=str(s.get("title", "")),
-            )
-            for s in samples_raw
-            if isinstance(s, dict)
-        )
-        return cls(side=side, breakdown=breakdown, samples=samples)
+        """The accounting reader plus the side tag the caller is about to act
+        as — not the side of the codes in the row, which is merged and
+        two-sided. Parsing and its tolerances live in `SuppressionAccounting`."""
+        acc = SuppressionAccounting.from_row(row)
+        return cls(side=side, breakdown=acc.breakdown, samples=acc.samples)

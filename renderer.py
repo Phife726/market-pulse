@@ -26,7 +26,7 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-from suppression_ledger import ALL_CODES, label_for
+from suppression_ledger import ALL_CODES, SAMPLES_CAP, SuppressionAccounting, label_for
 import scoring
 from report import (
     CitationSet,
@@ -344,10 +344,19 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
 
     screened = macro_summary.get("screened_count")
     surfaced = macro_summary.get("surfaced_count")
-    breakdown = macro_summary.get("suppression_breakdown") or {}
-    samples = macro_summary.get("suppression_samples") or []
+    # The row's suppression columns are read through the ledger module's own
+    # reader — one tolerant parser of the persisted shape, shared with the
+    # same-day-retry merge, rather than a second and weaker one here. It also
+    # owns the FIFO display slice, so no cap policy is re-implemented below.
+    accounting = SuppressionAccounting.from_row(macro_summary)
+    breakdown = accounting.breakdown
+    samples = accounting.recent()
 
-    suppressed_total = sum(int(v) for v in breakdown.values())
+    # Escaping rule for this block: every value sourced from the row is escaped
+    # (the counts too, though the reader now types them as int — the rule holds
+    # by construction, not by re-deriving the type at each site); derived
+    # numbers and taxonomy labels are not row data and are interpolated bare.
+    suppressed_total = sum(breakdown.values())
 
     rows_html = ""
     # Stable display order — ingestion-side first, then delivery-side — derived
@@ -362,18 +371,17 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
                 f'font-family:Arial,sans-serif;">'
                 f'&nbsp;&nbsp;{label}'
                 f'</td><td align="right" style="padding:2px 0;font-size:12px;'
-                f'color:#374151;font-family:Arial,sans-serif;">{breakdown[code]}</td></tr>'
+                f'color:#374151;font-family:Arial,sans-serif;">'
+                f'{html.escape(str(breakdown[code]))}</td></tr>'
             )
 
     samples_html = ""
-    for s in samples[-10:]:
-        reason_label = label_for(str(s.get("reason") or ""))
-        title = str(s.get("title") or "")
-        url = str(s.get("url") or "")
+    for s in samples:
+        reason_label = label_for(s.reason)
         samples_html += (
             f'<tr><td style="padding:2px 0;font-size:11px;color:#6B7280;'
             f'font-family:monospace;">'
-            f'[{html.escape(reason_label)}] "{html.escape(title)}" — {html.escape(url)}'
+            f'[{html.escape(reason_label)}] "{html.escape(s.title)}" — {html.escape(s.url)}'
             f'</td></tr>'
         )
 
@@ -394,7 +402,7 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
                 <p style="margin:12px 0 4px 0;font-size:11px;color:#6B7280;
                            font-family:Arial,sans-serif;text-transform:uppercase;
                            letter-spacing:1px;">
-                  Last 10 suppressed items
+                  Last {SAMPLES_CAP} suppressed items
                 </p>
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
                   {samples_html}
