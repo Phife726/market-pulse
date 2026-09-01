@@ -41,7 +41,7 @@ from renderer import (
     _section_header_row,
     render_report,
 )
-from report import assemble_report, _citation_display_map
+from report import CitationSet, assemble_report, _citation_display_map
 
 
 # ===========================================================================
@@ -1003,8 +1003,11 @@ def test_render_exec_summary_no_summary_returns_empty():
 # ===========================================================================
 
 
-def test_header_falls_back_to_len_data_when_screened_null():
-    """When screened_count is NULL, header uses len(data)."""
+def test_header_omits_screened_clause_when_count_unrecorded():
+    """When the fetched row records no screened_count — or there is no row at
+    all — the subtitle drops the "from N screened items" clause rather than
+    substituting a different quantity (the retired len(rows) invention printed
+    a stored-article count under the "screened" label)."""
     rows = [
         {"url_hash": f"h{i}", "commercial_segment": "Healthcare",
          "americhem_impact_score": 8, "sentiment_tag": "Neutral",
@@ -1023,8 +1026,12 @@ def test_header_falls_back_to_len_data_when_screened_null():
     model = assemble_report(rows, stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
-    assert "from 7 screened items" in html
-    assert "from None screened items" not in html
+    assert "surfaced signals" in html
+    assert "screened items" not in html
+
+    # No summary row at all: the clause is omitted the same way.
+    no_row = assemble_report(rows, None, config=VISIBLE_6_CFG)
+    assert "screened items" not in render_report(no_row, today_str=_TODAY_STR)
 
 
 def test_header_omits_dominant_condition_clause_when_null():
@@ -1355,8 +1362,15 @@ def _macro_with_citations():
     }
 
 
+def _citations(macro=None):
+    """One citation set derived from a summary row — the same construction
+    assembly performs (CitationSet.from_summary; an absent row and an empty
+    row coerce to the same empty set)."""
+    return CitationSet.from_summary(stub_summary(macro))
+
+
 def test_render_sources_section_renders_footer_when_cited():
-    html_out = _render_sources_section(stub_summary(_macro_with_citations()))
+    html_out = _render_sources_section(_citations(_macro_with_citations()))
     assert "Sources" in html_out
     assert "Resin prices climb" in html_out
     assert "reuters.com" in html_out
@@ -1366,14 +1380,15 @@ def test_render_sources_section_renders_footer_when_cited():
 
 
 def test_render_sources_section_empty_for_legacy_and_uncited():
-    # No structured bullets / no executive_sources -> no bottom Sources section.
-    assert _render_sources_section(None) == ""
-    assert _render_sources_section(stub_summary({"executive_summary": "Prose."})) == ""
-    assert _render_sources_section(stub_summary({
+    # No structured bullets / no executive_sources -> no bottom Sources section
+    # (the citation set is falsy in exactly those cases).
+    assert _render_sources_section(_citations()) == ""
+    assert _render_sources_section(_citations({"executive_summary": "Prose."})) == ""
+    assert _render_sources_section(_citations({
         "executive_bullets": ["string bullet"],
         "executive_summary": "Prose.",
     })) == ""
-    assert _render_sources_section(stub_summary({
+    assert _render_sources_section(_citations({
         "executive_bullets": [
             {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
             {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
@@ -1386,9 +1401,10 @@ def test_render_sources_section_empty_for_legacy_and_uncited():
 
 
 def test_sources_section_numbering_matches_inline_markers():
-    macro = _macro_with_citations()
-    exec_html = _render_exec_summary(stub_summary(macro))
-    sources_html = _render_sources_section(stub_summary(macro))
+    summary = stub_summary(_macro_with_citations())
+    citations = CitationSet.from_summary(summary)
+    exec_html = _render_exec_summary(summary, citations)
+    sources_html = _render_sources_section(citations)
     # Inline markers show [1] and [2]; the footer lists [1] and [2] for the same
     # sources (shared deterministic display map).
     assert ">1</a>" in exec_html and ">2</a>" in exec_html

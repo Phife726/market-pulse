@@ -146,7 +146,6 @@ class ReportModel:
     variant: Literal["daily", "no_news"]
     groups: dict[str, list[dict]]
     surfaced_count: int
-    screened_count: int
     ledger: SuppressionLedger
     macro_summary: Optional[MacroSummary]
     synthesis: dict[str, str] = field(default_factory=dict)
@@ -162,6 +161,13 @@ class ReportModel:
     # and the rendered macro-outlook signals. Empty on no_news and on legacy
     # rows with no cited sources.
     citations: CitationSet = EMPTY_CITATIONS
+
+    @property
+    def screened_count(self) -> Optional[int]:
+        """The carried macro summary's recorded screened count (see
+        CONTEXT.md: recorded counts) — derived, so it cannot drift from its
+        one source; None when no row was found or the row records none."""
+        return self.macro_summary.screened_count if self.macro_summary else None
 
     def synthesis_candidates(self) -> dict[str, list[dict]]:
         """Final capped groups with 2+ Insights — the only legal input to
@@ -553,14 +559,6 @@ def _map_signal_segments(signal: dict, display_map: dict[str, str]) -> dict:
     return {**signal, "affected_segments": mapped}
 
 
-def _resolve_screened_count(macro_summary: Optional[MacroSummary], rows: list[dict]) -> int:
-    """The report's fallback for a row that records no screened_count: the rows
-    it was handed. The QA block deliberately answers this differently ('?') —
-    see MacroSummary for why the value leaves the choice to each consumer."""
-    screened = macro_summary.screened_count if macro_summary else None
-    return len(rows) if screened is None else screened
-
-
 def _display_mapped_outlook(
     outlook: Optional[dict],
     display_map: dict[str, str],
@@ -598,7 +596,6 @@ def assemble_report(
             variant="no_news",
             groups={},
             surfaced_count=0,
-            screened_count=_resolve_screened_count(macro_summary, rows),
             ledger=SuppressionLedger.for_delivery(),
             macro_summary=macro_summary,
         )
@@ -707,7 +704,6 @@ def assemble_report(
         variant="daily",
         groups=groups,
         surfaced_count=surfaced_count,
-        screened_count=_resolve_screened_count(macro_summary, rows),
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,

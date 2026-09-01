@@ -217,11 +217,11 @@ class MacroSummary:
     **accounting-only row** (counts, no content). Contents were validated at
     ingestion; this is the read that assumes none of it survived.
 
-    ``screened_count``/``surfaced_count`` stay ``Optional`` on purpose: the
-    value types the read but does not pick a fallback, because the two
-    consumers want different ones — report assembly derives ``len(rows)`` for
-    the subtitle's display number, while the QA block reports ``?`` to say the
-    row records none. One rule there would erase a real distinction.
+    ``screened_count``/``surfaced_count`` stay ``Optional`` on purpose: these
+    are the row's **recorded counts** (see CONTEXT.md), and the value types the
+    read without picking a fallback — an absent count is shown as absent (the
+    QA block's ``?``, the subtitle's omitted clause), never replaced with a
+    different quantity.
     """
     legacy_text: str = ""
     # The row's two condition columns are kept apart: `condition` composes them

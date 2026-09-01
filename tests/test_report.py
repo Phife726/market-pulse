@@ -1387,3 +1387,25 @@ def test_display_mapped_outlook_tolerates_an_outlook_without_signals():
     model = assemble_report([stub_row("a", 8)],
                             MacroSummary(outlook={"current_condition": "x"}), cfg)
     assert model.macro_outlook == {"current_condition": "x"}
+# ===========================================================================
+# Recorded screened_count on the model (derived, never invented)
+# ===========================================================================
+
+
+def test_model_screened_count_is_the_recorded_count():
+    """The model's screened_count is the fetched row's recorded count,
+    verbatim — one source, nothing copied to drift."""
+    model = assemble_report([stub_row("a", 8)],
+                            macro_summary=stub_summary({"screened_count": 21}))
+    assert model.screened_count == 21
+
+
+def test_model_screened_count_none_when_unrecorded():
+    """A row that records no screened_count — or no row at all — yields None in
+    both variants: the model never substitutes a different quantity (the
+    retired len(rows) invention)."""
+    model = assemble_report([stub_row(f"h{i}", 8) for i in range(7)],
+                            macro_summary=stub_summary({"screened_count": None}))
+    assert model.screened_count is None
+    assert assemble_report([stub_row("a", 8)], macro_summary=None).screened_count is None
+    assert assemble_report([], macro_summary=None).screened_count is None

@@ -130,6 +130,20 @@ zero-I/O purity is untouched.
   (no Executive Summary / Macroeconomic Outlook), and in the test-mode
   fallback `MacroSummary.has_content` ranks content-fullness before recency so an
   accounting-only row never shadows a content-full one.
+- **Recorded counts** — the accounting the fetched `daily_summaries` row
+  already carries at delivery-fetch time, as opposed to the counts the
+  delivery run computes. The two counts sit differently against that line:
+  `screened_count` is recorded by ingestion, so the fetched reading is the
+  authoritative one; `surfaced_count` is recorded by delivery's own
+  write-back, so the fetched reading is the *previous* state — absent on a
+  day's first run, the earlier run's number on a same-day retry. Display
+  policy follows the split: reader-facing sections show the run's computed
+  `surfaced_count` and the recorded `screened_count`, while the test-mode QA
+  block shows both counts as recorded — deliberately pre-write-back. A
+  recorded count that is absent is shown as absent (`?`, or its clause
+  omitted), never replaced with a different quantity.
+  *Avoid*: stored counts (every count ends up stored; “recorded” names the
+  fetched, pre-write-back reading).
 - **Delivery window** (`delivery_engine.delivery_window`, `DeliveryWindow`) —
   the set of `daily_intelligence` rows one email carries: everything created
   **strictly after** the last recorded production delivery
@@ -251,9 +265,12 @@ zero-I/O purity is untouched.
   `additional_articles` (the optional-discovery appendix — see below),
   `macro_outlook` (the renderable Macroeconomic Outlook, or `None`),
   `citations` (the **citation set** — the email's one numbering space),
-  `surfaced_count` / `screened_count`, the delivery-side suppression
+  `surfaced_count` (this run's visible-card count — the value the write-back
+  will record) and `screened_count` (a **recorded count**), the
+  delivery-side suppression
   ledger (including the derived `below_impact_threshold` and `weak_relevance`
-  counts), the raw macro-summary row, and the thematic synthesis paragraphs.
+  counts), the **macro summary** (its typed read face, carried whole), and the
+  thematic synthesis paragraphs.
   Produced by `assemble_report` (pure decision pipeline: delivery suppression →
   visibility filter → segment grouping → optional per-segment cap → optional
   total cap → appendix selection → weak-relevance accounting). Consumed by the
