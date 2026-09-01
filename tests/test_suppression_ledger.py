@@ -8,6 +8,7 @@ from suppression_ledger import (
     label_for,
     SuppressionLedger,
     SuppressionSample,
+    SuppressionAccounting,
 )
 
 
@@ -345,3 +346,106 @@ def test_unscrapable_domain_is_ingestion_owned():
         "unscrapable_domain", url="https://www.linkedin.com/posts/x", title="T1",
     )
     assert led.breakdown == {"unscrapable_domain": 1}
+
+
+# --- SuppressionAccounting: the side-less read face of a persisted row -------
+
+def test_accounting_from_row_reads_both_sides_without_a_side_tag():
+    """The persisted row is merged and two-sided; the read face carries no side."""
+    row = {
+        "suppression_breakdown": {"duplicate_url": 2, "below_impact_threshold": 5},
+        "suppression_samples": [
+            {"reason": "duplicate_url", "url": "https://x/1", "title": "T1"},
+            {"reason": "weak_relevance", "url": "https://x/2", "title": "T2"},
+        ],
+    }
+    acc = SuppressionAccounting.from_row(row)
+    assert not hasattr(acc, "side")
+    assert acc.breakdown == {"duplicate_url": 2, "below_impact_threshold": 5}
+    assert acc.samples == (
+        SuppressionSample("duplicate_url", "https://x/1", "T1"),
+        SuppressionSample("weak_relevance", "https://x/2", "T2"),
+    )
+
+
+def test_accounting_from_row_tolerates_none_missing_keys_and_non_dict_samples():
+    assert SuppressionAccounting.from_row(None) == SuppressionAccounting()
+    assert SuppressionAccounting.from_row({}) == SuppressionAccounting()
+    acc = SuppressionAccounting.from_row(
+        {"suppression_breakdown": None, "suppression_samples": ["nope", 7, None]}
+    )
+    assert acc.breakdown == {}
+    assert acc.samples == ()
+
+
+def test_accounting_from_row_coerces_explicit_nulls_to_empty_strings():
+    """An explicit null sample field reads as '', never the literal 'None'.
+    Not reachable from any current writer, but the QA email renders these raw."""
+    acc = SuppressionAccounting.from_row(
+        {"suppression_samples": [{"reason": "llm_discard", "url": None, "title": None},
+                                 {"reason": None, "url": None, "title": None}]}
+    )
+    assert acc.samples == (
+        SuppressionSample("llm_discard", "", ""),
+        SuppressionSample("", "", ""),
+    )
+
+
+def test_accounting_from_row_drops_an_uninterpretable_count():
+    """A non-numeric jsonb count is dropped, not raised on: the QA block that
+    renders this exists to show what went wrong with the data."""
+    acc = SuppressionAccounting.from_row(
+        {"suppression_breakdown": {"duplicate_url": "<b>x</b>", "llm_discard": 3,
+                                   "scrape_failed": None, "semantic_duplicate": "5"}}
+    )
+    assert acc.breakdown == {"llm_discard": 3, "semantic_duplicate": 5}
+
+
+def test_accounting_from_row_does_not_cap_samples():
+    """A faithful reader reports what the row holds; the cap is a write policy
+    (record/merge_with enforce it) and pre-capping would change merge_with."""
+    samples = [{"reason": "duplicate_url", "url": f"https://x/{i}", "title": f"T{i}"}
+               for i in range(SAMPLES_CAP + 3)]
+    acc = SuppressionAccounting.from_row({"suppression_samples": samples})
+    assert len(acc.samples) == SAMPLES_CAP + 3
+
+
+def test_ledger_from_row_is_the_accounting_plus_a_side_tag():
+    """One parser, not two: the ledger's reader delegates to the read face."""
+    row = {
+        "suppression_breakdown": {"duplicate_url": 2},
+        "suppression_samples": [{"reason": "duplicate_url", "url": None, "title": None}],
+    }
+    acc = SuppressionAccounting.from_row(row)
+    led = SuppressionLedger.from_row("delivery", row)
+    assert led.side == "delivery"
+    assert led.breakdown == acc.breakdown
+    assert led.samples == acc.samples
+
+
+def test_accounting_recent_is_the_fifo_display_slice():
+    """The cap policy ('keep the newest SAMPLES_CAP') is offered by the value,
+    so a display never re-implements it against a write constant."""
+    samples = [{"reason": "duplicate_url", "url": f"https://x/{i}", "title": f"T{i}"}
+               for i in range(SAMPLES_CAP + 4)]
+    acc = SuppressionAccounting.from_row({"suppression_samples": samples})
+    assert acc.recent() == acc.samples[-SAMPLES_CAP:]
+    assert [s.title for s in acc.recent()][0] == "T4"
+    assert acc.recent(3) == acc.samples[-3:]
+    assert acc.recent(0) == ()
+    # Fewer samples than the cap: everything survives, in order.
+    short = SuppressionAccounting.from_row({"suppression_samples": samples[:2]})
+    assert short.recent() == short.samples
+
+
+def test_accounting_from_row_survives_a_wrong_container_in_either_column():
+    """jsonb can hand back the wrong container as easily as the wrong value.
+    Neither consumer may raise: the merge path would skip a whole day's
+    accounting, and the QA email would die rendering the row it exists to show."""
+    for bad in ("oops", 5, [1, 2], {"nested": {"a": 1}}, True):
+        assert SuppressionAccounting.from_row({"suppression_breakdown": bad}).breakdown == {}
+        assert SuppressionAccounting.from_row({"suppression_samples": bad}).samples == ()
+    # A well-formed pair sequence is still accepted (jsonb array-of-pairs).
+    assert SuppressionAccounting.from_row(
+        {"suppression_breakdown": [["duplicate_url", 3]]}
+    ).breakdown == {"duplicate_url": 3}
