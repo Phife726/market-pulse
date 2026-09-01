@@ -22,6 +22,7 @@ from tests.conftest import (
     stub_macro_signal,
     stub_row,
     stub_source,
+    stub_summary,
 )
 import insight
 import renderer
@@ -120,7 +121,7 @@ def test_macro_outlook_cites_card_suppressed_article():
         "reporting": {"visible_impact_threshold": 6},
         "delivery_suppression": {"title_patterns_generic_market_report": ["market outlook", "to reach $"]},
     }
-    model = assemble_report([suppressed, visible], macro_summary=macro, config=config)
+    model = assemble_report([suppressed, visible], macro_summary=stub_summary(macro), config=config)
     card_hashes = {a["url_hash"] for arts in model.groups.values() for a in arts}
     assert "supp" not in card_hashes                      # suppressed as a card
     html = render_report(model, today_str=_TODAY_STR)
@@ -278,7 +279,7 @@ def test_legacy_outlook_render_lists_no_orphan_sources():
     }
     rows = [stub_row("v", 8, commercial_segment="Packaging",
                               headline="Packaging demand firms on brand-owner restocking")]
-    model = assemble_report(rows, macro_summary=macro_summary, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, macro_summary=stub_summary(macro_summary), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     # The kept (sliced) sources appear in the Sources footer.
@@ -532,7 +533,7 @@ def _macro_summary_with_outlook() -> dict:
 def test_macro_section_renders_between_exec_and_segment_watch():
     visible = stub_row("v", 8, commercial_segment="Packaging",
                                 headline="High-impact packaging supply disruption card")
-    model = assemble_report([visible], macro_summary=_macro_summary_with_outlook(),
+    model = assemble_report([visible], macro_summary=stub_summary(_macro_summary_with_outlook()),
                             config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert _MACRO_TITLE in html
@@ -551,7 +552,7 @@ def test_macro_section_renders_between_exec_and_segment_watch():
 def test_macro_section_absent_when_none():
     visible = stub_row("v", 8, commercial_segment="Packaging",
                                 headline="High-impact packaging card with no outlook")
-    model = assemble_report([visible], macro_summary={"dominant_condition": "Mixed / Watch"},
+    model = assemble_report([visible], macro_summary=stub_summary({"dominant_condition": "Mixed / Watch"}),
                             config=VISIBLE_6_CFG)
     assert model.macro_outlook is None
     html = render_report(model, today_str=_TODAY_STR)
@@ -562,7 +563,7 @@ def test_macro_section_current_condition_rendered_once():
     model = assemble_report(
         [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card to accompany the macro outlook")],
-        macro_summary=_macro_summary_with_outlook(), config=VISIBLE_6_CFG)
+        macro_summary=stub_summary(_macro_summary_with_outlook()), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert html.count("Industrial and construction demand both softening.") == 1
 
@@ -574,7 +575,7 @@ def test_macro_section_shares_one_citation_numbering_space():
     model = assemble_report(
         [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card next to the macro outlook here")],
-        macro_summary=_macro_summary_with_outlook(), config=VISIBLE_6_CFG)
+        macro_summary=stub_summary(_macro_summary_with_outlook()), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     # Both cited sources resolve in the bottom Sources list.
     assert "Industrial PMI slips" in html
@@ -603,7 +604,7 @@ def test_section_headers_render_without_nowrap():
                            headline="High-impact packaging card for header test"),
          stub_row("w", 5, commercial_segment="Industrial",
                            headline="Near-threshold industrial reading for appendix here")],
-        macro_summary=macro, config=VISIBLE_6_CFG)
+        macro_summary=stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     for title in ("MACROECONOMIC OUTLOOK", "COMMERCIAL SEGMENT WATCH",
                   "Additional Articles to Explore"):
@@ -639,7 +640,7 @@ def test_macro_section_direction_styling_is_valence_neutral():
     model = assemble_report(
         [stub_row("v", 8, commercial_segment="Packaging", sentiment_tag="Neutral",
                            headline="Neutral-tag packaging card beside the outlook")],
-        macro_summary=macro, config=VISIBLE_6_CFG)
+        macro_summary=stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     macro_section = html[html.find(_MACRO_TITLE):html.find("COMMERCIAL SEGMENT WATCH")]
     # No sentiment green/red inside the macro section — direction is neutral.
@@ -654,7 +655,7 @@ def test_macro_section_escapes_untrusted_text():
     model = assemble_report(
         [stub_row("v", 8, commercial_segment="Packaging",
                            headline="Packaging card with an XSS-y macro outlook")],
-        macro_summary=macro, config=VISIBLE_6_CFG)
+        macro_summary=stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
@@ -750,7 +751,7 @@ def test_appendix_renders_below_segment_watch_above_sources():
             {"id": 1, "headline": "Source one", "url": "https://s/1", "domain": "s.com"},
         ],
     }
-    model = assemble_report([visible, weak], macro_summary=macro, config=VISIBLE_6_CFG)
+    model = assemble_report([visible, weak], macro_summary=stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
     i_watch = html.find("COMMERCIAL SEGMENT WATCH")
     i_appendix = html.find(_APPENDIX_TITLE)
@@ -862,7 +863,7 @@ def test_render_report_tolerates_accounting_only_macro_summary():
          "americhem_impact": "Effect.", "source_url": "https://x/v1",
          "entities_mentioned": ["Acme"]},
     ]
-    model = assemble_report(rows, summary, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(summary), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=True)
     assert "Executive Summary" not in html
     assert "MACROECONOMIC OUTLOOK" not in html
@@ -974,7 +975,7 @@ def test_render_exec_summary_uses_structured_bullets_when_present():
         ],
         "executive_summary": "Should not be used.",
     }
-    html = _render_exec_summary(macro)
+    html = _render_exec_summary(stub_summary(macro))
     assert "Market pressure" in html
     assert "A." in html
     assert "Should not be used." not in html
@@ -987,14 +988,14 @@ def test_render_exec_summary_falls_back_to_legacy_when_bullets_null():
         "executive_bullets": None,
         "executive_summary": "Legacy prose summary used.",
     }
-    html = _render_exec_summary(macro)
+    html = _render_exec_summary(stub_summary(macro))
     assert "Legacy prose summary used." in html
     assert "Market pressure" not in html
 
 
 def test_render_exec_summary_no_summary_returns_empty():
     assert _render_exec_summary(None) == ""
-    assert _render_exec_summary({}) == ""
+    assert _render_exec_summary(stub_summary({})) == ""
 
 
 # ===========================================================================
@@ -1019,7 +1020,7 @@ def test_header_falls_back_to_len_data_when_screened_null():
     ], "dominant_condition": "Competitive Pressure",
        "screened_count": None, "surfaced_count": None}
 
-    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     assert "from 7 screened items" in html
@@ -1037,7 +1038,7 @@ def test_header_omits_dominant_condition_clause_when_null():
              "dominant_condition": None, "macro_sentiment": None,
              "screened_count": 5, "surfaced_count": 1}
 
-    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR)
 
     # The literal string 'None' must not appear anywhere as a rendered value.
@@ -1079,7 +1080,7 @@ def test_qa_debug_section_appears_in_test_mode():
         ],
     }
 
-    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=True)
 
     assert "QA" in html
@@ -1112,7 +1113,7 @@ def test_qa_debug_section_absent_in_production():
                                  "title": "Pretty plastic tote"}],
     }
 
-    model = assemble_report(rows, macro, config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(macro), config=VISIBLE_6_CFG)
     html = render_report(model, today_str=_TODAY_STR, test_mode=False)
 
     assert "Suppression Summary" not in html
@@ -1133,7 +1134,7 @@ def test_render_qa_debug_section_uses_friendly_labels():
             {"reason": "duplicate_url", "url": "https://x/1", "title": "Dup"},
         ],
     }
-    html = _render_qa_debug_section(macro)
+    html = _render_qa_debug_section(stub_summary(macro))
     assert "duplicate URL" in html
     assert "semantic duplicate" in html
     assert "LLM discard" in html
@@ -1150,7 +1151,7 @@ def test_render_qa_debug_section_includes_relevance_gate_drops():
         "suppression_breakdown": {"zoominfo_company_mismatch": 3},
         "suppression_samples": [],
     }
-    html = _render_qa_debug_section(macro)
+    html = _render_qa_debug_section(stub_summary(macro))
     assert "ZoomInfo company mismatch" in html
     assert ">3</td>" in html
 
@@ -1290,7 +1291,7 @@ def test_exec_summary_renders_inline_citations_and_footer():
              "domain": "reuters.com", "segment": "Auto", "score": 8},
         ],
     }
-    html_out = _render_exec_summary(macro)
+    html_out = _render_exec_summary(stub_summary(macro))
     # Inline citation marker + link stay in the executive summary block...
     assert "Pricing firm." in html_out
     assert 'href="https://reuters.com/x"' in html_out
@@ -1311,7 +1312,7 @@ def test_exec_summary_legacy_row_renders_without_footer():
             {"label": "Commercial action", "body": "C."},
         ],
     }
-    html_out = _render_exec_summary(macro)
+    html_out = _render_exec_summary(stub_summary(macro))
     assert "A." in html_out
     assert "Sources" not in html_out
     assert "<a" not in html_out
@@ -1319,7 +1320,7 @@ def test_exec_summary_legacy_row_renders_without_footer():
 
 def test_exec_summary_prose_fallback_unchanged():
     macro = {"executive_summary": "Prose summary.", "dominant_condition": "Low Signal"}
-    html_out = _render_exec_summary(macro)
+    html_out = _render_exec_summary(stub_summary(macro))
     assert "Prose summary." in html_out
     assert "Sources" not in html_out
 
@@ -1333,7 +1334,7 @@ def test_exec_summary_legacy_string_bullets_fall_back_to_prose():
         "executive_bullets": ["Market pressure: pricing firm.", "Freight up.", "Watch."],
         "executive_summary": "Prose summary stands in.",
     }
-    html_out = _render_exec_summary(macro)
+    html_out = _render_exec_summary(stub_summary(macro))
     assert "Prose summary stands in." in html_out
     assert "Sources" not in html_out
     assert "<a" not in html_out
@@ -1355,7 +1356,7 @@ def _macro_with_citations():
 
 
 def test_render_sources_section_renders_footer_when_cited():
-    html_out = _render_sources_section(_macro_with_citations())
+    html_out = _render_sources_section(stub_summary(_macro_with_citations()))
     assert "Sources" in html_out
     assert "Resin prices climb" in html_out
     assert "reuters.com" in html_out
@@ -1367,12 +1368,12 @@ def test_render_sources_section_renders_footer_when_cited():
 def test_render_sources_section_empty_for_legacy_and_uncited():
     # No structured bullets / no executive_sources -> no bottom Sources section.
     assert _render_sources_section(None) == ""
-    assert _render_sources_section({"executive_summary": "Prose."}) == ""
-    assert _render_sources_section({
+    assert _render_sources_section(stub_summary({"executive_summary": "Prose."})) == ""
+    assert _render_sources_section(stub_summary({
         "executive_bullets": ["string bullet"],
         "executive_summary": "Prose.",
-    }) == ""
-    assert _render_sources_section({
+    })) == ""
+    assert _render_sources_section(stub_summary({
         "executive_bullets": [
             {"label": "Market pressure", "body": "A.", "citation_source_ids": []},
             {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
@@ -1381,13 +1382,13 @@ def test_render_sources_section_empty_for_legacy_and_uncited():
         "executive_sources": [
             {"id": 1, "headline": "Unused", "url": "https://x.com/a", "domain": "x.com"},
         ],
-    }) == ""
+    })) == ""
 
 
 def test_sources_section_numbering_matches_inline_markers():
     macro = _macro_with_citations()
-    exec_html = _render_exec_summary(macro)
-    sources_html = _render_sources_section(macro)
+    exec_html = _render_exec_summary(stub_summary(macro))
+    sources_html = _render_sources_section(stub_summary(macro))
     # Inline markers show [1] and [2]; the footer lists [1] and [2] for the same
     # sources (shared deterministic display map).
     assert ">1</a>" in exec_html and ">2</a>" in exec_html
@@ -1445,7 +1446,7 @@ def test_citation_numbering_is_one_space_across_bullets_signals_and_footer():
         "commercial_segment": "Packaging",
         "signal_type": "Pricing",
     }]
-    html = render_report(assemble_report(data, macro), today_str=_TODAY_STR)
+    html = render_report(assemble_report(data, stub_summary(macro)), today_str=_TODAY_STR)
 
     def _inline_numbers(fragment: str) -> set[int]:
         """Display numbers inside the superscript citation markers of a fragment
@@ -1484,7 +1485,7 @@ def test_report_places_sources_at_bottom():
         "commercial_segment": "Packaging",
         "signal_type": "Pricing",
     }]
-    html = render_report(assemble_report(data, macro), today_str=_TODAY_STR)
+    html = render_report(assemble_report(data, stub_summary(macro)), today_str=_TODAY_STR)
 
     # The cited-source headline now appears only in the bottom Sources section
     # (it was removed from the executive summary block), exactly once.
@@ -1510,7 +1511,7 @@ def test_exec_summary_sources_present_but_none_cited_renders_no_footer():
              "domain": "x.com", "segment": "Auto", "score": 7},
         ],
     }
-    html_out = _render_exec_summary(macro)
+    html_out = _render_exec_summary(stub_summary(macro))
     assert "A." in html_out
     assert "Sources" not in html_out
     assert "<a" not in html_out
@@ -1531,7 +1532,7 @@ def test_render_qa_debug_section_includes_unscrapable_domain():
         "suppression_breakdown": {"unscrapable_domain": 4},
         "suppression_samples": [],
     }
-    html = _render_qa_debug_section(macro)
+    html = _render_qa_debug_section(stub_summary(macro))
     assert "unscrapable domain" in html
     assert ">4</td>" in html
 
@@ -1549,7 +1550,7 @@ def test_render_qa_debug_section_lists_every_ledger_code():
         "suppression_breakdown": {code: i + 1 for i, code in enumerate(codes)},
         "suppression_samples": [],
     }
-    html = _render_qa_debug_section(macro)
+    html = _render_qa_debug_section(stub_summary(macro))
     for i, code in enumerate(codes):
         assert f"{label_for(code)}</td>" in html, code
         assert f">{i + 1}</td>" in html, code
@@ -1568,7 +1569,7 @@ def test_render_qa_debug_section_orders_ingestion_codes_before_delivery_codes():
         },
         "suppression_samples": [],
     }
-    html = _render_qa_debug_section(macro)
+    html = _render_qa_debug_section(stub_summary(macro))
     positions = [html.index(label_for(c)) for c in
                  ("synthesis_failed", "below_impact_threshold", "appendix_excluded_category")]
     assert positions == sorted(positions)
@@ -1732,7 +1733,7 @@ def test_every_interpolated_data_value_is_escaped(structured):
     rows = [_poisoned_row("a", 8, "alpha bravo charlie delta"),
             _poisoned_row("b", 8, "echo foxtrot golf hotel"),
             _poisoned_row("c", 4, "india juliet kilo lima")]
-    model = assemble_report(rows, _poisoned_macro(structured=structured), config=VISIBLE_6_CFG)
+    model = assemble_report(rows, stub_summary(_poisoned_macro(structured=structured)), config=VISIBLE_6_CFG)
     model = model.with_synthesis({_poison("segment"): _poison("synthesis")})
 
     out = render_report(model, today_str=_poison("today"), test_mode=True)
@@ -1760,7 +1761,7 @@ def test_qa_debug_section_renders_null_sample_fields_as_blank_not_none():
         "suppression_breakdown": {"llm_discard": 1},
         "suppression_samples": [{"reason": "llm_discard", "url": None, "title": None}],
     }
-    out = _render_qa_debug_section(macro)
+    out = _render_qa_debug_section(stub_summary(macro))
     assert '[LLM discard] "" — </td>' in out
 
 
@@ -1772,7 +1773,7 @@ def test_qa_debug_section_survives_an_uninterpretable_count():
         "suppression_breakdown": {"duplicate_url": "<b>x</b>", "llm_discard": 4},
         "suppression_samples": [],
     }
-    out = _render_qa_debug_section(macro)          # used to raise ValueError
+    out = _render_qa_debug_section(stub_summary(macro))          # used to raise ValueError
     assert ">4</td>" in out and "Suppressed: 4" in out
     assert "duplicate URL" not in out
 
@@ -1787,7 +1788,7 @@ def test_qa_debug_section_samples_cap_and_heading_derive_from_samples_cap():
         "suppression_breakdown": {"duplicate_url": len(samples)},
         "suppression_samples": samples,
     }
-    out = _render_qa_debug_section(macro)
+    out = _render_qa_debug_section(stub_summary(macro))
     assert f"Last {SAMPLES_CAP} suppressed items" in out
     assert out.count("[duplicate URL]") == SAMPLES_CAP
     # FIFO: the newest SAMPLES_CAP survive, the oldest are dropped.

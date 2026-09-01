@@ -16,6 +16,7 @@ from scoring import tier as _alert_tier
 # Report assembly lives in report.py (the pure decision pipeline) and
 # rendering in renderer.py (the pure email renderer); tests exercise their
 # internals via those modules directly.
+from macro_summary import MacroSummary
 from report import ReportModel, assemble_report
 from renderer import TEST_MARKER, render_report
 
@@ -91,46 +92,49 @@ def fetch_todays_intelligence(run: RunInstant) -> list[dict]:
     return rows
 
 
-def _summary_has_content(row: Optional[dict]) -> bool:
-    """True when the row carries renderable macro-summary content. Zero-yield
-    ingestion runs persist accounting-only rows (screened/suppression counts
-    with no summary fields, issue #43) — those return False."""
-    if not row:
-        return False
-    return bool(
-        row.get("executive_bullets")
-        or row.get("executive_summary")
-        or row.get("macro_outlook")
-        or row.get("dominant_condition")
-    )
-
-
-def _prefer_production_summary(test_row: Optional[dict], production_row: Optional[dict]) -> bool:
+def _prefer_production_summary(
+    test: Optional[tuple["MacroSummary", str]],
+    production: Optional[tuple["MacroSummary", str]],
+) -> bool:
     """Test-mode fallback comparison: content-fullness first, then strict
     run_date recency; ties keep the test row (the date-rollover grace). An
     accounting-only row therefore never shadows a content-full one in either
-    direction — before issue #43 such rows did not exist at all."""
-    if production_row is None:
+    direction — before issue #43 such rows did not exist at all.
+
+    Each candidate is a (summary, run_date) pair: content-fullness is asked of
+    the schema's own reader, while run_date travels alongside because it is the
+    row *key*, not summary content, and so is not on the value."""
+    if production is None:
         return False
-    if test_row is None:
+    if test is None:
         return True
-    prod_content = _summary_has_content(production_row)
-    test_content = _summary_has_content(test_row)
-    if prod_content != test_content:
-        return prod_content
-    return (
-        str(production_row.get("run_date") or "")
-        > str(test_row.get("run_date") or "")
-    )
+    prod_summary, prod_date = production
+    test_summary, test_date = test
+    if prod_summary.has_content != test_summary.has_content:
+        return prod_summary.has_content
+    return str(prod_date or "") > str(test_date or "")
 
 
-def fetch_macro_summary(run: RunInstant) -> dict | None:
+def _as_candidate(row: Optional[dict]) -> Optional[tuple["MacroSummary", str]]:
+    """A fetched row as the (summary, run_date) pair the ranking compares —
+    the one conversion, so the winner is never re-parsed."""
+    if row is None:
+        return None
+    return MacroSummary.from_row(row), str(row.get("run_date") or "")
+
+
+def fetch_macro_summary(run: RunInstant) -> Optional[MacroSummary]:
     """The macro-summary row for this run: the latest row in the run's mode
-    dated on or after the run instant's yesterday (the date-rollover grace)."""
-    summary = _repo().fetch_latest_summary(
+    dated on or after the run instant's yesterday (the date-rollover grace).
+
+    Converts here, at the seam where the row leaves the repo, so nothing
+    downstream — report assembly, the report model, the renderer — holds raw
+    jsonb. None still means *no row found* (logged); a row that exists but
+    carries no brief is a MacroSummary whose has_content is False."""
+    candidate = _as_candidate(_repo().fetch_latest_summary(
         run_mode=run.run_mode,
         min_date=run.min_summary_date,
-    )
+    ))
     if run.test_mode:
         # Delivery-only test runs (run_ingestion=false) have no same-day
         # test-mode macro row — ingestion is what writes it — and a leftover
@@ -143,20 +147,21 @@ def fetch_macro_summary(run: RunInstant) -> dict | None:
         # touched: the delivery write-back keys on run_mode='test', which
         # matches no row and is a silent no-op UPDATE. Production mode never
         # falls back — it must not read test rows.
-        production_row = _repo().fetch_latest_summary(
+        production = _as_candidate(_repo().fetch_latest_summary(
             run_mode=ANCHOR_RUN_MODE,
             min_date=run.min_summary_date,
-        )
-        if _prefer_production_summary(summary, production_row):
+        ))
+        if _prefer_production_summary(candidate, production):
             logger.info(
                 "Using the production macro-summary row (run_date %s) for the "
                 "QA re-render — test candidate absent, stale, or content-empty.",
-                production_row.get("run_date"),
+                production[1],
             )
-            summary = production_row
-    if summary is None:
+            candidate = production
+    if candidate is None:
         logger.warning("No macro summary found for run_date >= %s.", run.min_summary_date)
-    return summary
+        return None
+    return candidate[0]
 
 
 def _update_delivery_summary_counts(
@@ -250,7 +255,7 @@ def synthesize_thematic_paragraphs(
 
 def prepare_report(
     rows: list[dict],
-    macro_summary: dict | None,
+    macro_summary: Optional[MacroSummary],
     *,
     run: RunInstant,
     report_config: dict | None = None,

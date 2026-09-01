@@ -111,7 +111,16 @@ zero-I/O purity is untouched.
   schema — the validators and the pure `assemble_macro_content` transform that
   turns the raw macro LLM dict into the storable content fields — lives in
   `macro_summary.py` (the run-level twin of `insight.py`); the LLM call and
-  upsert stay in `ingestion_engine.generate_macro_summary`.
+  upsert stay in `ingestion_engine.generate_macro_summary`. That module owns the
+  schema in **both** directions, as `suppression_ledger.py` does for suppression:
+  `assemble_macro_content` is the write face, and `MacroSummary` the read face —
+  one stored row, read defensively and once, at the delivery fetch. Nothing
+  downstream (report assembly, the **report model**, the **renderer**) holds raw
+  stored jsonb, so a reader of this shape has one place to live. A `MacroSummary`
+  that exists but carries no brief is the **accounting-only summary row** below;
+  *no row at all* stays a separate, logged condition.
+  *Avoid*: macro summary row (the row is the storage; the macro summary is what
+  it records), summary model (the **report model** is the model).
 - **Accounting-only summary row** — the `daily_summaries` row a run persists
   when it cannot generate a macro summary (zero stored articles, or an
   unusable LLM response): `run_date`/`run_mode` plus `screened_count` and the
@@ -119,7 +128,7 @@ zero-I/O purity is untouched.
   the upsert payload (Supabase updates only provided columns, so a same-day
   retry never wipes an earlier full summary). Delivery renders it summary-less
   (no Executive Summary / Macroeconomic Outlook), and in the test-mode
-  fallback `_summary_has_content` ranks content-fullness before recency so an
+  fallback `MacroSummary.has_content` ranks content-fullness before recency so an
   accounting-only row never shadows a content-full one.
 - **Delivery window** (`delivery_engine.delivery_window`, `DeliveryWindow`) —
   the set of `daily_intelligence` rows one email carries: everything created

@@ -19,6 +19,7 @@ from tests.conftest import (
     appendix_hashes,
     stub_row,
     stub_source,
+    stub_summary,
 )
 
 
@@ -49,7 +50,7 @@ def test_report_macro_outlook_sliced_to_cap():
     }
     rows = [stub_row("a", 8, commercial_segment="Packaging",
                               headline="Packaging demand firms on brand-owner restocking")]
-    model = assemble_report(rows, macro_summary=macro_summary)
+    model = assemble_report(rows, macro_summary=stub_summary(macro_summary))
 
     assert [s["indicator"] for s in model.macro_outlook["signals"]] == [
         "Indicator 0", "Indicator 1", "Indicator 2",
@@ -599,14 +600,14 @@ def test_report_model_carries_macro_outlook():
     row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card to make a daily model")
     macro = {"dominant_condition": "Demand Softness", "macro_outlook": VALID_MACRO_OUTLOOK}
-    model = assemble_report([row], macro_summary=macro, config=VISIBLE_6_CFG)
+    model = assemble_report([row], macro_summary=stub_summary(macro), config=VISIBLE_6_CFG)
     assert model.macro_outlook == VALID_MACRO_OUTLOOK
 
 
 def test_report_model_macro_outlook_none_when_absent():
     row = stub_row("v", 8, commercial_segment="Packaging",
                             headline="Visible packaging card with no macro outlook")
-    model = assemble_report([row], macro_summary={"dominant_condition": "Mixed / Watch"},
+    model = assemble_report([row], macro_summary=stub_summary({"dominant_condition": "Mixed / Watch"}),
                             config=VISIBLE_6_CFG)
     assert model.macro_outlook is None
 
@@ -617,13 +618,13 @@ def test_report_model_macro_outlook_none_when_malformed():
     for bad in ({}, {"current_condition": "x", "signals": []},
                 {"current_condition": "  ", "signals": [{"indicator": "PMI"}]},
                 {"signals": [{"indicator": "PMI"}]}, "nope", None):
-        model = assemble_report([row], macro_summary={"macro_outlook": bad},
+        model = assemble_report([row], macro_summary=stub_summary({"macro_outlook": bad}),
                                 config=VISIBLE_6_CFG)
         assert model.macro_outlook is None, bad
 
 
 def test_report_model_no_news_macro_outlook_none():
-    model = assemble_report([], macro_summary={"macro_outlook": VALID_MACRO_OUTLOOK},
+    model = assemble_report([], macro_summary=stub_summary({"macro_outlook": VALID_MACRO_OUTLOOK}),
                             config=VISIBLE_6_CFG)
     assert model.variant == "no_news"
     assert model.macro_outlook is None
@@ -1367,10 +1368,22 @@ def test_macro_outlook_affected_segments_show_display_label():
     }
     rows = [stub_row("v", 8, commercial_segment="Transportation - Automotive",
                               headline="EV platform retooling lifts under-hood compound demand")]
-    model = assemble_report(rows, macro_summary=macro_summary, config=_MERGE_CFG)
+    model = assemble_report(rows, macro_summary=stub_summary(macro_summary), config=_MERGE_CFG)
 
     assert model.macro_outlook["signals"][0]["affected_segments"] == ["Transportation — Vehicles"]
     # Stored row untouched.
     assert macro_summary["macro_outlook"]["signals"][0]["affected_segments"] == [
         "Transportation - Automotive", "Transportation - Non-Automotive",
     ]
+
+
+def test_display_mapped_outlook_tolerates_an_outlook_without_signals():
+    """MacroSummary is public, all-defaulted and frozen, so a hand-built (or
+    future-producer) value can present an outlook from_row never validated.
+    The display remap must not be the one place that assumes the signals list."""
+    from macro_summary import MacroSummary
+    cfg = {"reporting": {"visible_impact_threshold": 6,
+                         "segment_display_groups": {"T — V": ["Transportation - Automotive"]}}}
+    model = assemble_report([stub_row("a", 8)],
+                            MacroSummary(outlook={"current_condition": "x"}), cfg)
+    assert model.macro_outlook == {"current_condition": "x"}

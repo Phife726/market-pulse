@@ -26,12 +26,12 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
-from suppression_ledger import ALL_CODES, SAMPLES_CAP, SuppressionAccounting, label_for
+from suppression_ledger import ALL_CODES, SAMPLES_CAP, label_for
+from macro_summary import MacroSummary
 import scoring
 from report import (
     CitationSet,
     ReportModel,
-    structured_exec_bullets as _structured_exec_bullets,
 )
 
 __all__ = ["render_report", "TEST_MARKER"]
@@ -329,7 +329,7 @@ def _render_additional_articles_section(items: list[dict]) -> str:
 
 
 
-def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
+def _render_qa_debug_section(macro_summary: Optional[MacroSummary]) -> str:
     """Render the QA suppression summary block. Caller is responsible for gating
     on test mode; this function does not check MARKET_PULSE_RUN_MODE itself.
 
@@ -339,16 +339,15 @@ def _render_qa_debug_section(macro_summary: Optional[dict]) -> str:
     Showing this run's post-merge accounting would require re-fetching the row
     after prepare_report's write-back; the email subtitle's surfaced count
     (model.surfaced_count) is the authoritative same-run number."""
-    if not macro_summary:
+    if macro_summary is None:
         return ""
 
-    screened = macro_summary.get("screened_count")
-    surfaced = macro_summary.get("surfaced_count")
-    # The row's suppression columns are read through the ledger module's own
-    # reader — one tolerant parser of the persisted shape, shared with the
-    # same-day-retry merge, rather than a second and weaker one here. It also
-    # owns the FIFO display slice, so no cap policy is re-implemented below.
-    accounting = SuppressionAccounting.from_row(macro_summary)
+    screened = macro_summary.screened_count
+    surfaced = macro_summary.surfaced_count
+    # Suppression accounting rides on the summary value, parsed once at the
+    # delivery fetch; the ledger module owns both the parse and the FIFO
+    # display slice, so no cap policy is re-implemented below.
+    accounting = macro_summary.suppression
     breakdown = accounting.breakdown
     samples = accounting.recent()
 
@@ -588,7 +587,7 @@ def _render_macro_outlook_section(macro_outlook: dict | None, citations: Citatio
     return _section("MACROECONOMIC OUTLOOK", _single_cell(outlook), title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)
 
 
-def _render_exec_summary(macro_summary: dict | None,
+def _render_exec_summary(macro_summary: Optional[MacroSummary],
                          citations: CitationSet | None = None) -> str:
     """Render the Executive Summary row.
 
@@ -597,19 +596,14 @@ def _render_exec_summary(macro_summary: dict | None,
     itself is rendered separately at the bottom of the email by
     _render_sources_section, not inside this block.
     """
-    if not macro_summary:
+    if macro_summary is None:
         return ""
 
     if citations is None:
         citations = CitationSet.from_summary(macro_summary)
-    legacy_text = macro_summary.get("executive_summary") or ""
-    condition = (
-        macro_summary.get("dominant_condition")
-        or macro_summary.get("macro_sentiment")
-        or ""
-    )
-
-    bullets = _structured_exec_bullets(macro_summary)
+    legacy_text = macro_summary.legacy_text
+    condition = macro_summary.condition
+    bullets = macro_summary.bullets
     if bullets is not None:
         # Bullets enumerate first in the shared numbering space, so their
         # numbers are the same whether or not the macro section renders.
@@ -651,14 +645,14 @@ def _render_exec_summary(macro_summary: dict | None,
       </tr>"""
 
 
-def _render_sources_section(macro_summary: dict | None,
+def _render_sources_section(macro_summary: Optional[MacroSummary],
                             citations: CitationSet | None = None) -> str:
     """Render the cited-source list as a full-width row at the very bottom of the
     email. Numbers come from the same citation set as the inline markers in the
     executive summary AND the macro outlook, so the numbering is identical.
     Returns '' when nothing is cited (legacy rows, or no bullet/signal cited
     anything)."""
-    if not macro_summary:
+    if macro_summary is None:
         return ""
     if citations is None:
         citations = CitationSet.from_summary(macro_summary)
@@ -735,9 +729,7 @@ def render_report(
     # segment-watch content) rather than under the executive summary block.
     sources_html = _render_sources_section(macro_summary, citations)
 
-    dominant_condition = (macro_summary or {}).get("dominant_condition") or (
-        macro_summary or {}
-    ).get("macro_sentiment") or ""
+    dominant_condition = macro_summary.condition if macro_summary else ""
 
     macro_badge_html = ""
     if dominant_condition:
