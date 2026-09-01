@@ -319,8 +319,15 @@ zero-I/O purity is untouched.
   naming the group — the run fails at t=0 like a missing secret does, instead
   of silently dropping coverage. Policy rules (tier order, macro groups last)
   are not validated here; they are pins against the shipped file.
+  **Entity entry** (`entity_entries(text, *, source)`) — one entity as the control file
+  *lists* it, active or not, in file order: what the file says, as against a
+  target, which is what the loop runs. Every entity target is an entry; an
+  inactive entity is an entry and never a target. An entry is knowledge about
+  the file and decides nothing; whoever edits the file composes a plan from
+  entries — the catalogue never plans.
   *Avoid*: group (a group is a section of the YAML; a target is what the loop
-  runs), search target.
+  runs), search target, inactive target (there is no such thing — that is an
+  entry).
 - **Run budget** (`run_budget.py`, `RunBudget`) — what one ingestion run may
   spend, as a frozen value: the two hard limits — the **scrape cap** (attempted
   scrapes, the API-cost guard) and the **pipeline deadline** (elapsed wall

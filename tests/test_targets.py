@@ -1,7 +1,8 @@
 """The two non-technical control files as shipped — `targets.yaml` and
 `market_pulse_config.yaml` — and `targets.py`, the catalogue: `load_targets` /
 `parse_targets` (the one parser of the first file — over a path or over text in
-hand — fail-fast on shape errors, invalid YAML included), `build_query`.
+hand — fail-fast on shape errors, invalid YAML included), `entity_entries` (the
+same walk's listing of every entity entry, active or not), `build_query`.
 
 Contract tests here read the REAL control files: group order (the four-tier
 degradation policy), the macro groups, the priority-segment split, per-group
@@ -15,7 +16,7 @@ from pathlib import Path
 import pytest
 import yaml
 from run_budget import RunBudget
-from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, load_targets, parse_targets
+from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, entity_entries, load_targets, parse_targets
 from tests.conftest import stub_target
 
 _TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
@@ -903,3 +904,88 @@ def test_parse_targets_names_its_source_in_the_error():
     with pytest.raises(TargetsError, match=r"^targets\.yaml \(proposed\): expected a mapping"):
         parse_targets("- just\n- a list\n", source="targets.yaml (proposed)")
 
+
+
+# ===========================================================================
+# entity_entries — every entity entry in file order, active or not
+# ===========================================================================
+
+_ENTRIES_DOC = """\
+    competitors:
+      search_mode: entity
+      entities:
+        - name: Avient
+          active: true
+          zoominfo_company_id: 357374413
+        - name: "Quoted Co"   # trailing comment
+          active: True
+        - name: Paused Co
+          active: false
+        - name: Placeholder Co
+          active: true
+          zoominfo_company_id: null
+    industry:
+      search_mode: concept
+      active: true
+      include_any: [plastics]
+    customers:
+      search_mode: entity
+      entities:
+        - active: true
+          name: Late Name Co
+    """
+
+
+def test_entity_entries_lists_every_entity_in_file_order_including_inactive():
+    entries = entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")
+    assert [e["name"] for e in entries] == [
+        "Avient", "Quoted Co", "Paused Co", "Placeholder Co", "Late Name Co"]
+    assert [e["ordinal"] for e in entries] == [0, 1, 2, 3, 4]
+    assert [e["group"] for e in entries] == ["competitors"] * 4 + ["customers"]
+    assert [e["active"] for e in entries] == [True, True, False, True, True]
+
+
+def test_entity_entries_distinguish_an_absent_id_from_a_null_placeholder():
+    by_name = {e["name"]: e for e in entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")}
+    assert by_name["Avient"]["zoominfo_company_id"] == 357374413 and by_name["Avient"]["has_id_key"]
+    assert by_name["Quoted Co"]["zoominfo_company_id"] is None and not by_name["Quoted Co"]["has_id_key"]
+    assert by_name["Placeholder Co"]["zoominfo_company_id"] is None and by_name["Placeholder Co"]["has_id_key"]
+
+
+def test_entity_entries_report_whether_the_block_opens_with_name():
+    """The locator assumption of a `- name:` line walker that the parsed
+    document can see — exposed so a script can refuse the entity by name; the
+    spellings it cannot see, a walker detects by count."""
+    by_name = {e["name"]: e for e in entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")}
+    assert by_name["Quoted Co"]["opens_with_name"] is True
+    assert by_name["Late Name Co"]["opens_with_name"] is False
+
+
+def test_entity_entries_share_the_catalogues_entity_validation(tmp_path):
+    """Same walk as parse_targets: an entity the loader rejects is rejected
+    here with the same message, not silently listed."""
+    body = "competitors:\n  search_mode: entity\n  entities:\n    - active: true\n"
+    with pytest.raises(TargetsError, match="entity #1: needs a non-empty string 'name'"):
+        parse_targets(body, source="t")
+    with pytest.raises(TargetsError, match="entity #1: needs a non-empty string 'name'"):
+        entity_entries(body, source="t")
+
+
+def test_entity_entries_decide_nothing():
+    """Read-only knowledge about the file: no key says 'fill me'. The sync
+    script composes its plan from these; the catalogue does not plan."""
+    keys = set(entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")[0])
+    assert keys == {"ordinal", "group", "name", "active", "zoominfo_company_id",
+                    "has_id_key", "opens_with_name"}
+
+
+def test_shipped_targets_yaml_entries_agree_with_the_loaded_entity_targets():
+    """Active entries and loaded entity targets are the same population, in the
+    same order — and every shipped entity block opens with `name:`."""
+    entries = entity_entries(_TARGETS_PATH.read_text(encoding="utf-8"), source="targets.yaml")
+    active = [(e["group"], e["name"], e["zoominfo_company_id"]) for e in entries if e["active"]]
+    loaded = [(t["category"], t["name"], t["zoominfo_company_id"])
+              for t in _real_targets() if t["search_mode"] == "entity"]
+    assert active == loaded
+    assert all(e["opens_with_name"] for e in entries)
+    assert len(entries) >= len(active) > 0

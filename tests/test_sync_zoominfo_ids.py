@@ -7,7 +7,21 @@ post-condition through the targets catalogue: an input the loader rejects, a
 patch that would not load, a patch that loads to something other than the
 current targets plus exactly the fills the catalogue expects (wrong value,
 a walker that silently fills nothing, a same-named curated copy in another
-group) — each refused with exit 1 and nothing written."""
+group) — each refused with exit 1 and nothing written. Decide-in-the-catalogue:
+the catalogue-legal spellings that were stops are fills (quoted name, trailing
+comment, `active: True`, a null placeholder rewritten in place with its note),
+the plan is pinned directly, and what the walker has no locator for is refused
+before patching — by name (a `- active:`-first block at or before a planned
+fill; only the blocking ones named, one after every fill tolerated; a fill
+with no field or placeholder line to anchor on) or by class (the located count
+disagrees with the catalogue's: flow style, a quoted key, a stray `- name:`).
+The count is the ground truth and `opens_with_name` only a hypothesis (a
+`<<:` merge-key entry syncs). The walker is structural: every list item opens
+a block, nested `- name:` sub-lists are absorbed, field edits anchor on the
+entry's first field line (a block-scalar name, a nested id key, a column-0
+comment are all handled). An empty plan is a no-op on any valid file. A drift
+the count cannot see is refused by the anchor when the stray block has no
+field, and by the oracle — exercised with the real walker — when it has."""
 import textwrap
 from typing import Callable
 
@@ -15,6 +29,7 @@ import pytest
 import yaml
 
 import sync_zoominfo_ids as sync
+from targets import entity_entries, load_targets
 
 
 def _write(tmp_path, name, body):
@@ -63,6 +78,10 @@ def _metadata(tmp_path):
             metadata_record_status: active
             zoominfo_metadata_status: approved
             zoominfo_company_id: 11112222
+          Placeholder Co:
+            metadata_record_status: active
+            zoominfo_metadata_status: approved
+            zoominfo_company_id: 55556666
           Dropped Co:
             metadata_record_status: retired
             zoominfo_metadata_status: verified
@@ -73,7 +92,7 @@ def _metadata(tmp_path):
 def test_load_resolved_ids_requires_active_and_approved_status(tmp_path):
     ids = sync.load_resolved_ids(str(_metadata(tmp_path)))
     # verified + approved records with ids are eligible.
-    assert ids == {"Teknor Apex": 73040436, "Paused Co": 11112222}
+    assert ids == {"Teknor Apex": 73040436, "Paused Co": 11112222, "Placeholder Co": 55556666}
     # needs_review is review-only — never eligible for sync, even with an id.
     assert "Needs Review Co" not in ids
     # retired metadata record is ignored regardless of ZoomInfo status.
@@ -150,7 +169,8 @@ def _bad_patch(old_text: str, id_line: str) -> Callable:
     return patch
 
 
-def test_refuses_an_input_the_loader_already_rejects(tmp_path, capsys):
+@pytest.mark.parametrize("write", [False, True])
+def test_refuses_an_input_the_loader_already_rejects(tmp_path, capsys, write):
     targets = _write(tmp_path, "targets.yaml", """\
         industry:
           search_mode: concept
@@ -159,7 +179,7 @@ def test_refuses_an_input_the_loader_already_rejects(tmp_path, capsys):
     metadata = _metadata(tmp_path)
     before = targets.read_text()
 
-    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
+    rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=write)
 
     assert rc == 1
     assert targets.read_text() == before
@@ -206,20 +226,17 @@ def test_post_condition_pins_meaning_not_just_syntax(tmp_path, capsys, monkeypat
     assert "does not mean what the patcher reported" in err and "Teknor Apex" in err
 
 
-def test_post_condition_refuses_a_patcher_that_silently_fills_nothing(tmp_path, capsys):
-    """`active: True` is a boolean the catalogue accepts and the line-walker's
-    literal `active: true` does not see: the real patcher fills nothing and
-    reports nothing, and the post-condition — planned from the catalogue,
-    not from the report — refuses."""
-    targets = _write(tmp_path, "targets.yaml", """\
-        competitors:
-          search_mode: entity
-          entities:
-            - name: Teknor Apex
-              active: True
-        """)
+def test_post_condition_refuses_a_patcher_that_silently_fills_nothing(tmp_path, capsys, monkeypatch):
+    """The oracle is independent of the walker: it plans from the catalogue's
+    runnable targets, not from the walker's report or the entries the plan
+    came from. A walker that returns the text untouched and reports nothing
+    is refused. (Before the plan moved into the catalogue, `active: True`
+    produced this by itself; that spelling is a fill now, so the bug is
+    simulated directly.)"""
+    targets = _targets(tmp_path)
     metadata = _metadata(tmp_path)
     before = targets.read_text()
+    monkeypatch.setattr(sync, "patch_targets", lambda path, ids: (before, before, []))
 
     rc = sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
 
@@ -227,6 +244,7 @@ def test_post_condition_refuses_a_patcher_that_silently_fills_nothing(tmp_path, 
     assert targets.read_text() == before
     err = capsys.readouterr().err
     assert "it filled []" in err and "expected ['Teknor Apex']" in err
+    assert "wrong block" in err
 
 
 def test_same_name_in_two_groups_fills_only_the_id_less_copy(tmp_path):
@@ -248,7 +266,6 @@ def test_same_name_in_two_groups_fills_only_the_id_less_copy(tmp_path):
     metadata = _metadata(tmp_path)
 
     assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
-    from targets import load_targets
     ids = [(t["category"], t["zoominfo_company_id"]) for t in load_targets(str(targets))]
     assert ids == [("competitors", 111), ("customers", sync.load_resolved_ids(str(metadata))["Teknor Apex"])]
 
@@ -269,3 +286,555 @@ def test_string_or_boolean_ids_in_metadata_are_not_resolved(tmp_path):
             zoominfo_metadata_status: approved
         """)
     assert sync.load_resolved_ids(str(metadata)) == {"Real Co": 123}
+
+
+# ---------------------------------------------------------------------------
+# Decide in the catalogue, insert in the text: the spellings that used to be
+# all-or-nothing stops are fills, and the one the walker still cannot place is
+# refused by name before anything is patched.
+# ---------------------------------------------------------------------------
+
+_SPELLINGS = """\
+    # keep this comment
+    competitors:
+      search_mode: entity
+      entities:
+        - name: "Teknor Apex"   # quoted, with a trailing comment
+          active: True
+        - name: Placeholder Co
+          active: true
+          zoominfo_company_id: null   # pending review
+        - name: Paused Co
+          active: false
+    industry:
+      search_mode: concept
+      active: true
+      include_any: [plastics]
+    """
+
+
+def test_catalogue_legal_spellings_are_fills_not_stops(tmp_path):
+    """A quoted name with a trailing comment, `active: True`, and a `null`
+    placeholder all load under the catalogue's rules; the walker no longer
+    judges them, so the sync fills them instead of refusing the whole run."""
+    targets = _write(tmp_path, "targets.yaml", _SPELLINGS)
+    metadata = _metadata(tmp_path)
+
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+
+    ids = {t["name"]: t["zoominfo_company_id"] for t in load_targets(str(targets))
+           if t["search_mode"] == "entity"}
+    assert ids == {"Teknor Apex": 73040436, "Placeholder Co": 55556666}
+    text = targets.read_text()
+    assert "# keep this comment" in text
+    assert '- name: "Teknor Apex"   # quoted, with a trailing comment' in text
+    assert "active: True" in text                       # the operator's spelling survives
+
+
+def test_null_placeholder_is_replaced_in_place_keeping_its_comment(tmp_path):
+    """One key, not two: the value token is rewritten on the existing line and
+    the operator's trailing note is kept for the diff to show."""
+    targets = _write(tmp_path, "targets.yaml", _SPELLINGS)
+    metadata = _metadata(tmp_path)
+    sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True)
+
+    lines = targets.read_text().splitlines()
+    id_lines = [l for l in lines if "zoominfo_company_id" in l]
+    assert "      zoominfo_company_id: 55556666   # pending review" in id_lines
+    assert sum("Placeholder Co" in l for l in lines) == 1
+    assert len([l for l in id_lines if "55556666" in l]) == 1
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_a_block_not_opening_with_name_is_refused_by_name_before_patching(tmp_path, capsys, write):
+    """Legal YAML the line walker cannot count past: refused up front, naming
+    the entity and its group, exit 1, nothing written — not a generic
+    post-condition mismatch after the fact."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - active: true
+              name: Teknor Apex
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=write) == 1
+    err = capsys.readouterr().err
+    assert "Teknor Apex" in err and "competitors" in err and "name:" in err
+    assert "Nothing written" in err
+    assert targets.read_text() == before
+
+
+def test_spellings_sync_is_idempotent(tmp_path):
+    targets = _write(tmp_path, "targets.yaml", _SPELLINGS)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    once = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert targets.read_text() == once
+
+
+def test_plan_fills_is_exactly_active_idless_and_resolved(tmp_path):
+    """The plan pinned directly, not via the walker's effects: a curated copy
+    that already carries an id is not planned even when its name resolves —
+    the walker's replace branch would silently no-op on it, which is exactly
+    why this cannot be left to the post-condition alone."""
+    text = textwrap.dedent("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+              zoominfo_company_id: 111
+            - name: Paused Co
+              active: false
+            - name: Placeholder Co
+              active: true
+              zoominfo_company_id: null
+        customers:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+            - name: Unresolved Co
+              active: true
+        """)
+    ids = {"Teknor Apex": 73040436, "Paused Co": 11112222, "Placeholder Co": 55556666}
+    plan = sync.plan_fills(entity_entries(text, source="t"), ids)
+    assert [(f.ordinal, f.name, f.company_id, f.replace) for f in plan] == [
+        (2, "Placeholder Co", 55556666, True),
+        (3, "Teknor Apex", 73040436, False),
+    ]
+
+
+@pytest.mark.parametrize("placeholder, expected", [
+    ("zoominfo_company_id:", "zoominfo_company_id: 55556666"),
+    ("zoominfo_company_id: # pending", "zoominfo_company_id: 55556666 # pending"),
+    ("zoominfo_company_id: ~   # pending", "zoominfo_company_id: 55556666   # pending"),
+    ("zoominfo_company_id: NULL", "zoominfo_company_id: 55556666"),
+])
+def test_every_placeholder_spelling_is_rewritten_in_place(tmp_path, placeholder, expected):
+    """The walker consults no null vocabulary: the catalogue ruled the value
+    null, the walker keeps the key and the note and replaces what sat between."""
+    targets = _write(tmp_path, "targets.yaml", f"""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Placeholder Co
+              active: true
+              {placeholder}
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert f"      {expected}\n" in targets.read_text()
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 55556666
+
+
+def test_a_comment_at_column_zero_inside_a_block_does_not_hide_the_placeholder(tmp_path):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Placeholder Co
+              active: true
+        # TODO: fill after review
+              zoominfo_company_id: null
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    text = targets.read_text()
+    assert "# TODO: fill after review" in text
+    assert "zoominfo_company_id: 55556666" in text and "null" not in text
+
+
+@pytest.mark.parametrize("doc, why", [
+    ("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - {name: Teknor Apex, active: true}
+            - name: Placeholder Co
+              active: true
+        """, "flow style"),
+    ("""\
+        industry:
+          search_mode: concept
+          active: true
+          include_any: [plastics]
+          entities:
+            - name: Left Over Co
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+        """, "a stray `- name:` list outside an entity group"),
+    ("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - "name": Teknor Apex
+              active: true
+        """, "quoted key"),
+])
+def test_a_spelling_the_locator_cannot_see_is_refused_by_class_before_patching(tmp_path, capsys, doc, why):
+    """`opens_with_name` cannot see these — the catalogue's dict has `name`
+    first — but the walker's `- name:` count disagrees with the entry count,
+    so no ordinal can be trusted: refused up front, naming the class, nothing
+    written, no misleading diff."""
+    targets = _write(tmp_path, "targets.yaml", doc)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 1
+    out = capsys.readouterr()
+    assert "cannot place fills by position" in out.err and "Nothing written" in out.err
+    assert "wrong block" not in out.err
+    assert out.out == ""                    # no diff proposed
+    assert targets.read_text() == before
+
+
+def test_a_wider_dash_keeps_the_inserted_field_aligned(tmp_path):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            -   name: Teknor Apex
+                active: true
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert "        zoominfo_company_id: 73040436\n" in targets.read_text()   # under `name`, column 8
+
+
+def test_a_nested_name_list_under_an_entity_is_not_an_entry(tmp_path):
+    """The count is structural, like the walker: an `aliases:` sub-list with
+    `- name:` items belongs to its entity's block and does not shift ordinals."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 357374413
+              aliases:
+                - name: PolyOne
+                - name: Clariant Masterbatches
+            - name: Teknor Apex
+              active: true
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    ids = {t["name"]: t["zoominfo_company_id"] for t in load_targets(str(targets))}
+    assert ids == {"Avient": 357374413, "Teknor Apex": 73040436}
+    assert "- name: PolyOne" in targets.read_text()
+
+
+def test_a_block_not_opening_with_name_after_every_planned_fill_is_tolerated(tmp_path):
+    """Ordinals before the offending block are sound, so a curated entity
+    hand-added at the end with `active:` before `name:` does not block the
+    sync of everything above it."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+            - active: true
+              name: Curated Co
+              zoominfo_company_id: 999
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    ids = {t["name"]: t["zoominfo_company_id"] for t in load_targets(str(targets))}
+    assert ids == {"Teknor Apex": 73040436, "Curated Co": 999}
+
+
+def test_a_block_not_opening_with_name_before_a_planned_fill_is_refused_by_name(tmp_path, capsys):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - active: true
+              name: Curated Co
+              zoominfo_company_id: 999
+            - name: Teknor Apex
+              active: true
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 1
+    err = capsys.readouterr().err
+    assert "Curated Co" in err and "competitors" in err and "Reorder the keys" in err
+    assert targets.read_text() == before
+
+
+def test_a_block_scalar_name_keeps_the_id_beside_active_not_inside_the_name(tmp_path):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: >-
+                Teknor Apex
+              active: true
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    loaded = load_targets(str(targets))[0]
+    assert (loaded["name"], loaded["zoominfo_company_id"]) == ("Teknor Apex", 73040436)
+
+
+def test_a_nested_id_key_in_a_sub_mapping_is_not_the_placeholder(tmp_path):
+    """Only a key at the entry's own field indent is the entry's placeholder."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Placeholder Co
+              active: true
+              notes:
+                zoominfo_company_id: 5
+              zoominfo_company_id: null
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    text = targets.read_text()
+    assert "    zoominfo_company_id: 5\n" in text          # the nested one, untouched
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 55556666
+
+
+def test_a_tolerated_block_absorbs_its_own_nested_list(tmp_path):
+    """A `- active:`-first entry after every planned fill is tolerated AND its
+    nested `- name:` items are its own — every list item opens a block."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+            - active: false
+              name: Paused Co
+              aliases:
+                - name: PC
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 73040436
+
+
+def test_a_drift_the_count_cannot_see_is_refused_by_the_active_anchor_before_patching(tmp_path, capsys):
+    """One stray `- name:` (a concept term) plus one flow-style inactive entry
+    cancel out in the count, so the ordinals drift and the fill lands on the
+    stray item. That item has no field line to anchor on, so the
+    walker refuses by name before anything is patched — no misleading diff."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        industry:
+          search_mode: concept
+          active: true
+          include_any:
+            - name: not a term
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+            - {name: Paused Co, active: false}
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 1
+    out = capsys.readouterr()
+    assert "no field line" in out.err and "Teknor Apex" in out.err
+    assert out.out == "" and targets.read_text() == before
+
+
+def test_the_oracle_catches_a_drift_the_pre_conditions_cannot_see_with_the_real_walker(tmp_path, capsys):
+    """The same cancelling drift, but the stray item carries its own nested
+    `active:` — every pre-condition passes, the real walker fills the wrong
+    block, and the post-condition — planned from the runnable targets, not
+    the walker — is what keeps the wrong file off disk."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        industry:
+          search_mode: concept
+          active: true
+          include_any:
+            - name: not a term
+              active: true
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+            - {name: Paused Co, active: false}
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 1
+    assert "does not mean what the patcher reported" in capsys.readouterr().err
+    assert targets.read_text() == before
+
+
+def test_a_merge_key_entry_is_located_and_syncs(tmp_path):
+    """PyYAML flattens `<<:` pairs ahead of the entry's own keys, so the
+    catalogue's `opens_with_name` hypothesis is false for it — but the text
+    does open with `- name:` and the walker locates it. The count, not the
+    hypothesis, is the ground truth."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        defaults: &d {active: true}
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              <<: *d
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 73040436
+
+
+def test_the_by_name_refusal_lists_only_the_entries_that_block(tmp_path, capsys):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - active: true
+              name: Blocking Co
+              zoominfo_company_id: 1
+            - name: Teknor Apex
+              active: true
+            - active: true
+              name: Tolerated Co
+              zoominfo_company_id: 2
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 1
+    err = capsys.readouterr().err
+    assert "Blocking Co" in err and "Tolerated Co" not in err
+
+
+def test_a_valid_file_with_nothing_to_fill_is_a_no_op_even_with_a_stray_list(tmp_path, capsys):
+    """The sync doubles as a check on a valid file: with an empty plan there is
+    nothing to place, so no pre-condition runs and a stray `- name:` list the
+    loader ignores does not turn a no-op into a refusal."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        industry:
+          search_mode: concept
+          active: true
+          include_any: [plastics]
+          entities:
+            - name: Left Over Co
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 357374413
+        """)
+    metadata = _metadata(tmp_path)
+    before = targets.read_text()
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert "0 id(s)" in capsys.readouterr().out and targets.read_text() == before
+
+
+def test_a_crlf_file_stays_crlf_after_an_insert(tmp_path):
+    targets = tmp_path / "targets.yaml"
+    targets.write_bytes(b"competitors:\r\n  search_mode: entity\r\n  entities:\r\n"
+                        b"    - name: Teknor Apex\r\n      active: true\r\n")
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    raw = targets.read_bytes()
+    assert b"      zoominfo_company_id: 73040436\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
+
+
+def test_a_scalar_term_spelled_name_colon_is_not_an_entity(tmp_path):
+    """`- name:brand` is one scalar to YAML (no space after the colon); the
+    locator requires the key terminator, so it is not counted as an entry."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        industry:
+          search_mode: concept
+          active: true
+          include_any:
+            - name:brand
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Teknor Apex
+              active: true
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert [t["zoominfo_company_id"] for t in load_targets(str(targets)) if t["search_mode"] == "entity"] == [73040436]
+
+
+def test_a_merged_null_placeholder_is_filled_by_insert(tmp_path):
+    """The catalogue sees a null placeholder that arrived through `<<:`; no
+    line carries it, so the fill is an insert — the entry's own key overrides
+    the merged null, one effective id."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        defaults: &d {active: true, zoominfo_company_id: null}
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Placeholder Co
+              <<: *d
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 55556666
+
+
+@pytest.mark.parametrize("folded, key", [
+    # `Acme` is a bare word before the colon, so it IS key-shaped — the case a
+    # `Teknor Apex: Inc` fixture silently dodges (the space defeats the key
+    # pattern, so such a test passes without exercising the anchor at all).
+    ("Acme: Inc", "Acme: Inc"),
+    ("Teknor Apex: Inc", "Teknor Apex: Inc"),
+    ("note: see below", "note: see below"),
+])
+def test_a_key_shaped_line_inside_a_folded_name_does_not_anchor_the_edit(tmp_path, folded, key):
+    """The entry's field column comes from the `- name:` line, and YAML indents
+    block-scalar content deeper than that — so a continuation line that looks
+    like a key can never be mistaken for the entry's first field."""
+    targets = _write(tmp_path, "targets.yaml", f"""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: >-
+                {folded}
+              active: true
+        """)
+    metadata = _write(tmp_path, "target_metadata.yaml", f"""\
+        version: 1
+        targets:
+          "{key}":
+            metadata_record_status: active
+            zoominfo_metadata_status: verified
+            zoominfo_company_id: 73040436
+        """)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    loaded = load_targets(str(targets))[0]
+    assert (loaded["name"], loaded["zoominfo_company_id"]) == (key, 73040436)
+    assert f"        {folded}\n" in targets.read_text()           # name untouched
+
+
+def test_a_colon_inside_a_folded_name_does_not_anchor_the_edit(tmp_path):
+    targets = _write(tmp_path, "targets.yaml", """\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: >-
+                Teknor Apex: Inc
+              active: true
+        """)
+    metadata = _write(tmp_path, "target_metadata.yaml", """\
+        version: 1
+        targets:
+          "Teknor Apex: Inc":
+            metadata_record_status: active
+            zoominfo_metadata_status: verified
+            zoominfo_company_id: 73040436
+        """)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    loaded = load_targets(str(targets))[0]
+    assert (loaded["name"], loaded["zoominfo_company_id"]) == ("Teknor Apex: Inc", 73040436)
