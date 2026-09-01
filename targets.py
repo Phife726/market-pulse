@@ -115,6 +115,19 @@ def load_targets(config_path: str) -> list[dict]:
         return parse_targets(fh.read(), source=config_path)
 
 
+def _load_document(text: str, *, source: str) -> dict:
+    """The `targets.yaml` document as a mapping of groups, or TargetsError.
+    A document that is not even YAML is the first shape error, not a parser
+    traceback."""
+    try:
+        config = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise TargetsError(f"{source}: not valid YAML — {exc}") from exc
+    if not isinstance(config, dict):
+        raise TargetsError(f"{source}: expected a mapping of groups, got {type(config).__name__}")
+    return config
+
+
 def parse_targets(text: str, *, source: str) -> list[dict]:
     """Parse `text` — the `targets.yaml` document — into the active search targets.
 
@@ -143,12 +156,41 @@ def parse_targets(text: str, *, source: str) -> list[dict]:
         first shape error, not a parser traceback. `source` names the text in
         errors and the log; `load_targets` is this over a file.
     """
-    try:
-        config = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise TargetsError(f"{source}: not valid YAML — {exc}") from exc
-    if not isinstance(config, dict):
-        raise TargetsError(f"{source}: expected a mapping of groups, got {type(config).__name__}")
+    targets, _entries = _walk(_load_document(text, source=source), source=source)
+    logger.info("Loaded %d active targets from %s", len(targets), source)
+    return targets
+
+
+def entity_entries(text: str, *, source: str) -> list[dict]:
+    """Every **entity entry** in `text`, in file order, active or not — what the
+    control file *lists*, as against a target, which is what the loop *runs*.
+    An inactive entity is an entry but never a target.
+
+    Read-only knowledge about the file; decides nothing. Each entry carries
+    ``ordinal`` (its position among all entity entries — the key a line-level
+    editor can count to), ``group``, ``name``, ``active`` (as the catalogue
+    resolves it), ``zoominfo_company_id`` (the value as written: an int, or
+    None), ``has_id_key`` (True for a ``null`` placeholder, False when the key
+    is absent — a text editor must replace one and insert the other), and
+    ``opens_with_name`` (whether ``name:`` is the entry's first key — the one
+    locator assumption of a `- name:` line walker that the parsed document can
+    see, exposed so it can be refused by name; the spellings it cannot see,
+    such as a flow-style item, a walker detects by count).
+
+    The same single walk as `parse_targets`, so the whole-file verdict comes
+    with it: a file the loader rejects is rejected here, with the loader's own
+    message, and a listing is only ever of a file the loader accepts.
+    """
+    _targets, entries = _walk(_load_document(text, source=source), source=source)
+    return entries
+
+
+def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
+    """The one walk over a loaded document: validates everything and returns
+    (active targets, every entity entry). Validation order is the file's:
+    group shape, the group's list fields, then its entities or its concept
+    terms, then its mode — so the first error a reader sees is the same
+    whichever face asked."""
     discovery = config.get("discovery")
     if discovery is not None and not isinstance(discovery, dict):
         raise TargetsError(f"'discovery' must be a mapping, got {type(discovery).__name__}")
@@ -158,6 +200,7 @@ def parse_targets(text: str, *, source: str) -> list[dict]:
     min_article_length = _int_setting("discovery", discovery, "min_article_length", 500)
 
     targets: list[dict] = []
+    entries: list[dict] = []
     for group_name, group_cfg in config.items():
         if group_name == "discovery":
             continue
@@ -180,6 +223,15 @@ def parse_targets(text: str, *, source: str) -> list[dict]:
                     raise TargetsError(f"{entity_owner}: needs a non-empty string 'name'")
                 active = _bool_setting(entity_owner, entity, "active", False)
                 zoominfo_news = _bool_setting(entity_owner, entity, "zoominfo_news", True)
+                entries.append({
+                    "ordinal": len(entries),
+                    "group": group_name,
+                    "name": entity["name"],
+                    "active": active,
+                    "zoominfo_company_id": entity.get("zoominfo_company_id"),
+                    "has_id_key": "zoominfo_company_id" in entity,
+                    "opens_with_name": next(iter(entity)) == "name",
+                })
                 if not active:
                     continue
                 # Optional ZoomInfo enrichment: news defaults on when an id is
@@ -230,5 +282,4 @@ def parse_targets(text: str, *, source: str) -> list[dict]:
 
     if not targets:
         raise TargetsError(f"{source}: no active targets — nothing for a run to do")
-    logger.info("Loaded %d active targets from %s", len(targets), source)
-    return targets
+    return targets, entries
