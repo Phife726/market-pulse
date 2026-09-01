@@ -784,6 +784,40 @@ def test_a_merged_null_placeholder_is_filled_by_insert(tmp_path):
     assert load_targets(str(targets))[0]["zoominfo_company_id"] == 55556666
 
 
+@pytest.mark.parametrize("folded, key", [
+    # `Acme` is a bare word before the colon, so it IS key-shaped — the case a
+    # `Teknor Apex: Inc` fixture silently dodges (the space defeats the key
+    # pattern, so such a test passes without exercising the anchor at all).
+    ("Acme: Inc", "Acme: Inc"),
+    ("Teknor Apex: Inc", "Teknor Apex: Inc"),
+    ("note: see below", "note: see below"),
+])
+def test_a_key_shaped_line_inside_a_folded_name_does_not_anchor_the_edit(tmp_path, folded, key):
+    """The entry's field column comes from the `- name:` line, and YAML indents
+    block-scalar content deeper than that — so a continuation line that looks
+    like a key can never be mistaken for the entry's first field."""
+    targets = _write(tmp_path, "targets.yaml", f"""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: >-
+                {folded}
+              active: true
+        """)
+    metadata = _write(tmp_path, "target_metadata.yaml", f"""\
+        version: 1
+        targets:
+          "{key}":
+            metadata_record_status: active
+            zoominfo_metadata_status: verified
+            zoominfo_company_id: 73040436
+        """)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    loaded = load_targets(str(targets))[0]
+    assert (loaded["name"], loaded["zoominfo_company_id"]) == (key, 73040436)
+    assert f"        {folded}\n" in targets.read_text()           # name untouched
+
+
 def test_a_colon_inside_a_folded_name_does_not_anchor_the_edit(tmp_path):
     targets = _write(tmp_path, "targets.yaml", """\
         competitors:

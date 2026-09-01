@@ -80,17 +80,17 @@ def load_resolved_ids(metadata_path: str) -> dict[str, int]:
 # The walker's two locators. Neither judges a value — active/id-less/resolved
 # come from the catalogue's entries; these only find the line to edit.
 # `    - name: Foo` (entity list item): captures the indent the block hangs off.
-_NAME_RE = re.compile(r"^(\s*)-\s+name:(?:\s|$)")
+_NAME_RE = re.compile(r"^((\s*)-\s+)name:(?:\s|$)")
 # Any list item at all — the walker opens a block on every one, so whatever
 # sits nested under an item it does not recognise (a `- active:`-first entry,
 # a concept term) is absorbed into that block instead of surfacing as an entry.
 _ITEM_RE = re.compile(r"^(\s*)-(?:\s|$)")
-# `      key: ...` — the entry's first field line: a plausible mapping key
-# (`active:`, `<<:`) followed by its terminator, at the block's own indent. It
-# anchors where the entity's fields sit: the id line is inserted there, and a
-# rewrite only touches a key at that indent — never one nested in a
-# sub-mapping, nor a continuation line of a block-scalar name (`Foo: Inc`,
-# `https://…` — neither is a bare key followed by a space).
+# `      key: ...` — a plausible mapping key followed by its terminator. Used
+# only at the entry's own field indent, which comes from the `- name:` line:
+# YAML puts every sibling field at the column of `name`, and the content of a
+# block-scalar name must be indented DEEPER than that. So a continuation line
+# that happens to look like a key (`Acme: Inc`, `note: see below`) can never be
+# mistaken for the entry's first field, and neither can a nested sub-mapping.
 _KEY_RE = re.compile(r"^(\s*)(?:<<|[A-Za-z_][\w.-]*):(?:\s|$)")
 # `    zoominfo_company_id: <whatever>   # note` — the key, then whatever value
 # is written (the catalogue already ruled it null; no null vocabulary here),
@@ -214,15 +214,16 @@ def _rewrite_id_line(line: str, company_id: int) -> str:
     return _ID_KEY_RE.sub(rf"\g<1> {company_id}\g<2>", body, count=1) + line[len(body):]
 
 
-def _field_anchor(block: list[str]) -> Optional[tuple[int, str]]:
-    """(index, indent) of the entry's first field line — the anchor for every
-    field edit. Fields precede whatever nests under them, so the first key-shaped
-    line sits at the entry's own field indent. None only for a block with no
-    field at all, which the plan never names (a fillable entry is active)."""
+def _field_anchor(block: list[str], field_indent: str) -> Optional[int]:
+    """Index of the entry's first field line — where the id line is inserted.
+    A field is a key at exactly `field_indent`, the column the `- name:` line
+    fixes; anything indented deeper is a block-scalar continuation or a nested
+    mapping, never a sibling. None only for a block with no field at all, which
+    the plan never names (a fillable entry has an `active:` key)."""
     for k, fl in enumerate(block):
         m = _KEY_RE.match(fl)
-        if m:
-            return k, m.group(1)
+        if m and m.group(1) == field_indent:
+            return k
     return None
 
 
@@ -252,13 +253,15 @@ def patch_targets(targets_path: str, ids: dict[str, int]) -> tuple[str, str, lis
         line, block = lines[i], lines[i + 1:j]
         fill = fills.get(ordinal)
         if fill is not None:
-            anchor = _field_anchor(block)
-            if anchor is None:
+            # YAML fixes the entry's field column at the column of `name`.
+            field_indent = " " * len(_NAME_RE.match(line).group(1))
+            a = _field_anchor(block, field_indent)
+            if a is None:
                 raise UnplaceableEntity(
                     f"{targets_path}: '{fill.name}' is planned as a fill, but the patcher "
-                    f"finds no field line in its block to anchor on. Nothing was patched."
+                    f"finds no field line at the entry's own indent to anchor on. Nothing "
+                    f"was patched."
                 )
-            a, field_indent = anchor
             k = next((k for k, fl in enumerate(block)
                       if fl.startswith(field_indent + "zoominfo_company_id:")), None)
             if fill.replace and k is not None:
