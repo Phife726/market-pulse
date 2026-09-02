@@ -265,8 +265,9 @@ zero-I/O purity is untouched.
   `additional_articles` (the optional-discovery appendix — see below),
   `macro_outlook` (the renderable Macroeconomic Outlook, or `None`),
   `citations` (the **citation set** — the email's one numbering space),
-  `surfaced_count` (this run's visible-card count — the value the write-back
-  will record) and `screened_count` (a **recorded count**), the
+  `surfaced_count` (this run's visible-card count, derived from the final
+  groups — the value the write-back will record) and `screened_count` (a
+  **recorded count**, derived from the carried macro summary), the
   delivery-side suppression
   ledger (including the derived `below_impact_threshold` and `weak_relevance`
   counts), the **macro summary** (its typed read face, carried whole), and the

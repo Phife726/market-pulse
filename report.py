@@ -129,6 +129,13 @@ class CitationSet:
 EMPTY_CITATIONS = CitationSet()
 
 
+def _visible_card_count(groups: dict[str, list[dict]]) -> int:
+    """The visible-card count of a set of segment groups — every card in every
+    group. The one spelling of the rule, shared by the total-visible cap and
+    ReportModel.surfaced_count."""
+    return sum(len(arts) for arts in groups.values())
+
+
 @dataclass(frozen=True)
 class ReportModel:
     """The assembled daily report as plain frozen data.
@@ -138,21 +145,18 @@ class ReportModel:
       still yields "daily" (full chrome, zero cards, write-back still owed).
     - groups values are materiality-descending; per-segment and total caps hold
       when configured (a null / absent cap means show every visible article).
-    - surfaced_count == sum(len(arts) for arts in groups.values()).
     - ledger is the complete delivery-side accounting, including the derived
       below_impact_threshold and weak_relevance counts — the write-back
       consumes it verbatim.
     """
     variant: Literal["daily", "no_news"]
     groups: dict[str, list[dict]]
-    surfaced_count: int
     ledger: SuppressionLedger
     macro_summary: Optional[MacroSummary]
     synthesis: dict[str, str] = field(default_factory=dict)
     # Optional-discovery appendix: suppression-surviving rows at/above the
     # supporting threshold not shown as visible cards — the weak-relevance band
-    # plus rows capped out of their segment. Never counted in surfaced_count.
-    # Empty on no_news.
+    # plus rows capped out of their segment. Empty on no_news.
     additional_articles: tuple[dict, ...] = ()
     # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
     # non-empty current_condition and >=1 signal, else None. None on no_news.
@@ -161,6 +165,15 @@ class ReportModel:
     # and the rendered macro-outlook signals. Empty on no_news and on legacy
     # rows with no cited sources.
     citations: CitationSet = EMPTY_CITATIONS
+
+    @property
+    def surfaced_count(self) -> int:
+        """This run's computed visible-card count — the value the write-back
+        will record (the computed side of CONTEXT.md's recorded-counts split,
+        not a recorded count). Derived from the final post-cap, post-merge
+        groups, so it cannot disagree with them; 0 whenever groups is empty
+        (no_news, or a daily report suppressed to no cards)."""
+        return _visible_card_count(self.groups)
 
     @property
     def screened_count(self) -> Optional[int]:
@@ -595,7 +608,6 @@ def assemble_report(
         return ReportModel(
             variant="no_news",
             groups={},
-            surfaced_count=0,
             ledger=SuppressionLedger.for_delivery(),
             macro_summary=macro_summary,
         )
@@ -633,8 +645,7 @@ def assemble_report(
     }
 
     # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
-    total = sum(len(arts) for arts in groups.values())
-    if max_total_visible is not None and total > max_total_visible:
+    if max_total_visible is not None and _visible_card_count(groups) > max_total_visible:
         all_visible = sorted(
             [(seg, a) for seg, arts in groups.items() for a in arts],
             key=lambda kv: _effective_impact(kv[1]),
@@ -649,7 +660,7 @@ def assemble_report(
 
     # 6. Optional-discovery appendix: suppression survivors at/above the
     #    supporting threshold not shown as cards — the weak-relevance band plus
-    #    rows capped out of their segment. Does NOT alter surfaced_count.
+    #    rows capped out of their segment.
     #    Rows from an excluded discovery category (the macro_* groups, issue
     #    #73) are kept out of the appendix — appendix-only: they were already
     #    a visible card if scored high enough, and they fed the outlook's
@@ -686,9 +697,7 @@ def assemble_report(
         and r.get("url_hash") not in shown_hashes
     )
 
-    # 8. surfaced_count is the FINAL visible-card count (post-cap, post-grouping).
-    surfaced_count = sum(len(arts) for arts in groups.values())
-
+    # 8. Fold the derived counts into the ledger.
     ledger = (ledger
               .record_count("below_impact_threshold", below_threshold_count)
               .record_count("weak_relevance", weak_relevance_count))
@@ -703,7 +712,6 @@ def assemble_report(
     return ReportModel(
         variant="daily",
         groups=groups,
-        surfaced_count=surfaced_count,
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
