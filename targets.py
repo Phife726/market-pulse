@@ -167,11 +167,10 @@ def entity_entries(text: str, *, source: str) -> list[dict]:
     An inactive entity is an entry but never a target.
 
     Read-only knowledge about the file; decides nothing. Each entry carries
-    ``ordinal`` (its position among all entity entries — the key a line-level
-    editor can count to), ``group``, ``name``, ``active`` (as the catalogue
-    resolves it), ``zoominfo_company_id`` (the value as written: an int, or
-    None), ``has_id_key`` (True for a ``null`` placeholder, False when the key
-    is absent — a text editor must replace one and insert the other).
+    ``group``, ``name``, ``active`` (as the catalogue resolves it) and
+    ``zoominfo_company_id`` (the value as written: an int, or None — an absent
+    key and a ``null`` placeholder read alike; where a placeholder *line*
+    sits is a fact of the text, which a text editor reads for itself).
 
     The same single walk as `parse_targets`, so the whole-file verdict comes
     with it: a file the loader rejects is rejected here, with the loader's own
@@ -220,12 +219,10 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
                 active = _bool_setting(entity_owner, entity, "active", False)
                 zoominfo_news = _bool_setting(entity_owner, entity, "zoominfo_news", True)
                 entries.append({
-                    "ordinal": len(entries),
                     "group": group_name,
                     "name": entity["name"],
                     "active": active,
                     "zoominfo_company_id": entity.get("zoominfo_company_id"),
-                    "has_id_key": "zoominfo_company_id" in entity,
                 })
                 if not active:
                     continue

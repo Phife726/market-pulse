@@ -940,16 +940,17 @@ def test_entity_entries_lists_every_entity_in_file_order_including_inactive():
     entries = entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")
     assert [e["name"] for e in entries] == [
         "Avient", "Quoted Co", "Paused Co", "Placeholder Co", "Late Name Co"]
-    assert [e["ordinal"] for e in entries] == [0, 1, 2, 3, 4]
     assert [e["group"] for e in entries] == ["competitors"] * 4 + ["customers"]
     assert [e["active"] for e in entries] == [True, True, False, True, True]
 
 
-def test_entity_entries_distinguish_an_absent_id_from_a_null_placeholder():
+def test_entity_entries_read_an_absent_id_and_a_null_placeholder_alike():
+    """Both are id-less to the catalogue; whether a placeholder line exists
+    to rewrite is the text's fact, read by the sync's own locator."""
     by_name = {e["name"]: e for e in entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")}
-    assert by_name["Avient"]["zoominfo_company_id"] == 357374413 and by_name["Avient"]["has_id_key"]
-    assert by_name["Quoted Co"]["zoominfo_company_id"] is None and not by_name["Quoted Co"]["has_id_key"]
-    assert by_name["Placeholder Co"]["zoominfo_company_id"] is None and by_name["Placeholder Co"]["has_id_key"]
+    assert by_name["Avient"]["zoominfo_company_id"] == 357374413
+    assert by_name["Quoted Co"]["zoominfo_company_id"] is None
+    assert by_name["Placeholder Co"]["zoominfo_company_id"] is None
 
 
 def test_entity_entries_share_the_catalogues_entity_validation(tmp_path):
@@ -966,8 +967,7 @@ def test_entity_entries_decide_nothing():
     """Read-only knowledge about the file: no key says 'fill me'. The sync
     script composes its plan from these; the catalogue does not plan."""
     keys = set(entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")[0])
-    assert keys == {"ordinal", "group", "name", "active", "zoominfo_company_id",
-                    "has_id_key"}
+    assert keys == {"group", "name", "active", "zoominfo_company_id"}
 
 
 def test_shipped_targets_yaml_entries_agree_with_the_loaded_entity_targets():
