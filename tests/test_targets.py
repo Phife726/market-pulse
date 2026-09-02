@@ -952,15 +952,6 @@ def test_entity_entries_distinguish_an_absent_id_from_a_null_placeholder():
     assert by_name["Placeholder Co"]["zoominfo_company_id"] is None and by_name["Placeholder Co"]["has_id_key"]
 
 
-def test_entity_entries_report_whether_the_block_opens_with_name():
-    """The locator assumption of a `- name:` line walker that the parsed
-    document can see — exposed so a script can refuse the entity by name; the
-    spellings it cannot see, a walker detects by count."""
-    by_name = {e["name"]: e for e in entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")}
-    assert by_name["Quoted Co"]["opens_with_name"] is True
-    assert by_name["Late Name Co"]["opens_with_name"] is False
-
-
 def test_entity_entries_share_the_catalogues_entity_validation(tmp_path):
     """Same walk as parse_targets: an entity the loader rejects is rejected
     here with the same message, not silently listed."""
@@ -976,16 +967,15 @@ def test_entity_entries_decide_nothing():
     script composes its plan from these; the catalogue does not plan."""
     keys = set(entity_entries(textwrap.dedent(_ENTRIES_DOC), source="t")[0])
     assert keys == {"ordinal", "group", "name", "active", "zoominfo_company_id",
-                    "has_id_key", "opens_with_name"}
+                    "has_id_key"}
 
 
 def test_shipped_targets_yaml_entries_agree_with_the_loaded_entity_targets():
     """Active entries and loaded entity targets are the same population, in the
-    same order — and every shipped entity block opens with `name:`."""
+    same order."""
     entries = entity_entries(_TARGETS_PATH.read_text(encoding="utf-8"), source="targets.yaml")
     active = [(e["group"], e["name"], e["zoominfo_company_id"]) for e in entries if e["active"]]
     loaded = [(t["category"], t["name"], t["zoominfo_company_id"])
               for t in _real_targets() if t["search_mode"] == "entity"]
     assert active == loaded
-    assert all(e["opens_with_name"] for e in entries)
     assert len(entries) >= len(active) > 0
