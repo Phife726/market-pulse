@@ -844,6 +844,24 @@ def test_a_single_line_merged_entry_has_no_anchor_and_is_refused_by_name(tmp_pat
     assert "Teknor Apex" in err and "line 5" in err and "anchor" in err
 
 
+def test_a_group_introduced_by_a_root_merge_is_located(tmp_path):
+    """safe_load flattens a root-level `<<:` too, so the catalogue lists the
+    merged-in group; the walk must resolve root merges the same way (and never
+    hand the merge key itself to the constructor)."""
+    targets = _write(tmp_path, "targets.yaml", """\
+        groups: &groups
+          competitors:
+            search_mode: entity
+            entities:
+              - name: Teknor Apex
+                active: true
+        <<: *groups
+        """)
+    metadata = _metadata(tmp_path)
+    assert sync.run(targets_path=str(targets), metadata_path=str(metadata), write=True) == 0
+    assert load_targets(str(targets))[0]["zoominfo_company_id"] == 73040436
+
+
 def test_a_flow_style_planned_entry_is_refused_by_its_name_and_line(tmp_path, capsys):
     """Marks locate a flow-style item, but a line patcher cannot insert a key
     into it — so the refusal names the entry and its line instead of

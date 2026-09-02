@@ -132,30 +132,42 @@ def _planned(entry: dict, ids: dict[str, int]) -> bool:
     return entry["active"] and _fillable(entry["zoominfo_company_id"], entry["name"], ids)
 
 
-def _merged_value(node: yaml.MappingNode, key: str) -> Optional[yaml.Node]:
-    """The value node under `key`, with PyYAML's merge semantics: the node's
-    own pair wins, else the first `<<:` target carrying it, each target
-    flattened recursively. Identification only — merges are followed to read
-    `name` and `entities`, never to place an edit. Compose has already
-    resolved aliases into shared nodes."""
-    merge_targets: list = []
+def _flattened_pairs(node: yaml.MappingNode) -> list[tuple[yaml.Node, yaml.Node]]:
+    """The mapping's pairs as safe_load sees them — PyYAML's `flatten_mapping`
+    mirrored: `<<:` targets' pairs (each flattened recursively; a sequence of
+    targets in reverse) come first, the node's own pairs after, and a key
+    that appears twice keeps its first position with its last value, which is
+    exactly the dict the constructor builds. Identification only — merges are
+    followed to read `name`, `entities` and the root's groups, never to place
+    an edit. Compose has already resolved aliases into shared nodes."""
+    pairs: list[tuple[yaml.Node, yaml.Node]] = []
     for k, v in node.value:
-        if k.tag == _MERGE_TAG:
-            merge_targets.extend(v.value if isinstance(v, yaml.SequenceNode) else [v])
-        elif isinstance(k, yaml.ScalarNode) and k.value == key:
-            return v
-    for target in merge_targets:
-        if isinstance(target, yaml.MappingNode):
-            found = _merged_value(target, key)
-            if found is not None:
-                return found
-    return None
+        if k.tag != _MERGE_TAG:
+            pairs.append((k, v))
+            continue
+        targets = list(reversed(v.value)) if isinstance(v, yaml.SequenceNode) else [v]
+        for target in targets:
+            if isinstance(target, yaml.MappingNode):
+                pairs.extend(_flattened_pairs(target))
+    merged: dict = {}
+    for k, v in pairs:
+        ident = k.value if isinstance(k, yaml.ScalarNode) else id(k)
+        merged[ident] = (merged[ident][0], v) if ident in merged else (k, v)
+    return list(merged.values())
+
+
+def _merged_value(node: yaml.MappingNode, key: str) -> Optional[yaml.Node]:
+    """The value node under `key`, with safe_load's merge semantics."""
+    return next((v for k, v in _flattened_pairs(node)
+                 if isinstance(k, yaml.ScalarNode) and k.value == key), None)
 
 
 def _scalar_key(node: yaml.Node):
     """A mapping key as safe_load constructs it (`2024:` is the int 2024), so
     the walk compares with the catalogue's group names like with like."""
-    return SafeConstructor().construct_object(node) if isinstance(node, yaml.ScalarNode) else None
+    if not isinstance(node, yaml.ScalarNode) or node.tag == _MERGE_TAG:
+        return None
+    return SafeConstructor().construct_object(node)
 
 
 def _entity_loc(item: yaml.Node) -> _EntityLoc:
@@ -187,14 +199,15 @@ def _entity_loc(item: yaml.Node) -> _EntityLoc:
 def _locate(text: str, entries: list[dict], *, source: str) -> list[tuple[dict, _EntityLoc]]:
     """Every catalogue entry joined to its place in the text. The composed
     document is walked only where the catalogue reported entries — the groups
-    it named, in file order — so no mode rule is re-decided here: a concept
+    it named, in the order safe_load's root mapping holds them (root `<<:`
+    merges flattened alike) — so no mode rule is re-decided here: a concept
     group's leftover `entities:` list is never visited because the catalogue
     never lists it. The one pre-condition: the walk must yield the same names
     in the same order as the catalogue, or the join is refused at the first
     divergence naming both sides, so a fill can never land on the wrong entry."""
     groups = {e["group"] for e in entries}
     locs: list[_EntityLoc] = []
-    for group_key, group_node in yaml.compose(text).value:
+    for group_key, group_node in _flattened_pairs(yaml.compose(text)):
         if _scalar_key(group_key) in groups and isinstance(group_node, yaml.MappingNode):
             items = _merged_value(group_node, "entities")
             if isinstance(items, yaml.SequenceNode):
