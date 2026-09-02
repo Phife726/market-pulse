@@ -171,11 +171,7 @@ def entity_entries(text: str, *, source: str) -> list[dict]:
     editor can count to), ``group``, ``name``, ``active`` (as the catalogue
     resolves it), ``zoominfo_company_id`` (the value as written: an int, or
     None), ``has_id_key`` (True for a ``null`` placeholder, False when the key
-    is absent — a text editor must replace one and insert the other), and
-    ``opens_with_name`` (whether ``name:`` is the entry's first key — the one
-    locator assumption of a `- name:` line walker that the parsed document can
-    see, exposed so it can be refused by name; the spellings it cannot see,
-    such as a flow-style item, a walker detects by count).
+    is absent — a text editor must replace one and insert the other).
 
     The same single walk as `parse_targets`, so the whole-file verdict comes
     with it: a file the loader rejects is rejected here, with the loader's own
@@ -230,7 +226,6 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
                     "active": active,
                     "zoominfo_company_id": entity.get("zoominfo_company_id"),
                     "has_id_key": "zoominfo_company_id" in entity,
-                    "opens_with_name": next(iter(entity)) == "name",
                 })
                 if not active:
                     continue
