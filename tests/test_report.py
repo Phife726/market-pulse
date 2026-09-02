@@ -3,10 +3,11 @@
 Every test here asserts on the `ReportModel` (or a step of `assemble_report`)
 with dict literals and zero patches: delivery suppression, visibility, segment
 grouping and the display merge, the caps, the appendix, the ledger fold, the
-citation set. Tests that render the model to HTML live in
+citation set, the model's derived counts. Tests that render the model to HTML live in
 `test_delivery_engine.py` — a test lives with the module whose output it asserts on.
 """
 
+from dataclasses import fields, replace
 from functools import partial
 
 import pytest
@@ -122,8 +123,7 @@ def test_assemble_report_total_articles_cap():
     }
     model = assemble_report(articles, config=config)
 
-    assert model.surfaced_count <= 10
-    assert sum(len(arts) for arts in model.groups.values()) == model.surfaced_count
+    assert model.surfaced_count == 10
 
 
 # ===========================================================================
@@ -1296,29 +1296,6 @@ def test_merged_group_is_single_synthesis_candidate():
     assert {a["url_hash"] for a in candidates["Transportation — Vehicles"]} == {"auto", "nonauto"}
 
 
-def test_surfaced_count_equals_sum_of_final_group_sizes_through_merge():
-    """The surfaced_count invariant (== sum of final group sizes) holds through
-    the merge, even with mixed segments and a cap forcing overflow."""
-    auto = [
-        stub_row(f"auto{i}", americhem_impact_score=9 - i,
-                          commercial_segment="Transportation - Automotive",
-                          headline=f"Automotive compound development milestone number {i}")
-        for i in range(4)
-    ]
-    non_auto = [
-        stub_row(f"non{i}", americhem_impact_score=6,
-                          commercial_segment="Transportation - Non-Automotive",
-                          headline=f"Rail and heavy-truck polymer qualification update {i}")
-        for i in range(3)
-    ]
-    aero = stub_row("aero", 9, commercial_segment="Transportation - Aerospace",
-                             headline="Aircraft interior supplier qualifies new lightweight composite")
-
-    model = assemble_report(auto + non_auto + [aero], config=_MERGE_CFG)
-
-    assert model.surfaced_count == sum(len(arts) for arts in model.groups.values())
-
-
 def test_appendix_rows_carry_display_label():
     """Cap-overflow rows from a merged group show the merged display label in
     the appendix segment column — the header consistency the reader sees on the
@@ -1387,6 +1364,26 @@ def test_display_mapped_outlook_tolerates_an_outlook_without_signals():
     model = assemble_report([stub_row("a", 8)],
                             MacroSummary(outlook={"current_condition": "x"}), cfg)
     assert model.macro_outlook == {"current_condition": "x"}
+
+
+# ===========================================================================
+# surfaced_count on the model (derived from groups, never carried)
+# ===========================================================================
+
+
+def test_model_surfaced_count_is_derived_from_groups():
+    """surfaced_count is derived from groups: rebuilding the model with
+    different groups changes it, and it is not a field the model can be
+    handed."""
+    model = assemble_report([stub_row("a", 8)])
+    assert model.surfaced_count == 1
+
+    assert replace(model, groups={}).surfaced_count == 0
+    two = {"Packaging": [stub_row("b", 7), stub_row("c", 9)]}
+    assert replace(model, groups=two).surfaced_count == 2
+    assert "surfaced_count" not in {f.name for f in fields(model)}
+
+
 # ===========================================================================
 # Recorded screened_count on the model (derived, never invented)
 # ===========================================================================
