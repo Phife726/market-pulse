@@ -33,6 +33,7 @@ import config
 from run_instant import naive_utcnow
 import relevance_gate
 import zoominfo_client
+from targets import is_company_id
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,7 @@ class ZoomInfoProvider:
         Concept-mode targets carry no company id, so they are ineligible."""
         return (
             config.zoominfo_news_enabled()
-            and bool(target.get("zoominfo_company_id"))
+            and is_company_id(target.get("zoominfo_company_id"))
             and bool(target.get("zoominfo_news", True))
         )
 

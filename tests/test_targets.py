@@ -16,7 +16,11 @@ from pathlib import Path
 import pytest
 import yaml
 from run_budget import RunBudget
-from targets import ENTITY_OPTIONAL_KEYS, TargetsError, build_query, entity_entries, load_targets, parse_targets
+import targets as targets_module
+from targets import (
+    ENTITY_OPTIONAL_KEYS, TargetsError, build_query, entity_entries, is_company_id,
+    load_targets, parse_targets,
+)
 from tests.conftest import stub_target
 
 _TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
@@ -304,10 +308,105 @@ def test_load_targets_entity_excludes_applied_to_query(tmp_path):
           zoominfo_company_id: 1
             - name: B
         """, "not valid YAML", id="not-yaml"),
+    # A Moody's platform identifier, whichever of the three lists it is pasted into.
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: ["medical device polymers"]
+          exclude_any: ["patents", "PR wires"]
+        """, "PR wires", id="moody-identifier-in-exclude_any"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: ["source set 238658", "medical device polymers"]
+        """, "source set 238658", id="moody-identifier-in-include_any"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          include_any: ["PR wires"]
+          entities: [{name: Avient, active: true}]
+        """, "PR wires", id="moody-identifier-in-an-entity-groups-include_any"),
+    pytest.param("""\
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: ["medical device polymers"]
+          exclude_any: [" pr WIRES "]
+        """, "pr WIRES", id="moody-identifier-case-and-whitespace-folded"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          include_all: ["Targeted News Search"]
+          entities: [{name: Avient, active: true}]
+        """, "Targeted News Search", id="moody-identifier-in-include_all"),
+    # zoominfo_company_id: null (a placeholder) or a positive int, nothing else.
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: "357374413"
+        """, "zoominfo_company_id", id="zoominfo_company_id-quoted"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: true
+        """, "zoominfo_company_id", id="zoominfo_company_id-boolean"),
+    pytest.param("""\
+        competitors:
+          search_mode: entity
+          entities:
+            - name: Avient
+              active: true
+              zoominfo_company_id: 0
+        """, "zoominfo_company_id", id="zoominfo_company_id-zero"),
 ])
 def test_load_targets_rejects_shape_errors_naming_the_group(tmp_path, body, needle):
     with pytest.raises(TargetsError, match=needle):
         _load(tmp_path, body)
+
+
+@pytest.mark.parametrize("identifier", sorted(targets_module._MOODY_PLATFORM_IDENTIFIERS))
+def test_every_moody_platform_identifier_is_rejected(tmp_path, identifier):
+    """Derived from the constant, so a trimmed or misspelled member cannot
+    slip out of coverage."""
+    with pytest.raises(TargetsError, match="Moody"):
+        _load(tmp_path, f"""\
+            healthcare:
+              search_mode: concept
+              active: true
+              include_any: ["medical device polymers"]
+              exclude_any: [{identifier!r}]
+            """)
+
+
+def test_shape_error_names_the_entity(tmp_path):
+    """An entity-level rule names the entity, not just its position — the
+    operator should not have to count list items."""
+    with pytest.raises(TargetsError, match=r"entity #1 \('Avient'\)"):
+        _load(tmp_path, """\
+            competitors:
+              search_mode: entity
+              entities:
+                - name: Avient
+                  active: true
+                  zoominfo_company_id: "1"
+            """)
+
+
+@pytest.mark.parametrize("value, expected", [
+    (357374413, True), (1, True),
+    (0, False), (-1, False), (True, False), ("357374413", False), (3.0, False), (None, False),
+])
+def test_is_company_id(value, expected):
+    """The one spelling of a mapped ZoomInfo id: a positive int, never a bool."""
+    assert is_company_id(value) is expected
 
 
 def test_load_targets_carries_optional_entity_keys_or_their_defaults(tmp_path):
@@ -846,14 +945,17 @@ def test_build_query_entity_mode_bare():
 
 
 def test_build_query_entity_mode_with_excludes():
-    """Entity mode exclude_any terms become -\"term\" operators."""
+    """Entity mode exclude_any terms become -\"term\" operators — every term
+    given, a Moody's identifier included: no second filter hides in the
+    assembler (the loader is where one is rejected)."""
     result = build_query(name="Shaw Industries",
         include_all=[],
-        exclude_any=["patents", "securities analyst reports"],
+        exclude_any=["patents", "securities analyst reports", "PR wires"],
     )
     assert '"Shaw Industries"' in result
     assert '-"patents"' in result
     assert '-"securities analyst reports"' in result
+    assert '-"PR wires"' in result
 
 
 def test_build_query_concept_mode():
@@ -864,18 +966,6 @@ def test_build_query_concept_mode():
     )
     assert '("plastics industry" OR "chemical industry" OR "compounding")' in result
     assert '"business"' in result
-
-
-def test_build_query_filters_moody_internal_excludes():
-    """Moody's platform identifiers in exclude_any must be silently dropped."""
-    result = build_query(include_any=["plastics industry"],
-        include_all=[],
-        exclude_any=["source set 238658", "PR wires", "Targeted News Search", "tenders"],
-    )
-    assert "source set 238658" not in result
-    assert "PR wires" not in result
-    assert "Targeted News Search" not in result
-    assert '-"tenders"' in result   # real term must survive
 
 
 def test_build_query_concept_mode_no_include_all():
