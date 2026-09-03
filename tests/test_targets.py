@@ -21,10 +21,8 @@ from targets import (
     ENTITY_OPTIONAL_KEYS, TargetsError, build_query, entity_entries, is_company_id,
     load_targets, parse_targets,
 )
-from tests.conftest import stub_target
+from tests.conftest import CONFIG_PATH, TARGETS_PATH, stub_target
 
-_TARGETS_PATH = Path(__file__).resolve().parents[1] / "targets.yaml"
-_CONFIG_PATH = _TARGETS_PATH.with_name("market_pulse_config.yaml")
 
 
 # The real control files, parsed once per session — lazily, so a broken file
@@ -33,17 +31,17 @@ _CONFIG_PATH = _TARGETS_PATH.with_name("market_pulse_config.yaml")
 # every reader is read-only.
 @cache
 def _real_targets_yaml() -> dict:
-    return yaml.safe_load(_TARGETS_PATH.read_text())
+    return yaml.safe_load(TARGETS_PATH.read_text())
 
 
 @cache
 def _real_config_yaml() -> dict:
-    return yaml.safe_load(_CONFIG_PATH.read_text())
+    return yaml.safe_load(CONFIG_PATH.read_text())
 
 
 @cache
 def _real_targets() -> list[dict]:
-    return load_targets(str(_TARGETS_PATH))
+    return load_targets(str(TARGETS_PATH))
 
 
 def _load(tmp_path: Path, body: str) -> list[dict]:
@@ -879,7 +877,7 @@ def test_targets_yaml_entity_groups_precede_new_concept_groups():
 
 
 def test_targets_yaml_floriculture_term_absent():
-    raw = _TARGETS_PATH.read_text()
+    raw = TARGETS_PATH.read_text()
     assert "floriculture consumer goods" not in raw
 
 
@@ -986,8 +984,8 @@ def test_parse_targets_is_load_targets_without_the_file():
     """One parser, two entry points: the file loader is the text parser plus
     its one read, so a writer holding proposed text (scripts/sync_zoominfo_ids)
     validates through the same rules the cron applies at t=0."""
-    text = _TARGETS_PATH.read_text(encoding="utf-8")
-    assert parse_targets(text, source=str(_TARGETS_PATH)) == _real_targets()
+    text = TARGETS_PATH.read_text(encoding="utf-8")
+    assert parse_targets(text, source=str(TARGETS_PATH)) == _real_targets()
 
 
 def test_parse_targets_names_its_source_in_the_error():
@@ -1063,7 +1061,7 @@ def test_entity_entries_decide_nothing():
 def test_shipped_targets_yaml_entries_agree_with_the_loaded_entity_targets():
     """Active entries and loaded entity targets are the same population, in the
     same order."""
-    entries = entity_entries(_TARGETS_PATH.read_text(encoding="utf-8"), source="targets.yaml")
+    entries = entity_entries(TARGETS_PATH.read_text(encoding="utf-8"), source="targets.yaml")
     active = [(e["group"], e["name"], e["zoominfo_company_id"]) for e in entries if e["active"]]
     loaded = [(t["category"], t["name"], t["zoominfo_company_id"])
               for t in _real_targets() if t["search_mode"] == "entity"]

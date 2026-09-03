@@ -95,8 +95,9 @@ zero-I/O purity is untouched.
   `americhem_impact_score`, `commercial_segment`, `signal_type`,
   `recommended_action`. May be the `DISCARD` sentinel to drop a false-positive
   entity match. Travels as a plain dict; its schema — taxonomies, the
-  `normalize` clamp/default rules, and the `effective_impact` /
-  `commercial_segment` / `signal_type` readers — lives in `insight.py`.
+  `normalize` clamp/default rules, the `effective_impact` /
+  `commercial_segment` / `signal_type` row readers, and the `source_domain` /
+  `parse_timestamp` value readers — lives in `insight.py`.
 - **Materiality** (`americhem_impact_score`, 1–10) — how much an article matters to
   Americhem, independent of tone. The report filters on materiality, **not** on
   `sentiment_tag` (tone). `insight.effective_impact` reads it (with the legacy

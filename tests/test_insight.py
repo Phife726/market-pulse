@@ -6,6 +6,10 @@ ingestion test still proves the wiring (LLM seam → normalize); these prove the
 rules themselves.
 """
 
+from datetime import datetime, timezone
+
+import pytest
+
 import insight
 
 
@@ -163,3 +167,58 @@ def test_signal_type_defaults_when_missing():
 
 def test_signal_type_returns_value():
     assert insight.signal_type({"signal_type": "Regulatory"}) == "Regulatory"
+
+
+# ===========================================================================
+# Shared field-value readers (source_domain / parse_timestamp)
+# ===========================================================================
+
+
+def test_source_domain_strips_www_port_and_case():
+    """The registrable host a citation or an appendix row displays."""
+    assert insight.source_domain("https://www.example.com/a?utm=1") == "example.com"
+    assert insight.source_domain("https://news.example.co.uk:8080/x") == "news.example.co.uk"
+    assert insight.source_domain("HTTPS://WWW.Example.COM/a") == "example.com"
+
+
+def test_source_domain_empty_when_absent_or_unparseable():
+    """Total: the callers render the result into an email and a source pack,
+    off rows whose jsonb-derived fields may hold anything."""
+    assert insight.source_domain("") == ""
+    assert insight.source_domain(None) == ""
+    assert insight.source_domain("not a url") == ""
+    assert insight.source_domain(12345) == ""
+
+
+def test_parse_timestamp_accepts_iso_with_or_without_z():
+    """A trailing Z and surrounding whitespace both parse."""
+    expected = datetime(2026, 8, 28, 10, 0, tzinfo=timezone.utc)
+    assert insight.parse_timestamp("2026-08-28T10:00:00+00:00") == expected
+    assert insight.parse_timestamp("2026-08-28T10:00:00Z") == expected
+    assert insight.parse_timestamp("  2026-08-28T10:00:00Z  ") == expected
+
+
+@pytest.mark.parametrize("raw, expected", [
+    # Postgres strips trailing zeros from the microseconds, and fromisoformat
+    # before 3.11 accepts only 3 or 6 fractional digits — the shape CI (3.10)
+    # caught silently parsing to None in the repo layer. The delivery window
+    # and the appendix read the same columns, so they need the same tolerance.
+    ("2026-08-26T10:44:12.5+00:00",      datetime(2026, 8, 26, 10, 44, 12, 500000, tzinfo=timezone.utc)),
+    ("2026-08-26T10:44:12.12+00:00",     datetime(2026, 8, 26, 10, 44, 12, 120000, tzinfo=timezone.utc)),
+    ("2026-08-26T10:44:12.123+00:00",    datetime(2026, 8, 26, 10, 44, 12, 123000, tzinfo=timezone.utc)),
+    ("2026-08-26T10:44:12.123456+00:00", datetime(2026, 8, 26, 10, 44, 12, 123456, tzinfo=timezone.utc)),
+    ("2026-08-26T10:44:12.5Z",           datetime(2026, 8, 26, 10, 44, 12, 500000, tzinfo=timezone.utc)),
+    ("2026-08-26T10:44:12.5",            datetime(2026, 8, 26, 10, 44, 12, 500000)),
+])
+def test_parse_timestamp_accepts_every_postgres_fraction_width(raw, expected):
+    """One tolerance set for every reader of a stored timestamp."""
+    assert insight.parse_timestamp(raw) == expected
+
+
+def test_parse_timestamp_none_when_absent_or_unparseable():
+    """A scraped non-date, a blank, or a non-string yields None."""
+    assert insight.parse_timestamp("Yesterday") is None
+    assert insight.parse_timestamp("") is None
+    assert insight.parse_timestamp("   ") is None
+    assert insight.parse_timestamp(None) is None
+    assert insight.parse_timestamp(20260828) is None

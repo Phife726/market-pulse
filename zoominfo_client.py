@@ -31,6 +31,8 @@ from typing import Optional
 
 import requests
 
+import insight
+
 logger = logging.getLogger(__name__)
 
 # Override-able so the endpoints can be corrected without a code change.
@@ -517,16 +519,13 @@ def _parse_date(value: object) -> Optional[date]:
 
     Returns None for empty/unparseable values so callers can treat 'no usable
     date' as 'do not filter'."""
-    if not isinstance(value, str) or not value.strip():
+    parsed = insight.parse_timestamp(value)
+    if parsed is not None:
+        return parsed.date()
+    if not isinstance(value, str):
         return None
-    raw = value.strip()
-    for candidate in (raw, raw.replace("Z", "+00:00")):
-        try:
-            return datetime.fromisoformat(candidate).date()
-        except ValueError:
-            pass
-    try:
-        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    try:   # a date-prefixed string ISO parsing cannot take whole
+        return datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
     except ValueError:
         return None
 

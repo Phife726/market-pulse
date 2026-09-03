@@ -311,7 +311,7 @@ def test_source_pack_entry_shape_and_domain():
         "id": 1,
         "headline": "Alpha",
         "url": "https://www.Reuters.com:443/x",
-        "domain": "reuters.com",                        # port stripped, www stripped, lowercased
+        "domain": "reuters.com",                        # insight.source_domain, tested there
         "segment": "Auto",
         "score": 5,
     }

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tests.conftest import stub_summary_row
 from daily_intelligence_repo import (
     InMemoryIntelligenceRepo,
     SupabaseIntelligenceRepo,
@@ -693,13 +694,6 @@ def test_fetch_latest_summary_selects_executive_sources(monkeypatch):
 # Delivery anchor (issue #64): fetch_last_delivery / record_delivery
 # ---------------------------------------------------------------------------
 
-def _summary_row(run_date: str, run_mode: str = "production") -> dict:
-    return {
-        "run_date": run_date, "run_mode": run_mode,
-        "executive_summary": "x", "macro_sentiment": "x",
-    }
-
-
 def test_in_memory_fetch_since_is_strict():
     """A row created exactly at the cutoff was in the email the cutoff came
     from — it must not be fetched again."""
@@ -713,7 +707,7 @@ def test_in_memory_fetch_since_is_strict():
 
 def test_in_memory_record_delivery_patches_only_delivered_at():
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_summary({**_summary_row("2026-08-26"), "surfaced_count": 4})
+    repo.upsert_summary(stub_summary_row(run_date="2026-08-26", surfaced_count=4))
     repo.record_delivery(run_date="2026-08-26", run_mode="production",
                          delivered_at=datetime(2026, 8, 26, 10, 44, 12))
     got = repo.get_delivery_state(run_date="2026-08-26", run_mode="production")
@@ -734,10 +728,10 @@ def test_in_memory_record_delivery_silent_when_row_missing():
 def test_in_memory_fetch_last_delivery_returns_latest_before_date():
     repo = InMemoryIntelligenceRepo()
     for rd, hour in (("2026-08-24", 10), ("2026-08-25", 11), ("2026-08-26", 10)):
-        repo.upsert_summary(_summary_row(rd))
+        repo.upsert_summary(stub_summary_row(run_date=rd))
         repo.record_delivery(run_date=rd, run_mode="production",
                              delivered_at=datetime(2026, 8, int(rd[-2:]), hour, 44))
-    repo.upsert_summary(_summary_row("2026-08-27"))
+    repo.upsert_summary(stub_summary_row(run_date="2026-08-27"))
     repo.record_delivery(run_date="2026-08-27", run_mode="production",
                          delivered_at=datetime(2026, 8, 27, 14, 5))   # today: excluded
 
@@ -749,10 +743,11 @@ def test_in_memory_fetch_last_delivery_returns_latest_before_date():
 
 def test_in_memory_fetch_last_delivery_ignores_other_run_modes_and_unstamped_rows():
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_summary(_summary_row("2026-08-26", "test"))
+    repo.upsert_summary(stub_summary_row(run_date="2026-08-26", run_mode="test"))
     repo.record_delivery(run_date="2026-08-26", run_mode="test",
                          delivered_at=datetime(2026, 8, 26, 15, 0))
-    repo.upsert_summary(_summary_row("2026-08-26", "production"))   # never delivered
+    repo.upsert_summary(stub_summary_row(run_date="2026-08-26",
+                                         run_mode="production"))   # never delivered
     assert repo.fetch_last_delivery(run_mode="production", before_date="2026-08-27") is None
 
 
