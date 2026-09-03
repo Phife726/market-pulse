@@ -9,9 +9,11 @@
 # To add an entity:       append to entities: list
 # To add a concept group: new top-level key, search_mode: concept
 #
-# exclude_any: Moody's platform identifiers (e.g. "source set 238658",
-#   "PR wires") are silently ignored by targets.py —
-#   only real search terms become -"term" operators.
+# The eight legacy Moody's platform identifiers (e.g. "source set 238658",
+#   "PR wires"; the list is in targets.py) are News Edge source names, not
+#   search terms: one in include_any / include_all / exclude_any fails the
+#   load, case-insensitively. zoominfo_company_id is a positive integer or
+#   null (a placeholder the sync script fills).
 #
 # ── GROUP ORDER IS THE GRACEFUL-DEGRADATION POLICY ──────────
 # load_targets() processes groups top-to-bottom and execution follows file

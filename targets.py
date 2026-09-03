@@ -9,10 +9,10 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-# Moody's platform-level source identifiers that appeared in targets.yaml's
-# exclude_any lists (carried over from the News Edge subscription). They are
-# not search terms; build_query drops them instead of emitting -"term".
-_MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
+# Moody's platform identifiers (CONTEXT.md: Target) — News Edge source names
+# carried over from the migration spec, never search terms. Matched by
+# `_identifier_key` (case and surrounding whitespace folded).
+_MOODY_PLATFORM_IDENTIFIERS: frozenset[str] = frozenset({
     "source set 238658",
     "PR wires",
     "Targeted News Search",
@@ -22,6 +22,14 @@ _MOODY_INTERNAL_EXCLUDES: frozenset[str] = frozenset({
     "Financial Times feeds",
     "financial markups",
 })
+
+
+def _identifier_key(term: str) -> str:
+    return term.strip().casefold()
+
+
+_MOODY_IDENTIFIER_KEYS: frozenset[str] = frozenset(
+    _identifier_key(t) for t in _MOODY_PLATFORM_IDENTIFIERS)
 
 #: The keys every entity target carries beyond the common ones — the ZoomInfo
 #: enrichment fields and the resolution hints — with their defaults when the
@@ -54,8 +62,7 @@ def build_query(
     The primary term is either an entity ``name`` (quoted) or a concept
     group's ``include_any`` terms (ORed) — exactly one must be given.
     ``include_all`` terms are ANDed into every query. ``exclude_any`` terms
-    become ``-"term"`` operators; entries in ``_MOODY_INTERNAL_EXCLUDES``
-    (Moody's platform-level source identifiers) are silently dropped.
+    become ``-"term"`` operators.
     """
     if (name is None) == (not include_any):
         raise ValueError("build_query needs exactly one of name= / include_any=")
@@ -65,13 +72,8 @@ def build_query(
     else:
         parts.append("(" + " OR ".join(f'"{t}"' for t in include_any) + ")")
 
-    for term in (include_all or []):
-        parts.append(f'"{term}"')
-
-    for term in (exclude_any or []):
-        if term not in _MOODY_INTERNAL_EXCLUDES:
-            parts.append(f'-"{term}"')
-
+    parts.extend(f'"{term}"' for term in (include_all or []))
+    parts.extend(f'-"{term}"' for term in (exclude_any or []))
     return " ".join(parts)
 
 
@@ -91,11 +93,31 @@ def _list_field(owner: str, cfg: dict, key: str) -> list:
     return value
 
 
+def _term_list(owner: str, cfg: dict, key: str) -> list:
+    """A search-term list (`include_any` / `include_all` / `exclude_any`):
+    `_list_field`, plus: no Moody's platform identifier."""
+    terms = _list_field(owner, cfg, key)
+    for term in terms:
+        # Only a string can be an identifier (item types are not validated
+        # here; a non-string item is tolerated and may be unhashable).
+        if isinstance(term, str) and _identifier_key(term) in _MOODY_IDENTIFIER_KEYS:
+            raise TargetsError(
+                f"{owner}: '{key}' holds the Moody's platform identifier {term!r} — "
+                "a News Edge source name, not a search term"
+            )
+    return terms
+
+
+def _is_int(value: object) -> bool:
+    """A real YAML integer — a bool is not one."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _int_setting(owner: str, cfg: dict, key: str, default: int) -> int:
     """A numeric setting the loop slices/compares with — a quoted "2" would
     otherwise fail at the first billed call, not at load."""
     value = cfg.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int):
+    if not _is_int(value):
         raise TargetsError(f"{owner}: '{key}' must be an integer, got {value!r}")
     return value
 
@@ -106,6 +128,24 @@ def _bool_setting(owner: str, cfg: dict, key: str, default: bool) -> bool:
     value = cfg.get(key, default)
     if not isinstance(value, bool):
         raise TargetsError(f"{owner}: '{key}' must be true or false, got {value!r}")
+    return value
+
+
+def is_company_id(value: object) -> bool:
+    """Whether `value` is a ZoomInfo company id as the catalogue accepts one:
+    a positive int (a bool is not one). The one spelling of "mapped": the
+    ZoomInfo provider's eligibility and the enrichment script read it, and
+    the sync script filters metadata ids by it, so what it copies in is what
+    the loader reads."""
+    return _is_int(value) and value > 0
+
+
+def _optional_id_setting(owner: str, cfg: dict, key: str) -> Optional[int]:
+    """An external id: null (or absent — a placeholder) or `is_company_id`.
+    Anything else would count as mapped or unmapped by accident, silently."""
+    value = cfg.get(key)
+    if value is not None and not is_company_id(value):
+        raise TargetsError(f"{owner}: '{key}' must be a positive integer or null, got {value!r}")
     return value
 
 
@@ -150,8 +190,10 @@ def parse_targets(text: str, *, source: str) -> list[dict]:
         entity without a string ``name``, an unknown ``search_mode``, a
         concept group without a non-empty ``include_any``, a scalar where a
         list belongs, a non-integer discovery setting, a non-boolean switch,
-        or a file that yields no active target at all. The whole file is
-        validated, inactive entries included: a paused group must not rot
+        a ``zoominfo_company_id`` that is neither null nor a positive int, a
+        Moody's platform identifier in a term list, or a file that yields no
+        active target at all. The whole file is validated, inactive entries
+        included: a paused group must not rot
         until someone re-enables it. A document that is not even YAML is the
         first shape error, not a parser traceback. `source` names the text in
         errors and the log; `load_targets` is this over a file.
@@ -168,9 +210,10 @@ def entity_entries(text: str, *, source: str) -> list[dict]:
 
     Read-only knowledge about the file; decides nothing. Each entry carries
     ``group``, ``name``, ``active`` (as the catalogue resolves it) and
-    ``zoominfo_company_id`` (the value as written: an int, or None — an absent
-    key and a ``null`` placeholder read alike; where a placeholder *line*
-    sits is a fact of the text, which a text editor reads for itself).
+    ``zoominfo_company_id`` (as the catalogue resolves it: a positive int,
+    or None — an absent key and a ``null`` placeholder read alike; where a
+    placeholder *line* sits is a fact of the text, which a text editor reads
+    for itself).
 
     The same single walk as `parse_targets`, so the whole-file verdict comes
     with it: a file the loader rejects is rejected here, with the loader's own
@@ -208,21 +251,24 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
             )
         owner = f"group '{group_name}'"
         mode: str = group_cfg.get("search_mode", "entity")
-        include_all = _list_field(owner, group_cfg, "include_all")
-        exclude_any = _list_field(owner, group_cfg, "exclude_any")
+        include_any = _term_list(owner, group_cfg, "include_any")
+        include_all = _term_list(owner, group_cfg, "include_all")
+        exclude_any = _term_list(owner, group_cfg, "exclude_any")
 
         if mode == "entity":
             for position, entity in enumerate(_list_field(owner, group_cfg, "entities")):
                 entity_owner = f"{owner}, entity #{position + 1}"
                 if not isinstance(entity, dict) or not isinstance(entity.get("name"), str) or not entity["name"]:
                     raise TargetsError(f"{entity_owner}: needs a non-empty string 'name'")
+                entity_owner = f"{entity_owner} ({entity['name']!r})"
                 active = _bool_setting(entity_owner, entity, "active", False)
                 zoominfo_news = _bool_setting(entity_owner, entity, "zoominfo_news", True)
+                company_id = _optional_id_setting(entity_owner, entity, "zoominfo_company_id")
                 entries.append({
                     "group": group_name,
                     "name": entity["name"],
                     "active": active,
-                    "zoominfo_company_id": entity.get("zoominfo_company_id"),
+                    "zoominfo_company_id": company_id,
                 })
                 if not active:
                     continue
@@ -237,7 +283,7 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
                     "results_per_entity": results_per_entity,
                     "lookback_hours": lookback_hours,
                     "min_article_length": min_article_length,
-                    "zoominfo_company_id": entity.get("zoominfo_company_id"),
+                    "zoominfo_company_id": company_id,
                     "zoominfo_news": zoominfo_news,
                     # Resolution hints for the enrichment utility (never queried).
                     "domain": entity.get("domain"),
@@ -246,7 +292,6 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
                 })
 
         elif mode == "concept":
-            include_any = _list_field(owner, group_cfg, "include_any")
             if not include_any:
                 raise TargetsError(f"{owner}: a concept group needs a non-empty 'include_any'")
             # Concept groups may declare their own results_per_entity to raise

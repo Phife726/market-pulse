@@ -96,9 +96,13 @@ def test_zoominfo_eligible_when_flag_on_with_company_id(monkeypatch):
     assert ZoomInfoProvider().eligible(_target()) is True
 
 
-def test_zoominfo_ineligible_without_company_id(monkeypatch):
+@pytest.mark.parametrize("company_id", [None, 0, "357374413"])
+def test_zoominfo_ineligible_without_company_id(monkeypatch, company_id):
+    """"Mapped" is the catalogue's `is_company_id`, so a hand-built target
+    carrying a placeholder or a quoted id is ineligible too — the seam and
+    the loader agree on the boundary."""
     monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
-    assert ZoomInfoProvider().eligible(_target(zoominfo_company_id=None)) is False
+    assert ZoomInfoProvider().eligible(_target(zoominfo_company_id=company_id)) is False
 
 
 def test_zoominfo_ineligible_when_news_disabled(monkeypatch):

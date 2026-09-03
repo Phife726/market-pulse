@@ -27,7 +27,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import target_enricher as te  # noqa: E402
-from targets import load_targets  # noqa: E402
+from targets import is_company_id, load_targets  # noqa: E402
 import zoominfo_client  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ def load_targets_for_enrichment(targets_path: str) -> list[dict]:
 def _resolve(target: dict, client) -> dict:
     """Run the resolution cascade for one target; return a normalized dict."""
     cid = target.get("zoominfo_company_id")
-    if cid:
+    if is_company_id(cid):
         return {"company_id": cid, "match_basis": "precurated"}
 
     # 1. website/domain

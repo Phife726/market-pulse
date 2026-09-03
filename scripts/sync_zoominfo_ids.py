@@ -47,7 +47,7 @@ from yaml.constructor import SafeConstructor
 # not the repo root, so the catalogue must be put on the path explicitly.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from targets import TargetsError, entity_entries, parse_targets  # noqa: E402
+from targets import TargetsError, entity_entries, is_company_id, parse_targets  # noqa: E402
 
 # ZoomInfo statuses that gate a record for sync into targets.yaml. `verified` is
 # written by the enricher for precurated/domain (high-confidence) matches;
@@ -67,10 +67,13 @@ def load_resolved_ids(metadata_path: str) -> dict[str, int]:
         if not isinstance(rec, dict):
             continue
         cid = rec.get("zoominfo_company_id")
+        if cid is not None and not is_company_id(cid):
+            print(f"# skipping {key}: zoominfo_company_id must be a positive integer, got {cid!r}",
+                  file=sys.stderr)
         metadata_status = rec.get("metadata_record_status", "active")
         zoominfo_status = rec.get("zoominfo_metadata_status")
         if (
-            isinstance(cid, int) and not isinstance(cid, bool) and cid
+            is_company_id(cid)
             and metadata_status == "active"
             and zoominfo_status in APPROVED_ZOOMINFO_STATUSES
         ):

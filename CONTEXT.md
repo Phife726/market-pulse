@@ -333,7 +333,10 @@ zero-I/O purity is untouched.
   probe scripts) reads targets through it. Shape errors in the control file
   (a document that is not valid YAML, an entity without a name, an unknown
   `search_mode`, a concept group with no `include_any`, a non-list where a
-  list belongs) raise `TargetsError`
+  list belongs, an entity's `zoominfo_company_id` that is neither null nor a
+  positive integer, a **Moody's platform identifier** — one of the legacy
+  News Edge source names the migration spec carried, never search vocabulary
+  — in any term list) raise `TargetsError`
   naming the group — the run fails at t=0 like a missing secret does, instead
   of silently dropping coverage. Policy rules (tier order, macro groups last)
   are not validated here; they are pins against the shipped file.
