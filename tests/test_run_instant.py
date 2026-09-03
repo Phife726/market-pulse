@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 import run_instant
-from run_instant import RunInstant, naive_utcnow
+from run_instant import RunInstant, SummaryKey, naive_utcnow
 from tests.conftest import REPO_ROOT
 
 # Thursday 2026-08-27 14:01 UTC — the late start from issue #64.
@@ -45,6 +45,19 @@ def test_subject_date_is_the_month_day_year_form():
 def test_test_mode_follows_run_mode():
     assert RunInstant(now=T, run_mode="test").test_mode is True
     assert RunInstant(now=T, run_mode="production").test_mode is False
+
+
+def test_summary_key_is_the_run_date_and_run_mode_pair():
+    """The `daily_summaries` row this run belongs to by its own clock — the
+    key ingestion writes, and delivery's fallback when it finds no row."""
+    key = RunInstant(now=T, run_mode="test").summary_key
+    assert (key.run_date, key.run_mode) == ("2026-08-27", "test")
+
+
+def test_summary_key_is_frozen():
+    key = SummaryKey(run_date="2026-08-27", run_mode="production")
+    with pytest.raises(FrozenInstanceError):
+        key.run_date = "2026-08-28"
 
 
 def test_run_instant_is_frozen():

@@ -30,6 +30,21 @@ def naive_utcnow() -> datetime:
 
 
 @dataclass(frozen=True)
+class SummaryKey:
+    """The `daily_summaries` row key — that table's unique index is
+    (`run_date`, `run_mode`), so this pair names exactly one row.
+
+    A run derives its own key from its run instant (`RunInstant.summary_key`),
+    which is what ingestion writes. Delivery *resolves* one instead — it reads
+    the summary row before it writes anything and keys its write-back and its
+    `delivered_at` stamp on the row it actually read, because the two engines
+    are separate processes with separate clocks and a workflow straddling
+    00:00 UTC would otherwise name a row that does not exist (issue #76)."""
+    run_date: str
+    run_mode: str
+
+
+@dataclass(frozen=True)
 class RunInstant:
     now: datetime
     run_mode: str
@@ -61,6 +76,11 @@ class RunInstant:
     def subject_date(self) -> str:
         """The email subject's date, e.g. 'August 27, 2026'."""
         return self.now.strftime("%B %d, %Y")
+
+    @property
+    def summary_key(self) -> SummaryKey:
+        """The `daily_summaries` row this run belongs to by its own clock."""
+        return SummaryKey(run_date=self.run_date, run_mode=self.run_mode)
 
     @property
     def test_mode(self) -> bool:

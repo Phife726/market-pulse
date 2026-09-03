@@ -8,6 +8,12 @@ delivery: rows created strictly after it are delivered. The wall-clock
 lookback (24 h; 72 h on Mondays) survives only as the fallback when no prior
 delivery is recorded.
 
+The last section covers issue #76: which `daily_summaries` row a delivery run
+acts on. Delivery resolves its **summary key** by reading the row rather than
+deriving it from its own clock, so a workflow whose ingestion ran on day D and
+whose delivery starts on D+1 still writes back, stamps, and anchors its window
+on row D.
+
 Every clock-sensitive path takes the **run instant** (CONTEXT.md) — the one
 clock reading a run makes, plus its run mode — so no test here reads the
 process clock or MARKET_PULSE_RUN_MODE. Pure window arithmetic is tested
@@ -24,7 +30,7 @@ import pytest
 import delivery_engine
 from daily_intelligence_repo import InMemoryIntelligenceRepo
 from delivery_engine import delivery_window, fetch_todays_intelligence
-from run_instant import RunInstant
+from run_instant import RunInstant, SummaryKey
 from tests.conftest import RUN_INSTANT, TEST_RUN_INSTANT, stub_summary_row
 
 # Thursday 2026-08-27 14:01 UTC — the late start that motivated the fix.
@@ -97,7 +103,7 @@ def test_late_start_still_delivers_previous_days_rows(monkeypatch):
                          delivered_at=T - 27 * _H)
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(RUN_INSTANT)
+    rows = fetch_todays_intelligence(RUN_INSTANT, RUN_INSTANT.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"yesterday", "today"}
 
@@ -114,7 +120,7 @@ def test_normal_day_does_not_redeliver_rows_before_last_email(monkeypatch):
     fake.record_delivery(run_date="2026-08-26", run_mode="production", delivered_at=anchor)
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(RUN_INSTANT)
+    rows = fetch_todays_intelligence(RUN_INSTANT, RUN_INSTANT.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"after-anchor"}
 
@@ -127,7 +133,7 @@ def test_without_recorded_delivery_falls_back_to_wall_clock(monkeypatch):
     _summary(fake, "2026-08-26")   # a summary row with no delivered_at
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(RUN_INSTANT)
+    rows = fetch_todays_intelligence(RUN_INSTANT, RUN_INSTANT.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"today"}
 
@@ -138,7 +144,7 @@ def test_fallback_uses_72h_on_monday(monkeypatch):
     fake.upsert_insight(_row("last-week", MONDAY - 74 * _H))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(MONDAY_RUN)
+    rows = fetch_todays_intelligence(MONDAY_RUN, MONDAY_RUN.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"friday"}
 
@@ -159,7 +165,7 @@ def test_todays_delivery_does_not_anchor_a_same_day_retry(monkeypatch):
                          delivered_at=T - timedelta(minutes=30))
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(RUN_INSTANT)
+    rows = fetch_todays_intelligence(RUN_INSTANT, RUN_INSTANT.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"yesterday-late", "this-morning", "just-now"}
 
@@ -179,7 +185,7 @@ def test_test_mode_reads_the_production_anchor(monkeypatch):
                          delivered_at=T - 2 * _H)   # late QA run yesterday
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    rows = fetch_todays_intelligence(TEST_RUN_INSTANT)
+    rows = fetch_todays_intelligence(TEST_RUN_INSTANT, TEST_RUN_INSTANT.summary_key)
 
     assert {r["url_hash"] for r in rows} == {"yesterday", "today"}
 
@@ -190,7 +196,7 @@ def test_fetch_passes_the_window_cutoff_to_the_repo(monkeypatch):
     fake.fetch_since.return_value = []
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    fetch_todays_intelligence(RUN_INSTANT)
+    fetch_todays_intelligence(RUN_INSTANT, RUN_INSTANT.summary_key)
 
     fake.fetch_last_delivery.assert_called_once_with(
         run_mode="production", before_date=RUN_DATE,
@@ -274,7 +280,7 @@ def test_record_delivery_failure_is_logged_not_raised(monkeypatch, caplog):
     monkeypatch.setattr("delivery_engine._repo", lambda: failing)
 
     with caplog.at_level("WARNING"):
-        delivery_engine._record_delivery(RUN_INSTANT)
+        delivery_engine._record_delivery(RUN_INSTANT.summary_key, delivered_at=T)
 
     assert any("delivered_at" in r.getMessage() for r in caplog.records)
 
@@ -340,4 +346,151 @@ def test_stamp_is_the_fetch_instant_so_rows_arriving_mid_run_are_not_lost(run_de
     assert stamped == T
     monkeypatch.setattr(fake, "fetch_since", real_fetch)
     tomorrow = replace(RUN_INSTANT, now=T + timedelta(days=1))
-    assert "mid-run" in {r["url_hash"] for r in fetch_todays_intelligence(tomorrow)}
+    assert "mid-run" in {r["url_hash"] for r in fetch_todays_intelligence(tomorrow, tomorrow.summary_key)}
+
+
+# ---------------------------------------------------------------------------
+# The midnight straddle (issue #76) — the run acts on the row it READ
+# ---------------------------------------------------------------------------
+# Ingestion and delivery are two processes, each reading its own run instant.
+# A workflow dispatched late on day D runs ingestion from 23:50 (its row is
+# keyed D) and delivery from 00:20 the next morning (its instant says D+1).
+# Keyed on delivery's own clock, the write-back and the delivered_at stamp
+# name a row that does not exist and are silent no-op UPDATEs.
+
+STRADDLE_D = "2026-08-27"
+STRADDLE_INGESTION = RunInstant(now=datetime(2026, 8, 27, 23, 50, 0), run_mode="production")
+STRADDLE_DELIVERY = replace(STRADDLE_INGESTION, now=datetime(2026, 8, 28, 0, 20, 0))
+
+
+def _straddling_repo(monkeypatch) -> InMemoryIntelligenceRepo:
+    """The state a late-evening dispatch leaves: yesterday's email is the
+    anchor, this morning's production email already went out on D, and D's
+    late ingestion has just upserted its accounting on row D — through the
+    real ingestion write path, keyed on ingestion's own run instant."""
+    import ingestion_engine
+
+    fake = InMemoryIntelligenceRepo(now=lambda: STRADDLE_DELIVERY.now)
+    _summary(fake, "2026-08-26")
+    fake.record_delivery(run_date="2026-08-26", run_mode="production",
+                         delivered_at=datetime(2026, 8, 26, 10, 40, 0))
+    _summary(fake, STRADDLE_D)
+    fake.record_delivery(run_date=STRADDLE_D, run_mode="production",
+                         delivered_at=datetime(2026, 8, 27, 10, 40, 0))
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+    ingestion_engine.generate_macro_summary([], run=STRADDLE_INGESTION, screened_count=273)
+    return fake
+
+
+def test_straddling_run_writes_back_and_stamps_the_row_ingestion_wrote(
+    run_delivery_pipeline, monkeypatch,
+):
+    """The gate from issue #76. Delivery's write-back and stamp must land on
+    row D — the row ingestion wrote and delivery read — not on the row D+1 its
+    own clock names, where both UPDATEs match nothing and the day's delivery
+    accounting is lost (and the next run re-sends every row this email
+    carried)."""
+    fake = _straddling_repo(monkeypatch)
+    fake.upsert_insight({
+        **_row("late-news", datetime(2026, 8, 27, 23, 40, 0)),
+        "sentiment_tag": "Neutral", "signal_type": "Customer",
+        "commercial_segment": "Healthcare", "americhem_impact": "Effect.",
+        "source_url": "https://x/late-news", "entities_mentioned": ["Acme"],
+    })
+
+    run_delivery_pipeline(fake, run=STRADDLE_DELIVERY)
+
+    row = fake.get_delivery_state(run_date=STRADDLE_D, run_mode="production")
+    assert row["surfaced_count"] == 1
+    assert row["delivered_at"], "delivered_at must be stamped on the row delivery read"
+    assert fake.get_delivery_state(run_date="2026-08-28", run_mode="production") is None
+    assert fake.fetch_last_delivery(
+        run_mode="production", before_date="2026-08-29") == STRADDLE_DELIVERY.now
+
+
+def test_straddling_run_resends_the_whole_day_it_belongs_to(monkeypatch):
+    """The addendum: the window's anchor is the last delivery on a run_date
+    strictly earlier than the day THIS RUN belongs to. Keyed on delivery's own
+    clock, D's morning email counts as an earlier day and the retry carries
+    only what arrived after it."""
+    fake = _straddling_repo(monkeypatch)
+    fake.upsert_insight(_row("before-the-morning-email", datetime(2026, 8, 27, 9, 0, 0)))
+    fake.upsert_insight(_row("after-the-morning-email", datetime(2026, 8, 27, 23, 40, 0)))
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(STRADDLE_DELIVERY)
+    rows = fetch_todays_intelligence(STRADDLE_DELIVERY, key)
+
+    assert {r["url_hash"] for r in rows} == {
+        "before-the-morning-email", "after-the-morning-email",
+    }
+
+
+def test_resolved_key_is_the_run_instants_own_when_no_summary_row_exists(monkeypatch):
+    """Nothing to read (fresh database) — the run falls back to naming the row
+    its own clock says it belongs to, which is what ingestion would key."""
+    fake = InMemoryIntelligenceRepo(now=lambda: T)
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, summary = delivery_engine.resolve_summary_row(RUN_INSTANT)
+
+    assert key == RUN_INSTANT.summary_key
+    assert summary is None
+
+
+def test_resolved_key_keeps_the_runs_own_mode(monkeypatch):
+    """Only the DAY is read off the production row: a QA run still names test
+    rows, so the production-row fallback stays read-only (a write-back keyed
+    run_mode='test' matches no production row)."""
+    fake = InMemoryIntelligenceRepo(now=lambda: T)
+    _summary(fake, RUN_DATE, "production")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(TEST_RUN_INSTANT)
+
+    assert key == SummaryKey(run_date=RUN_DATE, run_mode="test")
+
+
+def test_a_leftover_test_row_is_not_the_day_a_qa_run_belongs_to(monkeypatch):
+    """A delivery-only QA dispatch runs no ingestion, so its own newest row is
+    routinely yesterday's. Taking that as the run's day would anchor the window
+    a day further back and hand QA an email production never sent — production's
+    row is the one that says which day this is."""
+    fake = InMemoryIntelligenceRepo(now=lambda: T)
+    _summary(fake, RUN_DATE, "production")
+    _summary(fake, "2026-08-26", "test")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(TEST_RUN_INSTANT)
+
+    assert key.run_date == RUN_DATE
+
+
+def test_a_straddling_qa_run_names_the_test_row_its_own_ingestion_wrote(monkeypatch):
+    """The straddle in test mode: at 00:20 no production row exists for the new
+    day either, so the day is D — and the write-back lands on the test row the
+    23:50 test ingestion wrote."""
+    fake = InMemoryIntelligenceRepo(now=lambda: STRADDLE_DELIVERY.now)
+    _summary(fake, STRADDLE_D, "production")
+    _summary(fake, STRADDLE_D, "test")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(replace(STRADDLE_DELIVERY, run_mode="test"))
+
+    assert key == SummaryKey(run_date=STRADDLE_D, run_mode="test")
+
+
+def test_a_qa_run_whose_own_ingestion_ran_today_belongs_to_today(monkeypatch):
+    """A test dispatch with run_ingestion=true, before the production cron has
+    written today's row: its OWN row for today already exists, so today is the
+    day it belongs to even though production's newest row is still yesterday's.
+    Reading the day off production there would anchor the QA window a day too
+    far back and strand today's test-row accounting."""
+    fake = InMemoryIntelligenceRepo(now=lambda: T)
+    _summary(fake, "2026-08-26", "production")
+    _summary(fake, RUN_DATE, "test")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(TEST_RUN_INSTANT)
+
+    assert key == SummaryKey(run_date=RUN_DATE, run_mode="test")

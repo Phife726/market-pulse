@@ -150,8 +150,10 @@ zero-I/O purity is untouched.
   **strictly after** the last recorded production delivery
   (`daily_summaries.delivered_at` on the most recent *earlier* `run_date`). The
   anchor is production-only in every run mode (a QA re-render sees what
-  production saw) and strictly-earlier-day (a same-day retry re-sends the whole
-  day's window). `delivered_at` is stamped by `_record_delivery` only **after**
+  production saw) and strictly-earlier-day than the run's **summary key** (a
+  same-day retry re-sends the whole day's window — including a retry whose
+  delivery step has crossed midnight, which belongs to the day its summary row
+  is keyed on, not to the day its clock reads). `delivered_at` is stamped by `_record_delivery` only **after**
   the send succeeds — with the run's *fetch instant*, not the send time, so a
   row a concurrent ingestion writes mid-run stays inside the next window — and
   a failed send widens the next window over the rows that never went out. The
@@ -178,12 +180,33 @@ zero-I/O purity is untouched.
   pure functions take the one field they need — `delivery_window(now, …)` and
   `render_report(today_str, test_mode)` never see it, the caller derives the
   field. The instant is per process: ingestion and delivery each read their
-  own, so a workflow that straddles 00:00 UTC keys the two on different
-  days (never the 10:00 UTC cron; see the Key Invariants entry in
-  `CLAUDE.md`). Named to end the five independent clock reads (two time
-  zones) one delivery run used to make, which spelled the summary-row key
+  own, so a workflow that straddles 00:00 UTC reads two different days — which
+  is why delivery names its row by *reading* it rather than by deriving it
+  (see **Summary key**). Named to end the five independent clock reads (two
+  time zones) one delivery run used to make, which spelled the summary-row key
   four different ways.
   *Avoid*: run clock, run context (that is ingestion's mutable gauntlet state).
+- **Summary key** (`run_instant.py`, `SummaryKey`) — the `daily_summaries` row
+  key, `(run_date, run_mode)`, as a frozen value; that table's unique index is
+  exactly this pair. Ingestion derives its own from the **run instant**
+  (`RunInstant.summary_key`) and upserts there. Delivery *resolves* one instead
+  — `resolve_summary_row(run)` reads the summary row before anything is
+  fetched or written and returns `(key, MacroSummary)` — because the two
+  engines are separate processes with separate clocks: a workflow dispatched
+  late enough that ingestion runs on day D and delivery on D+1 would otherwise
+  name a row that does not exist, and its write-back and `delivered_at` stamp
+  would be silent no-op UPDATEs (issue #76). The **day** half (`_run_day`) is
+  settled by a row of the run's *own* mode for `run_date` when there is one —
+  that row is this run's, and a QA dispatch with `run_ingestion=true` has one
+  before the production cron does. With none, the *production* row's date says
+  which day it is, the way the delivery window's anchor is production-only:
+  production's ingestion always writes its row before delivery starts, so an
+  absent one is exactly the straddle, while a delivery-only QA dispatch runs no
+  ingestion and its leftover test row must not become the day it belongs to.
+  The **mode** half is always the run's own, so a QA run still writes only to
+  test rows. With no row to read at all, the run's own `summary_key` is the
+  fallback.
+  *Avoid*: row id (the table has a uuid `id`; nothing keys on it).
 - **Synthesis outage** (`ingestion_engine.is_synthesis_outage`) — a run that
   stored nothing because **every** LLM synthesis call failed, as opposed to a
   quiet news day where the LLM answered and there was simply nothing material.
