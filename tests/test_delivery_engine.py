@@ -64,8 +64,8 @@ def test_send_email_refuses_an_empty_recipient_list(fake_mailer, monkeypatch):
     assert fake_mailer.sent == []
 
 
-def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
-    """Delivery's fetch_macro_summary returns the typed value, so macro_outlook
+def test_resolve_summary_row_passes_macro_outlook_through(monkeypatch):
+    """Delivery's resolve_summary_row returns the typed value, so macro_outlook
     (incl. the test-mode production-row fallback) is carried along for free."""
     import delivery_engine
     fake_repo = InMemoryIntelligenceRepo()
@@ -76,7 +76,7 @@ def test_fetch_macro_summary_passes_macro_outlook_through(monkeypatch):
         "macro_outlook": VALID_MACRO_OUTLOOK,
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
-    summary = delivery_engine.fetch_macro_summary(_RUN)
+    summary = delivery_engine.resolve_summary_row(_RUN)[1]
     assert summary.outlook == VALID_MACRO_OUTLOOK
 
 
@@ -205,16 +205,16 @@ def test_send_email_recipient_list_is_only_recipient_emails_env(fake_mailer, mon
 
 
 # ===========================================================================
-# fetch_macro_summary() — run-mode isolation
+# resolve_summary_row()[1] — run-mode isolation
 # ===========================================================================
 
 
-def test_fetch_macro_summary_filters_by_run_mode_production(monkeypatch):
+def test_resolve_summary_row_filters_by_run_mode_production(monkeypatch):
     """A production run instant fetches the production row even when a test
     row exists — and even under a stray MARKET_PULSE_RUN_MODE=test: the value
     governs, not the environment."""
     monkeypatch.setenv("MARKET_PULSE_RUN_MODE", "test")
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -228,14 +228,14 @@ def test_fetch_macro_summary_filters_by_run_mode_production(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_RUN)
+    result = resolve_summary_row(_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Prod summary"   # identifies the production row
 
 
-def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
+def test_resolve_summary_row_filters_by_run_mode_test(monkeypatch):
     """Test delivery must fetch the test row, not the production row."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -249,16 +249,16 @@ def test_fetch_macro_summary_filters_by_run_mode_test(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Test summary"   # identifies the test row
 
 
-def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch):
+def test_resolve_summary_row_test_mode_falls_back_to_production_row(monkeypatch):
     """A delivery-only test run (run_ingestion=false) has no test-mode macro
     row — it must fall back to the production row read-only, so the QA
     re-render carries the executive summary and citation sources."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -270,17 +270,17 @@ def test_fetch_macro_summary_test_mode_falls_back_to_production_row(monkeypatch)
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Prod summary"   # identifies the production row
     assert result.sources
 
 
-def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_row(monkeypatch):
+def test_resolve_summary_row_test_mode_prefers_newer_production_over_stale_test_row(monkeypatch):
     """A test row from YESTERDAY (run_ingestion=true QA run the day before)
     must not shadow TODAY's production row — the re-render would pair today's
     articles with stale executive bullets/citations."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
     yesterday = _RUN.min_summary_date
 
@@ -295,16 +295,16 @@ def test_fetch_macro_summary_test_mode_prefers_newer_production_over_stale_test_
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Fresh prod summary"
 
 
-def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatch):
+def test_resolve_summary_row_test_mode_keeps_test_row_on_run_date_tie(monkeypatch):
     """Recency ties prefer the test row — covers the date-rollover grace
     (test ingestion writes at 23:59, delivery reads at 00:01: both candidate
     rows carry yesterday's run_date and the minutes-old test row must win)."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     yesterday = _RUN.min_summary_date
 
     fake = InMemoryIntelligenceRepo()
@@ -318,17 +318,17 @@ def test_fetch_macro_summary_test_mode_keeps_test_row_on_run_date_tie(monkeypatc
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Rollover test summary"
 
 
-def test_fetch_macro_summary_test_mode_accounting_only_test_row_does_not_shadow_production(monkeypatch):
+def test_resolve_summary_row_test_mode_accounting_only_test_row_does_not_shadow_production(monkeypatch):
     """A zero-yield test ingestion run persists an accounting-only test row
     (issue #43). On a run-date tie it must NOT shadow a content-full production
     row — content-fullness is compared before recency, so the QA re-render
     keeps the executive summary."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -343,16 +343,16 @@ def test_fetch_macro_summary_test_mode_accounting_only_test_row_does_not_shadow_
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Prod summary"
 
 
-def test_fetch_macro_summary_test_mode_accounting_only_production_row_does_not_shadow_test(monkeypatch):
+def test_resolve_summary_row_test_mode_accounting_only_production_row_does_not_shadow_test(monkeypatch):
     """The mirror direction: a strictly-newer accounting-only production row
     (zero-yield production run today) must not shadow yesterday's content-full
     test row — pre-#43 no production row would have existed at all."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
     yesterday = _RUN.min_summary_date
 
@@ -368,15 +368,15 @@ def test_fetch_macro_summary_test_mode_accounting_only_production_row_does_not_s
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.legacy_text == "Rollover test summary"
 
 
-def test_fetch_macro_summary_test_mode_returns_accounting_only_row_when_no_content_anywhere(monkeypatch):
+def test_resolve_summary_row_test_mode_returns_accounting_only_row_when_no_content_anywhere(monkeypatch):
     """When the only candidate is an accounting-only test row, return it — the
     QA debug section still renders that day's suppression accounting."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -387,15 +387,15 @@ def test_fetch_macro_summary_test_mode_returns_accounting_only_row_when_no_conte
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    result = fetch_macro_summary(_TEST_RUN)
+    result = resolve_summary_row(_TEST_RUN)[1]
     assert result is not None
     assert result.screened_count == 6
 
 
-def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
+def test_resolve_summary_row_production_never_reads_test_rows(monkeypatch):
     """The fallback is one-directional: production delivery with only a test
     row available must return None, not leak QA data into production mail."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
     today = _RUN.run_date
 
     fake = InMemoryIntelligenceRepo()
@@ -405,13 +405,13 @@ def test_fetch_macro_summary_production_never_reads_test_rows(monkeypatch):
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
-    assert fetch_macro_summary(_RUN) is None
+    assert resolve_summary_row(_RUN)[1] is None
 
 
-def test_fetch_macro_summary_lookback_floor_is_the_run_instants_yesterday(monkeypatch):
+def test_resolve_summary_row_lookback_floor_is_the_run_instants_yesterday(monkeypatch):
     """The >= yesterday window is relative to the run instant, not the process
     clock: a row on min_summary_date is found, one a day earlier is not."""
-    from delivery_engine import fetch_macro_summary
+    from delivery_engine import resolve_summary_row
 
     fake = InMemoryIntelligenceRepo()
     fake.upsert_summary({
@@ -419,13 +419,13 @@ def test_fetch_macro_summary_lookback_floor_is_the_run_instants_yesterday(monkey
         "executive_summary": "Too old", "macro_sentiment": "Stable",
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
-    assert fetch_macro_summary(_RUN) is None
+    assert resolve_summary_row(_RUN)[1] is None
 
     fake.upsert_summary({
         "run_date": _RUN.min_summary_date, "run_mode": "production",
         "executive_summary": "Yesterday", "macro_sentiment": "Stable",
     })
-    assert fetch_macro_summary(_RUN).legacy_text == "Yesterday"
+    assert resolve_summary_row(_RUN)[1].legacy_text == "Yesterday"
 
 
 # ===========================================================================
@@ -456,7 +456,7 @@ def test_prepare_report_surfaced_count_is_post_cap(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, run=_RUN, report_config=config)
+        prepare_report(rows, None, key=_RUN.summary_key, report_config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     assert stored is not None, "Expected an update() call to daily_summaries"
@@ -486,7 +486,7 @@ def test_prepare_report_writes_delivery_suppression_counts_back(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, run=_RUN, report_config=config)
+        prepare_report(rows, None, key=_RUN.summary_key, report_config=config)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     breakdown = stored["suppression_breakdown"]
@@ -517,7 +517,7 @@ def test_prepare_report_update_filtered_by_run_date_and_run_mode(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     with patch("delivery_engine._llm", return_value=FakeLLM()):
-        prepare_report(rows, None, run=_TEST_RUN, report_config=VISIBLE_6_CFG)
+        prepare_report(rows, None, key=_TEST_RUN.summary_key, report_config=VISIBLE_6_CFG)
 
     assert update_calls, f"Expected update_delivery_counts call. calls={update_calls}"
     keys = set()
@@ -558,7 +558,7 @@ def test_prepare_report_synthesis_sees_only_final_capped_groups(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: InMemoryIntelligenceRepo())
 
     with patch("delivery_engine._llm", return_value=fake_llm):
-        model = prepare_report(rows, None, run=_RUN, report_config=config)
+        model = prepare_report(rows, None, key=_RUN.summary_key, report_config=config)
 
     assert len(fake_llm.calls) == 1
     user = fake_llm.calls[-1]["user"]
@@ -583,7 +583,7 @@ def test_prepare_report_no_news_skips_write_back_and_llm(monkeypatch):
     fake_llm = FakeLLM()
 
     with patch("delivery_engine._llm", return_value=fake_llm):
-        model = prepare_report([], None, run=_RUN, report_config={})
+        model = prepare_report([], None, key=_RUN.summary_key, report_config={})
 
     assert model.variant == "no_news"
     assert repo_touched == []
@@ -714,7 +714,7 @@ def test_update_delivery_summary_counts_overwrites_delivery_keys(monkeypatch):
               .record_count("below_impact_threshold", 5)
               .record_count("weak_relevance", 2))
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=6, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=6, ledger=ledger)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     merged = stored["suppression_breakdown"]
@@ -743,12 +743,12 @@ def test_update_delivery_summary_counts_idempotent_on_retry(monkeypatch):
               .record("product_listing", url="https://amazon.com/p/1", title="Plastic tote")
               .record_count("product_listing", 4))  # total product_listing = 5
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=6, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=6, ledger=ledger)
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     first_breakdown = dict(stored["suppression_breakdown"])
     first_samples = list(stored["suppression_samples"])
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=6, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=6, ledger=ledger)
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     second_breakdown = dict(stored["suppression_breakdown"])
     second_samples = list(stored["suppression_samples"])
@@ -776,7 +776,7 @@ def test_update_delivery_summary_counts_preserves_unknown_prior_keys(monkeypatch
 
     ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=1, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=1, ledger=ledger)
 
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     merged = stored["suppression_breakdown"]
@@ -801,12 +801,12 @@ def test_delivery_suppression_idempotent_on_same_day_retry(monkeypatch):
               .record("duplicate_headline", url="u", title="t")
               .record_count("below_impact_threshold", 3))
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=5, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=5, ledger=ledger)
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     first_breakdown = dict(stored["suppression_breakdown"])
     first_samples = list(stored["suppression_samples"])
 
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=5, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=5, ledger=ledger)
     stored = fake.get_delivery_state(run_date=today, run_mode="production")
     second_breakdown = dict(stored["suppression_breakdown"])
     second_samples = list(stored["suppression_samples"])
@@ -855,7 +855,7 @@ def test_fetch_todays_intelligence_routes_through_repo(monkeypatch):
         "americhem_impact_score": 8, "sentiment_score": 7,
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
-    rows = fetch_todays_intelligence(_RUN)
+    rows = fetch_todays_intelligence(_RUN, _RUN.summary_key)
     assert len(rows) == 1
     assert rows[0]["headline"] == "Alpha"
     assert "alert_tier" not in rows[0]   # decoration moved to caller
@@ -872,13 +872,14 @@ def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     fixed_monday = datetime(2026, 5, 25, 9, 0, 0)  # Monday
-    delivery_engine.fetch_todays_intelligence(replace(_RUN, now=fixed_monday))
+    monday_run = replace(_RUN, now=fixed_monday)
+    delivery_engine.fetch_todays_intelligence(monday_run, monday_run.summary_key)
     fake.fetch_since.assert_called_once_with(fixed_monday - timedelta(hours=72))
 
 
-def test_fetch_macro_summary_routes_through_repo(monkeypatch):
-    """fetch_macro_summary returns repo.fetch_latest_summary as a MacroSummary."""
-    from delivery_engine import fetch_macro_summary
+def test_resolve_summary_row_routes_through_repo(monkeypatch):
+    """resolve_summary_row returns repo.fetch_latest_summary as a MacroSummary."""
+    from delivery_engine import resolve_summary_row
     fake = InMemoryIntelligenceRepo()
     today = _RUN.run_date
     fake.upsert_summary({
@@ -887,16 +888,16 @@ def test_fetch_macro_summary_routes_through_repo(monkeypatch):
         "dominant_condition": "Mixed / Watch",
     })
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
-    got = fetch_macro_summary(_RUN)
+    got = resolve_summary_row(_RUN)[1]
     assert got is not None
     assert got.legacy_text == "today's summary"
 
 
-def test_fetch_macro_summary_returns_none_when_missing(monkeypatch):
-    from delivery_engine import fetch_macro_summary
+def test_resolve_summary_row_returns_none_when_missing(monkeypatch):
+    from delivery_engine import resolve_summary_row
     fake = InMemoryIntelligenceRepo()
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
-    assert fetch_macro_summary(_RUN) is None
+    assert resolve_summary_row(_RUN)[1] is None
 
 
 def test_update_delivery_summary_counts_merges_with_prior(monkeypatch):
@@ -919,7 +920,7 @@ def test_update_delivery_summary_counts_merges_with_prior(monkeypatch):
         .record_count("below_impact_threshold", 3)
         .record_count("product_listing", 1)
     )
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=4, ledger=new_ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=4, ledger=new_ledger)
 
     got = fake.get_delivery_state(run_date=today, run_mode="production")
     assert got["surfaced_count"] == 4
@@ -943,7 +944,7 @@ def test_update_delivery_summary_counts_swallows_write_failure(monkeypatch, capl
 
     # Should not raise.
     _update_delivery_summary_counts(
-        run=_RUN,
+        key=_RUN.summary_key,
         surfaced_count=0,
         ledger=SuppressionLedger.for_delivery(),
     )
@@ -971,7 +972,7 @@ def test_update_delivery_summary_counts_aborts_write_on_prior_read_failure(monke
 
     # Must not raise.
     _update_delivery_summary_counts(
-        run=_RUN,
+        key=_RUN.summary_key,
         surfaced_count=4,
         ledger=SuppressionLedger.for_delivery(),
     )
@@ -998,7 +999,7 @@ def test_update_delivery_summary_counts_writes_when_no_prior_row(monkeypatch):
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     ledger = SuppressionLedger.for_delivery().record_count("below_impact_threshold", 2)
-    _update_delivery_summary_counts(run=_RUN, surfaced_count=3, ledger=ledger)
+    _update_delivery_summary_counts(key=_RUN.summary_key, surfaced_count=3, ledger=ledger)
 
     got = fake.get_delivery_state(run_date=today, run_mode="production")
     assert got["surfaced_count"] == 3

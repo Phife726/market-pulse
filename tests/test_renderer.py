@@ -90,7 +90,7 @@ def test_render_card_never_renders_action_line(action):
 
 
 # ===========================================================================
-# Macro outlook flows through fetch_macro_summary and the renderer
+# Macro outlook flows through resolve_summary_row and the renderer
 # ===========================================================================
 
 

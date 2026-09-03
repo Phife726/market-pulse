@@ -205,7 +205,7 @@ class MacroSummary:
     """One stored ``daily_summaries`` row, read defensively and once.
 
     The read face of the schema ``assemble_macro_content`` writes. Delivery
-    converts at the fetch — ``fetch_macro_summary`` returns this, not a dict —
+    converts at the fetch — ``resolve_summary_row`` returns this, not a dict —
     so nothing downstream (report assembly, the report model, the renderer)
     holds raw jsonb, and there is no second place for a ``.get()`` on this
     shape to reappear. ``None`` still means *no row found*, which delivery logs

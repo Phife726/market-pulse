@@ -9,7 +9,7 @@ from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
 from mailer import EmailMessage, _mailer
-from run_instant import RunInstant
+from run_instant import RunInstant, SummaryKey
 import prompts
 import config
 from scoring import tier as _alert_tier
@@ -64,18 +64,22 @@ def delivery_window(now: datetime, last_delivered_at: Optional[datetime]) -> Del
     return DeliveryWindow(cutoff=now - timedelta(hours=hours), anchored=False)
 
 
-def fetch_todays_intelligence(run: RunInstant) -> list[dict]:
+def fetch_todays_intelligence(run: RunInstant, key: SummaryKey) -> list[dict]:
     """Rows created since the last production email (see delivery_window).
 
     The anchor is always the PRODUCTION delivery on an earlier run_date,
     whatever mode this run is in: a QA re-render must see the rows production
     saw, and a same-day retry re-sends the whole day's window rather than only
-    what arrived since the morning email. `run` is the run instant — the one
+    what arrived since the morning email. "Earlier" is earlier than `key` —
+    the summary row this run acts on (`resolve_summary_row`) — not than the
+    delivery step's own clock: a run that straddles 00:00 UTC belongs to the
+    day its row is keyed on, and would otherwise count that day's own morning
+    email as an earlier day's (issue #76). `run` is the run instant — the one
     clock reading this run makes (execute_pipeline stamps `run.now` after a
     successful send); it is naive UTC to match created_at. Propagates a failed read —
     a no-news email on a database outage would be wrong, and its stamp would
     hide the rows the outage concealed."""
-    anchor = _repo().fetch_last_delivery(run_mode=ANCHOR_RUN_MODE, before_date=run.run_date)
+    anchor = _repo().fetch_last_delivery(run_mode=ANCHOR_RUN_MODE, before_date=key.run_date)
     window = delivery_window(run.now, anchor)
     rows = _repo().fetch_since(window.cutoff)
     if window.anchored:
@@ -123,18 +127,41 @@ def _as_candidate(row: Optional[dict]) -> Optional[tuple["MacroSummary", str]]:
     return MacroSummary.from_row(row), str(row.get("run_date") or "")
 
 
-def fetch_macro_summary(run: RunInstant) -> Optional[MacroSummary]:
-    """The macro-summary row for this run: the latest row in the run's mode
-    dated on or after the run instant's yesterday (the date-rollover grace).
+def resolve_summary_row(run: RunInstant) -> tuple[SummaryKey, Optional[MacroSummary]]:
+    """The `daily_summaries` row this run acts on: which row (the key every
+    write of this run names) and what it carries — the latest row in the run's
+    mode dated on or after the run instant's yesterday (the date-rollover
+    grace).
 
-    Converts here, at the seam where the row leaves the repo, so nothing
-    downstream — report assembly, the report model, the renderer — holds raw
-    jsonb. None still means *no row found* (logged); a row that exists but
-    carries no brief is a MacroSummary whose has_content is False."""
+    The row is resolved BEFORE anything is fetched or written, because the
+    two engines are separate processes reading separate clocks: a workflow
+    dispatched late enough that ingestion runs on day D and delivery on D+1
+    must still name row D (issue #76). The summary converts here, at the seam
+    where the row leaves the repo, so nothing downstream — report assembly,
+    the report model, the renderer — holds raw jsonb. None still means *no row
+    found* (logged); a row that exists but carries no brief is a MacroSummary
+    whose has_content is False."""
     candidate = _as_candidate(_repo().fetch_latest_summary(
         run_mode=run.run_mode,
         min_date=run.min_summary_date,
     ))
+    # The DAY the run belongs to is read off the PRODUCTION row in either
+    # mode, the way the window anchor is (ANCHOR_RUN_MODE) — production's
+    # ingestion always upserts its row before delivery starts, so an absent
+    # one is exactly the midnight straddle. A test run's own row is not that
+    # signal: a delivery-only QA dispatch runs no ingestion at all, and
+    # yesterday's leftover test row must not become this run's day and widen
+    # the QA window past the email production has already sent. Only the MODE
+    # half of the key is the run's own, so a QA run still writes to test rows.
+    production = candidate if not run.test_mode else _as_candidate(
+        _repo().fetch_latest_summary(
+            run_mode=ANCHOR_RUN_MODE,
+            min_date=run.min_summary_date,
+        ))
+    key = SummaryKey(
+        run_date=production[1] if production and production[1] else run.run_date,
+        run_mode=run.run_mode,
+    )
     if run.test_mode:
         # Delivery-only test runs (run_ingestion=false) have no same-day
         # test-mode macro row — ingestion is what writes it — and a leftover
@@ -147,10 +174,6 @@ def fetch_macro_summary(run: RunInstant) -> Optional[MacroSummary]:
         # touched: the delivery write-back keys on run_mode='test', which
         # matches no row and is a silent no-op UPDATE. Production mode never
         # falls back — it must not read test rows.
-        production = _as_candidate(_repo().fetch_latest_summary(
-            run_mode=ANCHOR_RUN_MODE,
-            min_date=run.min_summary_date,
-        ))
         if _prefer_production_summary(candidate, production):
             logger.info(
                 "Using the production macro-summary row (run_date %s) for the "
@@ -160,30 +183,30 @@ def fetch_macro_summary(run: RunInstant) -> Optional[MacroSummary]:
             candidate = production
     if candidate is None:
         logger.warning("No macro summary found for run_date >= %s.", run.min_summary_date)
-        return None
-    return candidate[0]
+        return key, None
+    return key, candidate[0]
 
 
 def _update_delivery_summary_counts(
     *,
-    run: RunInstant,
+    key: SummaryKey,
     surfaced_count: int,
     ledger: SuppressionLedger,
 ) -> None:
-    """Update the run's daily_summaries row (keyed on the run instant's
-    run_date + run_mode) with the delivery-side surfaced count
+    """Update the run's daily_summaries row (`key` — the row this run read,
+    see resolve_summary_row) with the delivery-side surfaced count
     and merged suppression accounting. Idempotent on same-day retry — the
     merge semantics live in SuppressionLedger.merge_with().
 
     Non-critical: a failed write is logged but does not raise. Keeps the
     email-sending path resilient to transient Supabase outages."""
     try:
-        prior_row = _repo().require_delivery_state(run_date=run.run_date, run_mode=run.run_mode)
+        prior_row = _repo().require_delivery_state(run_date=key.run_date, run_mode=key.run_mode)
         prior = SuppressionLedger.from_row("delivery", prior_row)
         merged = ledger.merge_with(prior)
         _repo().update_delivery_counts(
-            run_date=run.run_date,
-            run_mode=run.run_mode,
+            run_date=key.run_date,
+            run_mode=key.run_mode,
             surfaced_count=surfaced_count,
             ledger_row=merged.to_row(),
         )
@@ -191,9 +214,10 @@ def _update_delivery_summary_counts(
         logger.warning("Failed to update delivery counts on daily_summaries: %s", exc)
 
 
-def _record_delivery(run: RunInstant) -> None:
-    """Stamp delivered_at on the run's daily_summaries row — the anchor the
-    next run's delivery window starts from. The stamp is `run.now`, the
+def _record_delivery(key: SummaryKey, *, delivered_at: datetime) -> None:
+    """Stamp delivered_at on the run's daily_summaries row (`key` — the row
+    this run read, see resolve_summary_row) — the anchor the
+    next run's delivery window starts from. `delivered_at` is `run.now`, the
     instant this run's fetch ran (its window's "now"), not the send time: the anchor
     may only move past rows this email actually carried. Called only after
     the send succeeded, so a failed send leaves the previous anchor in place
@@ -207,9 +231,9 @@ def _record_delivery(run: RunInstant) -> None:
     silent no-op on production accounting."""
     try:
         _repo().record_delivery(
-            run_date=run.run_date,
-            run_mode=run.run_mode,
-            delivered_at=run.now,
+            run_date=key.run_date,
+            run_mode=key.run_mode,
+            delivered_at=delivered_at,
         )
     except Exception as exc:
         logger.warning("Failed to stamp delivered_at on daily_summaries: %s", exc)
@@ -257,7 +281,7 @@ def prepare_report(
     rows: list[dict],
     macro_summary: Optional[MacroSummary],
     *,
-    run: RunInstant,
+    key: SummaryKey,
     report_config: dict | None = None,
 ) -> ReportModel:
     """Assemble the report model and perform the run's two side effects —
@@ -265,15 +289,15 @@ def prepare_report(
     thematic synthesis (LLM seam) — exactly once, in that order.
 
     Both effects are skipped for the no_news variant: that path never wrote
-    back, and there is nothing to synthesize. `run` keys the write-back on
-    the run instant's run_date + run_mode. report_config=None loads
+    back, and there is nothing to synthesize. `key` is the row the write-back
+    names — the one resolve_summary_row read. report_config=None loads
     market_pulse_config.yaml; tests pass a dict. The returned model is ready
     for render_report."""
     cfg = report_config if report_config is not None else config.mp_config()
     model = assemble_report(rows, macro_summary, cfg)
     if model.variant == "daily":
         _update_delivery_summary_counts(
-            run=run,
+            key=key,
             surfaced_count=model.surfaced_count,
             ledger=model.ledger,
         )
@@ -320,9 +344,11 @@ def send_email(html_content: str, *, run: RunInstant) -> None:
 def execute_pipeline(run: RunInstant) -> None:
     # `run` is the run instant main() read once (see CONTEXT.md): its `now` is
     # the window's "now" and the delivered_at stamp (see _record_delivery);
-    # its run_mode keys every daily_summaries read and write.
-    data          = fetch_todays_intelligence(run)
-    macro_summary = fetch_macro_summary(run)
+    # its run_mode keys every daily_summaries read and write. WHICH row those
+    # writes land on is resolved first, by reading it — the run's own clock
+    # only names the row when there is none to read (issue #76).
+    key, macro_summary = resolve_summary_row(run)
+    data               = fetch_todays_intelligence(run, key)
 
     if not data:
         logger.warning("No intelligence records for today — sending no-news notification.")
@@ -335,10 +361,10 @@ def execute_pipeline(run: RunInstant) -> None:
             critical_count, strategic_count, routine_count,
         )
 
-    model = prepare_report(data, macro_summary, run=run)
+    model = prepare_report(data, macro_summary, key=key)
     html = render_report(model, today_str=run.header_date, test_mode=run.test_mode)
     send_email(html, run=run)
-    _record_delivery(run)
+    _record_delivery(key, delivered_at=run.now)
 
 
 def main() -> None:

@@ -79,7 +79,7 @@ DELIVERY = Harness(
     # The run, its two fetches, report preparation (assembly + write-back +
     # thematic synthesis), composition/send, and the post-send stamp.
     functions=(
-        "execute_pipeline", "fetch_todays_intelligence", "fetch_macro_summary",
+        "execute_pipeline", "fetch_todays_intelligence", "resolve_summary_row",
         "prepare_report", "_update_delivery_summary_counts",
         "synthesize_thematic_paragraphs", "send_email", "_record_delivery",
     ),
@@ -89,6 +89,7 @@ DELIVERY = Harness(
         "delivery_window", "assemble_report", "render_report",
         "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
         "EmailMessage", "SuppressionLedger.from_row", "_as_candidate",
+        "SummaryKey",
     }),
 )
 
