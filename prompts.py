@@ -20,7 +20,6 @@ a diff-review discipline.
 import hashlib
 from dataclasses import dataclass
 from typing import Optional
-from urllib.parse import urlparse
 
 import insight
 from scoring import Scoring
@@ -359,18 +358,6 @@ def insight_prompt(
 # Macro summary prompt (once per run)
 # ---------------------------------------------------------------------------
 
-def _source_domain(url: str) -> str:
-    """Registrable host minus a leading 'www.'; '' when unparseable/empty.
-
-    Uses urlparse().hostname so any :port is stripped and the host is lowercased.
-    """
-    try:
-        host = urlparse(url or "").hostname or ""
-    except (ValueError, TypeError):
-        return ""
-    return host[4:] if host.startswith("www.") else host
-
-
 def _macro_sort_key(a: dict):
     """Deterministic macro ranking key: materiality desc, headline asc, hash asc.
     created_at is NOT used — the in-memory stored-articles buffer does not carry
@@ -412,7 +399,7 @@ def _build_macro_source_pack(ranked_articles: list[dict]) -> list[dict]:
             "id": i,
             "headline": a.get("headline", "") or "",
             "url": url,
-            "domain": _source_domain(url),
+            "domain": insight.source_domain(url),
             "segment": insight.commercial_segment(a),
             "score": insight.effective_impact(a),
         })

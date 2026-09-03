@@ -22,11 +22,11 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Protocol
 
 from supabase import create_client, Client
+import insight
 from run_instant import naive_utcnow
 
 logger = logging.getLogger(__name__)
@@ -245,25 +245,6 @@ def _utc_isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat()
 
 
-_ISO_FRACTION = re.compile(r"\.(\d+)")
-
-
-def _normalize_iso(value: str) -> str:
-    """Make a Postgres/PostgREST timestamp parseable by every supported
-    Python. Postgres strips trailing zeros from the microseconds
-    ("10:44:12.500000" → "10:44:12.5"); datetime.fromisoformat before 3.11
-    accepts only exactly 3 or 6 fractional digits and rejects a trailing
-    "Z". Pad/truncate the fraction to 6 digits and spell "Z" as "+00:00"."""
-    value = value.strip()
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    match = _ISO_FRACTION.search(value)   # the date part has no '.', so the
-    if match:                             # first one is the seconds fraction
-        digits = match.group(1)[:6].ljust(6, "0")
-        value = value[:match.start(1)] + digits + value[match.end(1):]
-    return value
-
-
 def _coerce_timestamp(value: object) -> Optional[datetime]:
     """Normalize a stored timestamp (created_at, delivered_at) into a naive
     UTC datetime.
@@ -278,9 +259,11 @@ def _coerce_timestamp(value: object) -> Optional[datetime]:
     unparseable or unsupported types so callers can skip the row.
     """
     if isinstance(value, str):
-        try:
-            ts = datetime.fromisoformat(_normalize_iso(value))
-        except ValueError:
+        # insight.parse_timestamp owns the Postgres shapes (trailing Z, any
+        # fraction width) — the same tolerance the report and renderer read
+        # these columns with.
+        ts = insight.parse_timestamp(value)
+        if ts is None:
             return None
     elif isinstance(value, datetime):
         ts = value

@@ -16,16 +16,16 @@ unsafe URL renders its text unlinked).
 
 Pure and deterministic: same (model, today_str, test_mode) -> same bytes. No
 clock, config, seam or logger — the header date and the test-mode flag are
-the caller's to derive from the run instant. Imports only the pure modules
-it presents (`report`, `scoring`, `suppression_ledger`) — the allow-list row in
-`tests/test_purity.py`.
+the caller's to derive from the run instant. Imports only pure modules
+(`report`, `scoring`, `suppression_ledger`, `macro_summary`, `insight`) — the
+allow-list row in `tests/test_purity.py` is what enforces it.
 """
 
 import html
-from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
+import insight
 from suppression_ledger import ALL_CODES, SAMPLES_CAP, label_for
 from macro_summary import MacroSummary
 import scoring
@@ -253,33 +253,17 @@ def _render_segment_watch_section(
 # Additional Articles to Explore — compact optional-discovery appendix
 # ---------------------------------------------------------------------------
 
-def _appendix_domain(url: str) -> str:
-    """Registrable host minus a leading 'www.'; '' when unparseable/empty."""
-    try:
-        host = urlparse(url or "").hostname or ""
-    except (ValueError, TypeError):
-        return ""
-    return host[4:] if host.startswith("www.") else host
-
-
 def _appendix_source_label(item: dict) -> str:
     """Publisher name when known, else the source domain."""
     pub = (item.get("source_publication") or "").strip()
-    return pub or _appendix_domain(item.get("source_url") or "")
+    return pub or insight.source_domain(item.get("source_url"))
 
 
 def _appendix_pub_date(item: dict) -> str:
     """Human date from published_at ONLY (never the scrape timestamp). Empty
     string when published_at is absent or unparseable."""
-    val = item.get("published_at")
-    if not isinstance(val, str) or not val.strip():
-        return ""
-    s = val.strip()
-    try:
-        dt = datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s)
-    except (ValueError, TypeError):
-        return ""
-    return dt.strftime("%b %d, %Y")
+    dt = insight.parse_timestamp(item.get("published_at"))
+    return dt.strftime("%b %d, %Y") if dt else ""
 
 
 def _render_additional_articles_section(items: list[dict]) -> str:

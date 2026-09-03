@@ -30,7 +30,7 @@ import yaml
 
 import sync_zoominfo_ids as sync
 from targets import entity_entries, load_targets
-from tests.conftest import REPO_ROOT
+from tests.conftest import TARGETS_PATH
 
 
 def _write(tmp_path, name, body):
@@ -929,7 +929,7 @@ def test_the_composer_walk_agrees_with_the_catalogue_on_the_shipped_file():
     exercises a fill. Pin the join against the real file directly: every
     entry located, same names in the same order, none flow-style or aliased,
     every one with an insertion boundary."""
-    text = (REPO_ROOT / "targets.yaml").read_text(encoding="utf-8")
+    text = TARGETS_PATH.read_text(encoding="utf-8")
     entries = entity_entries(text, source="targets.yaml")
     located = sync._locate(text, entries, source="targets.yaml")   # raises on divergence
     locs = [loc for _e, loc in located]

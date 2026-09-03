@@ -26,6 +26,10 @@ from prompts import EXEC_BULLET_LABELS  # noqa: E402
 
 #: The repository root — the structural guards read module sources by path.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+#: The two shipped control files. A test that pins repo policy reads these;
+#: one that exercises the parser writes its own file under tmp_path.
+TARGETS_PATH = REPO_ROOT / "targets.yaml"
+CONFIG_PATH = REPO_ROOT / "market_pulse_config.yaml"
 
 
 @pytest.fixture(autouse=True)

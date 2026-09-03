@@ -12,7 +12,9 @@ between two engines:
 - the clamp/default/DISCARD rules that turn a raw LLM dict into a storable row
   (``normalize``), and
 - the readers that pull a field back off a stored row with its default applied
-  (``effective_impact``, ``commercial_segment``, ``signal_type``).
+  (``effective_impact``, ``commercial_segment``, ``signal_type``), and
+- the two readers of a stored *value* rather than a row (``source_domain``,
+  ``parse_timestamp``) — see the note at their definition.
 
 Before this module, ``ingestion_engine.synthesize_insight`` owned the clamping
 and ``delivery_engine`` re-derived the same defaults in three private readers.
@@ -24,7 +26,10 @@ and stays with ``generate_macro_summary``.
 """
 
 import logging
+import re
+from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -161,3 +166,58 @@ def signal_type(row: dict) -> str:
     """Return signal_type if set on the row; else 'Other'."""
     sig = (row.get("signal_type") or "").strip()
     return sig or DEFAULT_SIGNAL
+
+
+# --- Value readers ----------------------------------------------------------
+# Readers of one stored *value* rather than a row: the callers hold the value
+# already, and one of them reads it from more than one column (the appendix
+# ranks published_at *or* created_at through the same parse), so a row reader
+# would not serve them. Both are total — any value in, "" / None out.
+#
+# They live here, the lowest pure module, because their readers span layers a
+# report-side home could not reach: `daily_intelligence_repo` (a seam a pure
+# module may not import) shares `parse_timestamp`, and `prompts` shares
+# `source_domain`. `ingestion_engine`'s own host read deliberately does NOT
+# share this one — UNSCRAPABLE_HOSTS matches the `www.` form too.
+
+#: The seconds fraction of an ISO timestamp. The date part carries no '.',
+#: so the first match is always the fraction.
+_ISO_FRACTION = re.compile(r"\.(\d+)")
+
+
+def source_domain(url: object) -> str:
+    """Registrable host of `url` minus a leading 'www.'; '' when the URL is
+    empty, not a string, or unparseable. urlparse().hostname strips any :port
+    and lowercases."""
+    if not isinstance(url, str):
+        return ""
+    try:
+        host = urlparse(url).hostname or ""
+    except (ValueError, TypeError):
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def parse_timestamp(value: object) -> Optional[datetime]:
+    """`value` as a datetime when it is an ISO-8601 string, else None (so a
+    caller can tell 'no usable date' from a real one). A non-None result
+    guarantees `value` was a string.
+
+    Normalizes the two shapes Postgres/PostgREST emit that `fromisoformat`
+    rejects before Python 3.11, which the pipeline still runs on: a trailing
+    'Z', and a seconds fraction of any width other than 3 or 6 digits
+    (Postgres strips trailing zeros, so '10:44:12.500000' comes back as
+    '10:44:12.5'). Surrounding whitespace is tolerated. Pure: parsing reads
+    no clock, and the parsed value keeps whatever offset it was written with."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    s = value.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    match = _ISO_FRACTION.search(s)
+    if match:
+        s = s[:match.start(1)] + match.group(1)[:6].ljust(6, "0") + s[match.end(1):]
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
