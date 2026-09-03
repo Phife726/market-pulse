@@ -127,6 +127,30 @@ def _as_candidate(row: Optional[dict]) -> Optional[tuple["MacroSummary", str]]:
     return MacroSummary.from_row(row), str(row.get("run_date") or "")
 
 
+def _run_day(
+    run: RunInstant,
+    candidate: Optional[tuple["MacroSummary", str]],
+    production: Optional[tuple["MacroSummary", str]],
+) -> str:
+    """The `run_date` the run belongs to — the day half of its summary key.
+
+    A row of the run's OWN mode for `run.run_date` settles it: that row is this
+    run's (a QA dispatch with run_ingestion=true has one before the production
+    cron does). With none, the PRODUCTION row's date says which day this is,
+    the way the window's anchor is production-only (ANCHOR_RUN_MODE):
+    production's ingestion always upserts its row before delivery starts, so an
+    absent one is exactly the midnight straddle — while a delivery-only QA
+    dispatch runs no ingestion at all, and its leftover row from yesterday must
+    not become this run's day and widen the QA window past the email production
+    has already sent. With nothing to read, the run's own clock names the day.
+    """
+    if candidate is not None and candidate[1] == run.run_date:
+        return run.run_date
+    if production is not None and production[1]:
+        return production[1]
+    return run.run_date
+
+
 def resolve_summary_row(run: RunInstant) -> tuple[SummaryKey, Optional[MacroSummary]]:
     """The `daily_summaries` row this run acts on: which row (the key every
     write of this run names) and what it carries — the latest row in the run's
@@ -145,23 +169,15 @@ def resolve_summary_row(run: RunInstant) -> tuple[SummaryKey, Optional[MacroSumm
         run_mode=run.run_mode,
         min_date=run.min_summary_date,
     ))
-    # The DAY the run belongs to is read off the PRODUCTION row in either
-    # mode, the way the window anchor is (ANCHOR_RUN_MODE) — production's
-    # ingestion always upserts its row before delivery starts, so an absent
-    # one is exactly the midnight straddle. A test run's own row is not that
-    # signal: a delivery-only QA dispatch runs no ingestion at all, and
-    # yesterday's leftover test row must not become this run's day and widen
-    # the QA window past the email production has already sent. Only the MODE
-    # half of the key is the run's own, so a QA run still writes to test rows.
+    # In production mode the run's own row IS the production row — one read.
     production = candidate if not run.test_mode else _as_candidate(
         _repo().fetch_latest_summary(
             run_mode=ANCHOR_RUN_MODE,
             min_date=run.min_summary_date,
         ))
-    key = SummaryKey(
-        run_date=production[1] if production and production[1] else run.run_date,
-        run_mode=run.run_mode,
-    )
+    # Only the DAY half is resolved from the rows (see _run_day); the MODE half
+    # is always the run's own, so a QA run still writes only to test rows.
+    key = SummaryKey(run_date=_run_day(run, candidate, production), run_mode=run.run_mode)
     if run.test_mode:
         # Delivery-only test runs (run_ingestion=false) have no same-day
         # test-mode macro row — ingestion is what writes it — and a leftover

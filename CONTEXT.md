@@ -195,12 +195,15 @@ zero-I/O purity is untouched.
   engines are separate processes with separate clocks: a workflow dispatched
   late enough that ingestion runs on day D and delivery on D+1 would otherwise
   name a row that does not exist, and its write-back and `delivered_at` stamp
-  would be silent no-op UPDATEs (issue #76). The **day** half is read off the
-  *production* row in either mode, the way the delivery window's anchor is
-  (production's ingestion always writes its row before delivery starts, so an
-  absent one is exactly the straddle; a delivery-only QA dispatch runs no
-  ingestion, and its leftover test row must not become the day it belongs to);
-  the **mode** half is always the run's own, so a QA run still writes only to
+  would be silent no-op UPDATEs (issue #76). The **day** half (`_run_day`) is
+  settled by a row of the run's *own* mode for `run_date` when there is one —
+  that row is this run's, and a QA dispatch with `run_ingestion=true` has one
+  before the production cron does. With none, the *production* row's date says
+  which day it is, the way the delivery window's anchor is production-only:
+  production's ingestion always writes its row before delivery starts, so an
+  absent one is exactly the straddle, while a delivery-only QA dispatch runs no
+  ingestion and its leftover test row must not become the day it belongs to.
+  The **mode** half is always the run's own, so a QA run still writes only to
   test rows. With no row to read at all, the run's own `summary_key` is the
   fallback.
   *Avoid*: row id (the table has a uuid `id`; nothing keys on it).

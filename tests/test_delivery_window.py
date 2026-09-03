@@ -478,3 +478,19 @@ def test_a_straddling_qa_run_names_the_test_row_its_own_ingestion_wrote(monkeypa
     key, _ = delivery_engine.resolve_summary_row(replace(STRADDLE_DELIVERY, run_mode="test"))
 
     assert key == SummaryKey(run_date=STRADDLE_D, run_mode="test")
+
+
+def test_a_qa_run_whose_own_ingestion_ran_today_belongs_to_today(monkeypatch):
+    """A test dispatch with run_ingestion=true, before the production cron has
+    written today's row: its OWN row for today already exists, so today is the
+    day it belongs to even though production's newest row is still yesterday's.
+    Reading the day off production there would anchor the QA window a day too
+    far back and strand today's test-row accounting."""
+    fake = InMemoryIntelligenceRepo(now=lambda: T)
+    _summary(fake, "2026-08-26", "production")
+    _summary(fake, RUN_DATE, "test")
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    key, _ = delivery_engine.resolve_summary_row(TEST_RUN_INSTANT)
+
+    assert key == SummaryKey(run_date=RUN_DATE, run_mode="test")
