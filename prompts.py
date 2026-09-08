@@ -244,63 +244,86 @@ RULE 3 — AMERICHEM IMPACT SCORE (relevance and materiality, 1–10):
 Score how materially the EVENT in this article bears on Americhem's business, independent
 of sentiment direction. Americhem is almost never named in the news it needs to see: score
 the event and the actor's position in Americhem's value chain, never whether the article
-names Americhem or spells out a mechanism. "No explicit Americhem linkage" is the normal
-condition of a relevant article and is NEVER a reason to score it low.
+names Americhem or spells out a mechanism. "No explicit Americhem linkage" / "no stated
+impact on Americhem" is the normal condition of a relevant article and is NEVER a reason to
+score it low — a WATCH event (below) never states one; you supply the implied mechanism.
 
 VALUE-CHAIN ACTOR: the trigger entity, or any other company that makes, sells, or distributes
 polymers, resins, compounds, masterbatch, pigments, inks, additives, adhesives, composites,
-or their feedstocks — Americhem's customers, suppliers, distributors, and competitors.
+battery or EV materials, or their feedstocks — Americhem's customers, suppliers,
+distributors, and competitors.
+ABSENT TRIGGER ENTITY: a query on one company often returns another's news. If the trigger
+entity is absent or incidental but the article is about ANOTHER value-chain actor's event
+(Siegwerk's ink capacity for a Sun Chemical query; Cambium's aerospace adhesive for an
+Advanced Composites query), score that actor's event exactly as if it were the trigger.
+RULE 1's DISCARD is for a WRONG entity, never an absent one; the FLOOR's "passing mention"
+is about the article's own actor, not the trigger.
 
-FLOOR (1–3) — applies first, regardless of how prominent the entity is, how big the headline
-number is, or whether the actor is a VALUE-CHAIN ACTOR:
-1–2: the entity is only mentioned in passing; the entity's action is in an unrelated business
-     line (a chemical group's software, diagnostics-equipment, or semiconductor news; a
-     customer's equipment trial); consumer product reviews, launches, or promotions with no
-     materials specification; job postings; broken, empty, or paywalled pages.
-3:   market-research forecasts — any "market to reach / CAGR / forecast to 20XX" report
-     ({market_report_publishers},
+FLOOR — applies first, regardless of how prominent the entity is, how big the headline
+number is, or whether the actor is a VALUE-CHAIN ACTOR. 3 is not a default: class A is 1–2.
+1–2 (class A, no business event at all): the entity is only mentioned in passing; the
+     entity's action is in an unrelated business line (a chemical group's software,
+     diagnostics-equipment, or semiconductor news; a customer's equipment trial); consumer
+     product reviews, launches, or promotions with no materials specification; job
+     postings; broken, empty, or paywalled pages.
+3   (class B, business content that is not an event): market-research forecasts — any
+     "market to reach / CAGR / forecast to 20XX" report ({market_report_publishers},
      and wire syndications of them on EIN Presswire, GlobeNewswire or PRNewswire), even
      when the report is about masterbatch or lists a competitor or customer "among key
-     players"; analyst ratings and price targets, stock screens and
-     "better-ranked stock" lists, fund stake changes, dividend declarations, earnings-date
-     scheduling, share-price moves with no operational event; trade-show attendance or
-     exhibits, awards, sponsorships, anniversaries; personnel changes below CEO/CFO/COO;
-     local building permits; regional vehicle, EV, or permit statistics, foreign macro data,
-     and sub-national or distant-horizon policy (a province's 2030 ban) with no named
-     mechanism into a RULE 4 segment.
+     players"; analyst ratings and price targets, stock screens and "better-ranked stock"
+     lists, valuation or "is it resilient / a buy" commentary, fund stake changes,
+     dividend declarations, earnings-date scheduling, share-price moves with no
+     operational event; trade-show attendance or exhibits, awards, sponsorships,
+     anniversaries; personnel changes below CEO/CFO/COO; local building permits;
+     regional vehicle, EV, or permit statistics, foreign macro data, and sub-national or
+     distant-horizon policy (a province's 2030 ban) with no named mechanism into a
+     RULE 4 segment.
 
-4 — correct entity, real but thin: a CEO/CFO/COO change; results or earnings with no pricing,
-     volume, or capacity signal for an input or a RULE 4 end-market; technical marketing of
-     an existing grade; a regulatory guidance document; a settlement, lawsuit, or court ruling
-     with no supply effect; a corporate spin-off or IT project; RULE 7's uncertain-relevance
-     exit.
+4 — correct entity, real but thin (never a WATCH event that merely lacks a stated Americhem
+     effect): a CEO/CFO/COO change; results or earnings with no pricing, volume, or capacity
+     signal, or from a prior fiscal year; an end product that merely USES a named polymer
+     (a tray made of Ultem, a sponge, an analyzer) — the launcher is not a material maker;
+     brochure-style technical marketing of an existing grade or application ("X promotes /
+     highlights its resin for Y", approvals listed); end-market trend commentary or an
+     executive's outlook quotes with no transaction, price, capacity, launch, or figure; a
+     trade body's guides, explainers, or roundups that set no new obligation; a settlement,
+     fine, lawsuit, or court ruling with no outage, closure, or allocation; a corporate
+     spin-off or IT project; RULE 7's uncertain-relevance exit.
 
 5–6 (WATCH) — a VALUE-CHAIN ACTOR does something operationally material, or regulation binds
-     a RULE 4 end-market. The mechanism may be IMPLIED by the actor's position — the article
-     does not have to state it. Any one of:
+     a RULE 4 end-market, or a core demand indicator prints. The mechanism is IMPLIED by the
+     actor's position — the article will not state it, and that is not a reason for 4.
+     Any one of:
      - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
        pigment, additive, or feedstock, including reported resin and recyclate price moves
-     - capacity opened, closed, expanded, idled, or moved — a plant, line, lab, or capability
-       build — for making or converting polymers, pigments, inks, additives, or composites
-     - M&A, divestiture, JV, or distribution-agreement change in Americhem's supply chain or
-       sales channel (a distributor buying a distributor counts)
+     - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
+       capability build — in any RULE 4 end-market, by a value-chain actor (a supplier's
+       EV battery-materials lab counts: Transportation - Automotive)
+     - M&A, divestiture, plant sale, JV, or distribution-agreement change in Americhem's
+       supply chain or sales channel — buyer's side and seller's side alike (a distributor
+       buying a distributor; a pigment maker selling a plant to another)
      - financial distress: bankruptcy, restructuring, going-concern warning, guidance cut —
        or a head-to-head competitor's earnings beat and guidance raise
-     - a product launch, new grade, certification, volume milestone, or partnership in a
-       RULE 4 segment (compounds, masterbatch, additives, engineered resins, composites,
-       adhesives, inks); a competitor's launch is a threat and still scores here
+     - a product launch, new grade, certification, volume milestone, or partnership by a
+       MATERIAL MAKER (a resin, compound, masterbatch, additive, adhesive, or ink) in a
+       RULE 4 segment; a competitor's launch is a threat and still scores here
      - quarterly results that carry a pricing or volume signal for an input or a RULE 4
        end-market
-     - regulation (EPR, PFAS, recycled content, food contact) binding a RULE 4 end-market
-     - core manufacturing demand indicators for Americhem's home markets: ISM / PMI
-       manufacturing readings and forecasts, US industrial production
-     Score 5 when the signal is one step removed or general; 6 when the article names the
-     specific input, grade, plant, counterparty, quantity, or date.
+     - regulation binding a RULE 4 end-market — a rule taking effect, a deadline set or
+       approaching, a fee or fine schedule (EPR, PFAS, recycled content, food contact) —
+       even when reported through an explainer
+     - the US ISM Manufacturing PMI (readings, consensus previews, and bank forecasts of
+       it) and US industrial production: the compounding industry's core demand
+       indicators, scored 5 — never "regional statistics"
+     Score 6 by default. Score 5 only when the event is generic: the article names NO
+     specific input, grade, plant, or counterparty AND NO figure or date — or when it is
+     a demand indicator rather than an actor's move.
 
-7–8 (DIRECT) — the event hits an input Americhem buys (resin, TiO2 and other pigments,
-     carbon black, nylon / caprolactam, PVC, PE / PP / PET / PS), a supplier's bankruptcy,
-     force majeure, or exit, a named customer program, or a masterbatch / compounding
-     competitor head-to-head — with a stated quantity, date, or plant.
+7–8 (DIRECT) — a reported price move (index, contract, or announced increase) on an input
+     Americhem buys — resin, recyclate, TiO2 and other pigments, carbon black, nylon /
+     caprolactam, PVC, PE / PP / PET / PS — with a figure or a month; a supplier's
+     bankruptcy, force majeure, or exit; a named customer program; or a masterbatch /
+     compounding competitor head-to-head with a stated quantity, date, or plant.
 
 9–10 (STRATEGIC) — Americhem must act: a key supplier's exit, a binding regulation with a
      near deadline across a whole end-market, a major competitor acquiring a compounder.
@@ -327,6 +350,8 @@ below instead of naming a business unit speculatively.
   those segments, write: "{adjacent_market_template} — no direct Americhem participation indicated."
 - HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
   "{limited_exposure_template} — [specific reason]" instead of inventing a commercial effect.
+- FLOOR CLASS A (RULE 3, score 1–2) takes neither template: write
+  "No material signal — [what the article actually is]" and score 1 or 2.
 {low_exposure_score_rule}
 Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
 Do NOT claim demand or sales UPSIDE ("may increase demand") without data from the article; a

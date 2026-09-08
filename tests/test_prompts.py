@@ -5,6 +5,8 @@ the builders are pure functions over dicts. The engine tests keep one thin
 wiring check each (e.g. the non-English-body regression in test_ingestion_engine.py)
 proving the assembled spec actually crosses the LLM seam.
 """
+from typing import Optional
+
 import prompts
 from prompts import MacroPrompt, PromptSpec
 from scoring import Scoring
@@ -479,7 +481,8 @@ def test_rule3_scores_the_event_not_whether_americhem_is_named():
     rule3 = _rule3()
     assert "NEVER a reason to score it low" in rule3
     assert "VALUE-CHAIN ACTOR:" in rule3
-    assert "may be IMPLIED by the actor's position" in rule3
+    assert "The mechanism is IMPLIED by the actor's position" in rule3
+    assert "NEVER a reason to score it low" in rule3
 
 
 def test_rule3_floor_is_applied_first_and_names_every_noise_class():
@@ -487,7 +490,7 @@ def test_rule3_floor_is_applied_first_and_names_every_noise_class():
     a market report about masterbatch or a competitor's trade-show exhibit
     must not climb into 5–6 on the strength of the entity alone."""
     rule3 = _rule3()
-    assert rule3.index("FLOOR (1–3)") < rule3.index("5–6 (WATCH)") < rule3.index("7–8 (DIRECT)")
+    assert rule3.index("FLOOR — applies first") < rule3.index("5–6 (WATCH)") < rule3.index("7–8 (DIRECT)")
     assert "applies first" in rule3
     for noise in ("market-research forecasts", "analyst ratings and price targets",
                   "stock screens", "trade-show attendance", "only mentioned in passing",
@@ -500,12 +503,35 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     5–6 on without literal Americhem linkage — the recalibration's core."""
     rule3 = _rule3()
     for event in ("price change, force majeure", "capacity opened, closed, expanded",
-                  "M&A, divestiture, JV", "financial distress", "product launch, new grade",
+                  "M&A, divestiture, plant sale, JV", "financial distress", "product launch, new grade",
                   "quarterly results that carry a pricing or volume signal",
                   "regulation (EPR, PFAS, recycled content, food contact)",
                   "ISM / PMI"):
         assert event in rule3, event
-    assert "Score 5 when the signal is one step removed" in rule3
+    assert "Score 6 by default. Score 5 only when the event is generic" in rule3
+    assert "ISM Manufacturing PMI" in rule3 and "core demand indicators, scored 5" in rule3
+
+
+def test_rule3_scores_another_value_chain_actors_event_when_the_trigger_is_absent():
+    """A query on one company returns another's news (Siegwerk for Sun
+    Chemical, Cambium for Advanced Composites); the first real-model pass
+    scored those 3 as 'passing mention'. The rule must say the FLOOR's passing
+    mention is about the article's own actor, not the trigger."""
+    rule3 = _rule3()
+    assert "ABSENT TRIGGER ENTITY:" in rule3
+    assert "score that actor's event exactly as if it were the trigger" in rule3
+    assert "RULE 1's DISCARD is for a WRONG entity, never an absent one" in rule3
+
+
+def test_rule3_floor_has_a_real_1_to_2_class_and_rule6_gives_it_an_opener():
+    """The first real-model pass put 58% of the proportional sample at 3 and
+    nothing at 1–2: the template band ('never below 3') read as a floor for
+    everything. Class A noise now scores 1–2 with its own So-What opener."""
+    rule3 = _rule3()
+    assert "3 is not a default: class A is 1–2" in rule3
+    assert "1–2 (class A, no business event at all)" in rule3
+    rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
+    assert '"No material signal — [what the article actually is]" and score 1 or 2' in rule6
 
 
 def test_rule3_watch_band_sits_above_the_template_band_under_production_thresholds():
