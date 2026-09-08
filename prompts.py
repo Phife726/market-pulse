@@ -283,11 +283,12 @@ number is, or whether the actor is a VALUE-CHAIN ACTOR. 3 is not a default: clas
      effect): a CEO/CFO/COO change; results or earnings with no pricing, volume, or capacity
      signal, or from a prior fiscal year; an end product that merely USES a named polymer
      (a tray made of Ultem, a sponge, an analyzer) — the launcher is not a material maker;
-     brochure-style technical marketing of an existing grade or application ("X promotes /
-     highlights its resin for Y", approvals listed); end-market trend commentary or an
+     brochure-style technical marketing of an existing grade or application (headline
+     verbs promotes / highlights / showcases / features; approvals listed); end-market trend commentary or an
      executive's outlook quotes with no transaction, price, capacity, launch, or figure; a
      trade body's guides, explainers, or roundups that set no new obligation; a settlement,
-     fine, lawsuit, or court ruling with no outage, closure, or allocation; a corporate
+     fine, consent decree, or remediation order — even one mandating plant upgrades — and
+     any lawsuit or court ruling, with no outage, closure, or allocation; a corporate
      spin-off or IT project; RULE 7's uncertain-relevance exit.
 
 5–6 (WATCH) — a VALUE-CHAIN ACTOR does something operationally material, or regulation binds
@@ -304,24 +305,37 @@ number is, or whether the actor is a VALUE-CHAIN ACTOR. 3 is not a default: clas
        buying a distributor; a pigment maker selling a plant to another)
      - financial distress: bankruptcy, restructuring, going-concern warning, guidance cut —
        or a head-to-head competitor's earnings beat and guidance raise
-     - a product launch, new grade, certification, volume milestone, or partnership by a
-       MATERIAL MAKER (a resin, compound, masterbatch, additive, adhesive, or ink) in a
-       RULE 4 segment; a competitor's launch is a threat and still scores here
+     - a product launch, new grade, certification, volume milestone, partnership, or a
+       development / qualification program with a stated performance figure (a 50–60%
+       weight cut) by a MATERIAL MAKER (a resin, compound, masterbatch, additive, adhesive,
+       ink, or composite maker) in a RULE 4 segment; a competitor's launch is a threat and
+       still scores here
      - quarterly results that carry a pricing or volume signal for an input or a RULE 4
        end-market
-     - regulation binding a RULE 4 end-market — a rule taking effect, a deadline set or
-       approaching, a fee or fine schedule (EPR, PFAS, recycled content, food contact) —
-       even when reported through an explainer
+     - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
+       US, a US state, the EU or UK, or a trigger entity's home market) — a rule taking
+       effect, a deadline set or approaching, a fee or fine schedule (EPR, PFAS, recycled
+       content, food contact) — even when reported through an explainer. NOT a
+       sub-national or distant-horizon policy elsewhere: a province's 2030 vehicle ban is
+       FLOOR 3.
      - the US ISM Manufacturing PMI (readings, consensus previews, and bank forecasts of
        it) and US industrial production: the compounding industry's core demand
-       indicators, scored 5 — never "regional statistics"
-     Score 6 by default. Score 5 only when the event is generic: the article names NO
-     specific input, grade, plant, or counterparty AND NO figure or date — or when it is
-     a demand indicator rather than an actor's move.
+       indicators, scored 5 — these TWO only. Every other macro statistic — construction
+       spending, building permits, EV registrations, credit indices, freight rates,
+       energy prices, another country's PMI — is FLOOR 3 unless a value-chain actor's
+       move is named.
+     SCORE 6 (specific) when the article names ANY ONE of: the counterparty or target
+     (Univar acquires INTERPUR), a plant, site, or line, a grade or input (polyester,
+     TiO2, LMPAEK), a figure (18 employees, 10,000 tons, +20%), or an effective date or
+     month. SCORE 5 (generic) ONLY when it names none of those — a "may alter the
+     channel" So-What is not a reason for 5 when the target is named — or when the item
+     is a demand indicator rather than an actor's move.
 
-7–8 (DIRECT) — a reported price move (index, contract, or announced increase) on an input
-     Americhem buys — resin, recyclate, TiO2 and other pigments, carbon black, nylon /
-     caprolactam, PVC, PE / PP / PET / PS — with a figure or a month; a supplier's
+7–8 (DIRECT) — a PRICE REPORT or announced price move on an input Americhem buys: a
+     monthly resin, recyclate, or pigment price report (Plastics News-style — PE / PP /
+     PET / PS / PC / ABS, R-PET / R-PP, TiO2 — any direction, any month, e.g. "R-PET fell
+     €30–40/tonne"), or an announced increase on resin, TiO2 and other pigments, carbon
+     black, nylon / caprolactam, or PVC, with a figure or a month; a supplier's
      bankruptcy, force majeure, or exit; a named customer program; or a masterbatch /
      compounding competitor head-to-head with a stated quantity, date, or plant.
 

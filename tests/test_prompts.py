@@ -508,7 +508,9 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
         assert event in rule3, event
-    assert "Score 6 by default. Score 5 only when the event is generic" in rule3
+    assert "SCORE 6 (specific) when the article names ANY ONE of" in rule3
+    assert "SCORE 5 (generic) ONLY when it names none of those" in rule3
+    assert "these TWO only" in rule3
     assert "ISM Manufacturing PMI" in rule3 and "core demand indicators, scored 5" in rule3
 
 
