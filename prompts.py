@@ -301,11 +301,26 @@ higher. Each floor band is a closed list: put the article in the band whose list
      uncertain-relevance exit. Never a WATCH event that merely lacks a stated Americhem
      effect.
 
-5 — DEMAND PRINT, or a generic event. (a) The two macro prints that matter to a compounder:
-     the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
-     forecast of it — and US industrial production. These two only; every other statistic
-     is band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
-     plant, grade, input, figure, or date.
+The event bands are read in this order: DIRECT (7–8) first, then WATCH (6), then 5 — an
+article that fits DIRECT is DIRECT even if it could also be called generic.
+
+7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
+     - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
+       monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
+       swing as buyers regain leverage", "prices could go up again in August" — with or
+       without a figure: these are input prices, never macro statistics
+     - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
+       caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
+       PE price +20%; Chemours: TiO2 +2%)
+     - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
+       and spandex) — a war, strait closure, or storm counts; the geography of the
+       disruption does not make it a statistic or a "generic" event
+     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
+       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
+       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
+     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
+       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
+       plant
 
 6 — WATCH (the default for an actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
@@ -338,23 +353,11 @@ higher. Each floor band is a closed list: put the article in the band whose list
        sets no new obligation, and NOT a settlement or consent decree (band 3).
      A named counterparty, plant, grade, input, figure, or effective date confirms 6.
 
-7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
-     - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
-       monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
-       swing as buyers regain leverage", "prices could go up again in August" — with or
-       without a figure: these are input prices, never macro statistics
-     - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
-       caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
-       PE price +20%; Chemours: TiO2 +2%)
-     - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
-       and spandex) — a war, strait closure, or storm counts; the geography of the
-       disruption does not make it a statistic or a "generic" event
-     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
-       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
-       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
-     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
-       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
-       plant
+5 — DEMAND PRINT, or a generic event that fits neither band above. (a) The two macro prints that matter to a compounder:
+     the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
+     forecast of it — and US industrial production. These two only; every other statistic
+     is band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
+     plant, grade, input, figure, or date.
 
 9–10 — STRATEGIC: Americhem must act — a key supplier's exit, a binding regulation with a
      near deadline across a whole end-market, a major competitor acquiring a compounder.

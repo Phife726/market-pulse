@@ -490,7 +490,12 @@ def test_rule3_floor_is_applied_first_and_names_every_noise_class():
     a market report about masterbatch or a competitor's trade-show exhibit
     must not climb into 5–6 on the strength of the entity alone."""
     rule3 = _rule3()
-    assert rule3.index("1 — NOT ABOUT THE BUSINESS") < rule3.index("6 — WATCH") < rule3.index("7–8 — DIRECT")
+    # Floor lists first; then the event bands top-down with DIRECT ahead of
+    # WATCH ahead of 5 — a price-direction call must meet the DIRECT bullet
+    # that names it before it can be read as a "generic" event.
+    assert (rule3.index("1 — NOT ABOUT THE BUSINESS") < rule3.index("7–8 — DIRECT")
+            < rule3.index("6 — WATCH") < rule3.index("5 — DEMAND PRINT"))
+    assert "DIRECT (7–8) first, then WATCH (6), then 5" in rule3
     assert "The floor bands (1, 2, 3, 4) are checked first" in rule3
     assert "every MACRO STATISTIC or policy other than the two prints" in rule3
     for noise in ("market-research forecasts", "analyst ratings and price targets",
