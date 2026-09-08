@@ -87,7 +87,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scorer-backtest-${{ env.MODE }}-${{ github.run_number }}
+          name: scorer-backtest-${{ env.MODE }}-${{ github.run_number }}-attempt${{ github.run_attempt }}
           path: |
             backtest/report.txt
             backtest/market_pulse_scorer_backtest_v2.csv
