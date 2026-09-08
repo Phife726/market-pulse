@@ -1556,3 +1556,116 @@ def test_watch_items_rank_low_exposure_templates_last():
                     published_at="2026-08-01T00:00:00+00:00")
     model = assemble_report([template, real], config=cfg)
     assert _watch_hashes(model) == ["real"]
+
+
+# ===========================================================================
+# Delivery suppression rule 8: prior-surfaced near-duplicate — the
+# entity-keyed multi-day dedup (2026-09-08). `prior_surfaced` is what earlier
+# emails showed (cards and Watch rows); a same-entity row whose headline is
+# near-identical to one of them is a repeat the reader already saw.
+# ===========================================================================
+
+
+def _prior(entity: str, headline: str) -> dict:
+    return {"trigger_entity": entity, "headline": headline}
+
+
+_ROYAL_TODAY = "Univar Solutions acquires H.M. Royal distributor"
+_ROYAL_PRIOR = "Univar Solutions acquires H.M. Royal specialty distributor"   # token_sort_ratio 90.6
+_INTERPUR_TODAY = "Univar Solutions acquires Interpur Chemicals for EMEA performance materials"
+_INTERPUR_PRIOR = "Univar Solutions acquires Interpur Chemicals to expand EMEA specialty materials"  # 77.9
+
+
+def _univar(hash_: str, headline: str, **kw) -> dict:
+    fields = {"trigger_entity": "Univar Solutions", "commercial_segment": "Industrial",
+              "headline": headline, **kw}
+    return stub_row(hash_, fields.pop("americhem_impact_score", 8), **fields)
+
+
+def test_assemble_report_accepts_no_prior_surfaced_and_changes_nothing():
+    row = _univar("today", _ROYAL_TODAY)
+    assert [a["url_hash"] for a in assemble_report([row], config=VISIBLE_6_CFG).groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_suppresses_a_same_entity_near_duplicate():
+    row = _univar("today", _ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("prior_surfaced_duplicate") == 1
+    assert any(s.reason == "prior_surfaced_duplicate" and s.title == _ROYAL_TODAY
+               for s in model.ledger.samples)
+
+
+def test_prior_surfaced_duplicate_requires_the_same_trigger_entity():
+    """Keyed on trigger_entity: the same headline under another entity is a
+    different discovery, and two different stories about one entity score
+    well under the threshold (36–49 on production data)."""
+    row = stub_row("today", 8, trigger_entity="Avient", commercial_segment="Industrial",
+                   headline=_ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+    assert "prior_surfaced_duplicate" not in model.ledger.breakdown
+
+
+def test_prior_surfaced_duplicate_entity_match_folds_case_and_whitespace():
+    row = _univar("today", _ROYAL_TODAY, trigger_entity="  univar solutions ")
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("UNIVAR SOLUTIONS", _ROYAL_PRIOR)])
+    assert model.groups == {}
+
+
+def test_prior_surfaced_duplicate_threshold_is_strictly_greater_and_configurable():
+    """token_sort_ratio > threshold. The Interpur pair scores 77.9: suppressed
+    at the default 70 and at 77, kept at 78."""
+    def _run(threshold=None):
+        cfg = {**VISIBLE_6_CFG}
+        if threshold is not None:
+            cfg = {**cfg, "delivery_suppression": {"prior_surfaced_duplicate_threshold": threshold}}
+        return assemble_report([_univar("today", _INTERPUR_TODAY)], config=cfg,
+                               prior_surfaced=[_prior("Univar Solutions", _INTERPUR_PRIOR)])
+    assert _run().groups == {}
+    assert _run(77).groups == {}
+    assert [a["url_hash"] for a in _run(78).groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_ignores_blank_prior_entity_or_headline():
+    row = _univar("today", _ROYAL_TODAY)
+    prior = [_prior("", _ROYAL_PRIOR), _prior("Univar Solutions", ""), {"headline": _ROYAL_PRIOR}, None]
+    model = assemble_report([row], config=VISIBLE_6_CFG, prior_surfaced=prior)
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_can_be_disabled_by_config():
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_prior_surfaced_duplicate": False}}
+    model = assemble_report([_univar("today", _ROYAL_TODAY)], config=cfg,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_is_scoped_to_prior_emails_not_the_current_run():
+    """Same-run duplicates stay rules 6/7's business (threshold 90): two
+    same-entity rows at ~78 both survive when neither was shown before."""
+    rows = [_univar("a", _INTERPUR_TODAY), _univar("b", _INTERPUR_PRIOR)]
+    model = assemble_report(rows, config=VISIBLE_6_CFG, prior_surfaced=[])
+    assert sorted(a["url_hash"] for a in model.groups["Industrial"]) == ["a", "b"]
+
+
+def test_prior_surfaced_duplicate_runs_after_the_other_rules():
+    """First match wins and rule 8 is last: a row that is rule-1 noise AND a
+    prior-surfaced repeat is ledgered as rule-1 noise."""
+    row = stub_row("today", 5, trigger_entity="Univar Solutions",
+                   commercial_segment="Enterprise / Cross-Segment", headline=_ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert model.ledger.breakdown.get("enterprise_cross_segment_low_impact") == 1
+    assert "prior_surfaced_duplicate" not in model.ledger.breakdown
+
+
+def test_prior_surfaced_duplicate_also_keeps_a_repeat_out_of_the_appendix():
+    row = _univar("today", _ROYAL_TODAY, americhem_impact_score=4)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert appendix_hashes(model) == []
+    assert model.ledger.breakdown.get("prior_surfaced_duplicate") == 1

@@ -267,6 +267,14 @@ zero-I/O purity is untouched.
   schema, numbering belongs to the rendered report.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
+- **Prior-shown lookback** — `delivery_engine.fetch_prior_shown` (2026-09-08): the
+  rows earlier emails showed — cards and **Watch List** rows created in the
+  `prior_surfaced_lookback_days` (default 3) before this run's **delivery
+  window** cutoff, read tolerantly through `IntelligenceRepo.fetch_between`.
+  The comparison set for delivery suppression **rule 8**, the entity-keyed
+  multi-day near-duplicate (`prior_surfaced_duplicate`: same `trigger_entity`,
+  headline `token_sort_ratio` strictly above the configured threshold, default
+  70). An approximation on purpose: caps and suppression are not replayed.
 - **Watch List** — `ReportModel.watch_items` (2026-09-08): suppression-surviving
   rows in the **Watch band** (`reporting.watch_impact_threshold` ≤ score <
   visible, `Scoring.is_watch`; production 5 — RULE 3's band for a value-chain

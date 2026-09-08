@@ -30,6 +30,7 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("unrelated_color_result",              "unrelated color result"),
     ("enterprise_cross_segment_low_impact", "Enterprise / Cross-Segment, low impact"),
     ("appendix_excluded_category",          "appendix-excluded category (macro group)"),
+    ("prior_surfaced_duplicate",            "near-duplicate of a headline shown in a prior email (same entity)"),
 )
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)

@@ -17,7 +17,7 @@ def test_taxonomy_partitions():
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
     assert len(INGESTION_CODES) == 7
-    assert len(DELIVERY_CODES) == 10
+    assert len(DELIVERY_CODES) == 11
 
 
 def test_samples_cap_is_ten():
@@ -32,6 +32,14 @@ def test_side_of_returns_correct_side():
 def test_label_for_returns_human_label():
     assert label_for("duplicate_url") == "duplicate URL"
     assert label_for("enterprise_cross_segment_low_impact") == "Enterprise / Cross-Segment, low impact"
+
+
+def test_prior_surfaced_duplicate_is_a_delivery_code_with_a_label():
+    """Rule 8 (2026-09-08): the entity-keyed multi-day near-duplicate. Delivery
+    owns it — the comparison is against what earlier emails showed."""
+    assert "prior_surfaced_duplicate" in DELIVERY_CODES
+    assert side_of("prior_surfaced_duplicate") == "delivery"
+    assert label_for("prior_surfaced_duplicate") != "prior_surfaced_duplicate"
 
 
 def test_all_codes_is_the_ordered_union_ingestion_first():

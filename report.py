@@ -14,7 +14,7 @@ Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 """
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
 
@@ -283,17 +283,50 @@ def _is_low_exposure_template(row: dict) -> bool:
     return any(opener.startswith(prefix.casefold()) for prefix in LOW_EXPOSURE_TEMPLATE_PREFIXES)
 
 
+#: Rule 8's default: token_sort_ratio must EXCEED this against a prior-shown
+#: headline of the same entity. 70 catches the reworded copies of one story
+#: (the Univar / Interpur copies in production scored 74–85) and sits ~20
+#: points above two different stories about one entity (36–49).
+DEFAULT_PRIOR_SURFACED_DUPLICATE_THRESHOLD = 70
+
+
+def _entity_key(value: object) -> str:
+    """The trigger_entity as rule 8 keys on it: whitespace-folded, casefolded;
+    '' for a missing / blank value (which never matches)."""
+    if value is None:
+        return ""
+    return " ".join(str(value).split()).casefold()
+
+
+def _prior_headlines_by_entity(prior_surfaced: Sequence[Optional[dict]]) -> dict[str, list[str]]:
+    """Index what earlier emails showed: entity key -> lowercased headlines.
+    Tolerant of a None / non-dict entry and of a blank entity or headline —
+    the read behind it is best-effort and may hand back ragged rows."""
+    index: dict[str, list[str]] = {}
+    for prior in prior_surfaced or ():
+        if not isinstance(prior, dict):
+            continue
+        key = _entity_key(prior.get("trigger_entity"))
+        headline = (prior.get("headline") or "")
+        if not key or not isinstance(headline, str) or not headline.strip():
+            continue
+        index.setdefault(key, []).append(headline.lower())
+    return index
+
+
 def _apply_delivery_suppression(
     rows: list[dict],
     config: dict,
     scorer: Optional[Scoring] = None,
+    prior_surfaced: Sequence[Optional[dict]] = (),
 ) -> tuple[list[dict], SuppressionLedger]:
-    """Run the deterministic seven-rule guardrail over fetched rows.
+    """Run the deterministic eight-rule guardrail over fetched rows.
 
     Returns (kept_rows, ledger). First matching rule wins; each suppressed
     row is counted once and contributes at most one sample (deduped).
     `scorer` supplies the visible threshold rule 1's template exemption reads;
-    None resolves it from config.
+    None resolves it from config. `prior_surfaced` is what earlier emails
+    showed (rows with `trigger_entity` + `headline`) — rule 8's comparison set.
 
     Rules 6/7 keep the first row seen of a duplicate pair. Rows arrive
     impact-desc, so a score-4 RULE 6 template row would precede — and
@@ -313,6 +346,10 @@ def _apply_delivery_suppression(
 
     threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
     enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
+    enable_prior_dup = bool(sup_cfg.get("enable_prior_surfaced_duplicate", True))
+    prior_threshold = int(sup_cfg.get("prior_surfaced_duplicate_threshold",
+                                      DEFAULT_PRIOR_SURFACED_DUPLICATE_THRESHOLD))
+    prior_by_entity = _prior_headlines_by_entity(prior_surfaced) if enable_prior_dup else {}
     override_action = sup_cfg.get("job_posting_override_action", "Escalate to leadership")
 
     product_patterns   = sup_cfg.get("url_patterns_product_listing", [])
@@ -394,6 +431,21 @@ def _apply_delivery_suppression(
             if scores and max(scores) >= threshold:
                 ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
                 continue
+
+        # Rule 8: prior-surfaced near-duplicate (2026-09-08) — the entity-keyed
+        # multi-day dedup. Keyed on trigger_entity and compared by
+        # token_sort_ratio against the headlines earlier emails showed for
+        # that entity (cards and Watch rows within the lookback the caller
+        # read): a reworded repeat of a story the reader already saw. Rules
+        # 6/7 only see the current run, at 90; this is strictly greater than
+        # its own threshold. Last, so every other reason wins first-match.
+        if prior_by_entity and headline:
+            candidates = prior_by_entity.get(_entity_key(row.get("trigger_entity")), ())
+            if candidates:
+                hl_lower = headline.lower()
+                if max(_token_sort_ratio(hl_lower, h) for h in candidates) > prior_threshold:
+                    ledger = ledger.record("prior_surfaced_duplicate", url=url, title=headline)
+                    continue
 
         kept_indexed.append((index, row))
         if headline:
@@ -626,12 +678,17 @@ def assemble_report(
     rows: list[dict],
     macro_summary: Optional[MacroSummary] = None,
     config: Optional[dict] = None,
+    *,
+    prior_surfaced: Sequence[Optional[dict]] = (),
 ) -> ReportModel:
     """Run the full decision pipeline over fetched Insight rows.
 
     Pure and deterministic. config is the parsed market_pulse_config.yaml dict;
-    None means built-in defaults, never a file read. Never raises on malformed
-    rows — field reads fall back exactly as the renderer's defensive reads did.
+    None means built-in defaults, never a file read. `prior_surfaced` is what
+    earlier emails showed — rows carrying `trigger_entity` and `headline`, the
+    comparison set for suppression rule 8; empty means no multi-day dedup.
+    Never raises on malformed rows — field reads fall back exactly as the
+    renderer's defensive reads did.
     """
     config = config or {}
 
@@ -652,7 +709,7 @@ def assemble_report(
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, ledger = _apply_delivery_suppression(rows, config, scorer)
+    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if scorer.is_visible(r)]

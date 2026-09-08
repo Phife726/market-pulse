@@ -314,6 +314,22 @@ delivery_suppression:
   # segment-specific row. (Switched off 2026-08-27 in #69 while that ranking
   # shipped; back on the same day.)
   enable_low_exposure_template_exemption: true
+  # Rule 8 (2026-09-08): the entity-keyed multi-day near-duplicate. A row whose
+  # trigger_entity matches a row an earlier email showed (a card or Watch row
+  # created within prior_surfaced_lookback_days before this run's
+  # delivery-window cutoff) and whose headline scores rapidfuzz
+  # token_sort_ratio STRICTLY GREATER than prior_surfaced_duplicate_threshold
+  # against it is a reworded repeat the reader already saw. Rules 6/7 only see
+  # the current run, at 90; production data showed ~12% of surfaced items were
+  # consecutive-day repeats they cannot see. 70 catches the reworded copies of
+  # one story (the Univar / Interpur copies scored 74–85) and sits ~20 points
+  # above two different stories about one entity (36–49); some rewrites still
+  # fall under it (the Univar / H.M. Royal copies: 64–91), so lower it before
+  # widening the lookback. The read behind it is tolerant: a database blip
+  # costs at most one repeated headline, never the email.
+  enable_prior_surfaced_duplicate: true
+  prior_surfaced_duplicate_threshold: 70
+  prior_surfaced_lookback_days: 3
   url_patterns_product_listing:
     - "/product/"
     - "/shop/"
