@@ -1406,3 +1406,153 @@ def test_model_screened_count_none_when_unrecorded():
     assert model.screened_count is None
     assert assemble_report([stub_row("a", 8)], macro_summary=None).screened_count is None
     assert assemble_report([], macro_summary=None).screened_count is None
+
+
+# ===========================================================================
+# The Watch section (ReportModel.watch_items) — score-5 items shown with
+# their So-What between the cards and the appendix (2026-09-08).
+# ===========================================================================
+
+WATCH_CFG = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
+                           "watch_impact_threshold": 5}}
+
+
+def _watch_hashes(model) -> list[str]:
+    return [w["url_hash"] for w in model.watch_items]
+
+
+def test_report_model_has_watch_items_tuple_empty_by_default():
+    model = assemble_report([stub_row("v", 8)], config=VISIBLE_6_CFG)
+    assert model.watch_items == ()
+    assert assemble_report([], config=WATCH_CFG).watch_items == ()
+
+
+def test_watch_items_absent_when_threshold_not_configured():
+    """Config-only rollback: no watch_impact_threshold, no Watch section — a
+    score-5 row stays where it was, at the top of the appendix."""
+    model = assemble_report([stub_row("w", 5, headline="Watch-band row", commercial_segment="Packaging")],
+                            config=VISIBLE_6_CFG)
+    assert model.watch_items == ()
+    assert appendix_hashes(model) == ["w"]
+
+
+def test_watch_items_are_the_watch_band_not_cards_not_appendix():
+    rows = [
+        stub_row("card", 7, commercial_segment="Packaging", headline="Card row alpha"),
+        stub_row("watch", 5, commercial_segment="Packaging", headline="Watch row bravo"),
+        stub_row("appx", 4, commercial_segment="Packaging", headline="Appendix row charlie"),
+        stub_row("floor", 3, commercial_segment="Packaging", headline="Floor row delta"),
+    ]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["card"]
+    assert _watch_hashes(model) == ["watch"]
+    assert appendix_hashes(model) == ["appx", "floor"]     # a Watch row is shown, so not repeated
+    assert model.surfaced_count == 1                         # cards only, unchanged
+
+
+def test_watch_rows_are_not_counted_weak_relevance():
+    """A Watch row is shown, so it is not 'weak-relevance shown nowhere';
+    below_impact_threshold stays the broader visible-card decision."""
+    rows = [stub_row("card", 7, headline="Card row alpha", commercial_segment="Packaging"),
+            stub_row("watch", 5, headline="Watch row bravo", commercial_segment="Packaging")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+    assert model.ledger.breakdown.get("below_impact_threshold") == 1
+
+
+def test_watch_items_ranked_impact_then_recency_then_headline_then_hash():
+    cfg = {"reporting": {"visible_impact_threshold": 7, "supporting_impact_threshold": 3,
+                         "watch_impact_threshold": 5}}
+    rows = [
+        stub_row("old6", 6, headline="Zulu six old", commercial_segment="Packaging",
+                 published_at="2026-08-01T00:00:00+00:00"),
+        stub_row("new6", 6, headline="Yankee six new", commercial_segment="Packaging",
+                 published_at="2026-08-05T00:00:00+00:00"),
+        stub_row("b5", 5, headline="Bravo five", commercial_segment="Packaging"),
+        stub_row("a5", 5, headline="Alpha five", commercial_segment="Packaging"),
+    ]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["new6", "old6", "a5", "b5"]
+
+
+# Dissimilar headlines: rule 7 (semantic duplicate, token_sort_ratio >= 90)
+# would otherwise fold near-identical fixtures into one row.
+_DISTINCT_HEADLINES = ("Chemours lifts TiO2 pricing", "Univar buys Interpur distributor",
+                       "Trinseo styrene force majeure", "SABIC launches Ultem grade",
+                       "Lanxess opens battery lab", "AdvanSix nylon price rise",
+                       "Dow polyethylene volumes slip", "Avient raises guidance again",
+                       "Kraiburg TPE recycled series", "Clariant additive labs China",
+                       "Cabot carbon black plant closes", "Teknor Apex Danimer deal")
+
+
+def test_watch_items_capped_and_overflow_falls_to_the_appendix():
+    cfg = {"reporting": {**WATCH_CFG["reporting"], "max_watch_items": 2}}
+    rows = [stub_row(f"w{i}", 5, headline=_DISTINCT_HEADLINES[i], commercial_segment="Packaging",
+                     published_at=f"2026-08-0{i}T00:00:00+00:00") for i in range(1, 5)]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["w4", "w3"]
+    assert appendix_hashes(model) == ["w2", "w1"]           # still in the appendix band, still shown
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+
+
+def test_max_watch_items_default_is_eight():
+    rows = [stub_row(f"w{i}", 5, headline=_DISTINCT_HEADLINES[i], commercial_segment="Packaging")
+            for i in range(12)]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert len(model.watch_items) == 8
+
+
+def test_watch_excludes_appendix_excluded_categories_and_records_once():
+    """The macro_* groups feed the Macroeconomic Outlook; a score-5 macro row
+    is no more a Watch item than an appendix item, and the exclusion is
+    ledgered once."""
+    cfg = {"reporting": {**WATCH_CFG["reporting"], "appendix_exclude_categories": ["macro_manufacturing"]}}
+    rows = [stub_row("macro", 5, category="macro_manufacturing", headline="PMI reading row",
+                     commercial_segment="Industrial"),
+            stub_row("seg", 5, category="competitors", headline="Competitor watch row",
+                     commercial_segment="Industrial")]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["seg"]
+    assert appendix_hashes(model) == []
+    assert model.ledger.breakdown.get("appendix_excluded_category") == 1
+
+
+def test_watch_items_require_headline_and_url():
+    rows = [stub_row("nohead", 5, headline="", commercial_segment="Packaging"),
+            stub_row("nourl", 5, headline="No url watch row", source_url="", commercial_segment="Packaging"),
+            stub_row("ok", 5, headline="Usable watch row", commercial_segment="Packaging")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert _watch_hashes(model) == ["ok"]
+
+
+def test_watch_items_never_include_delivery_suppressed_rows():
+    """Suppression runs first: an Enterprise / Cross-Segment score-5 row is
+    rule-1 noise (below enterprise_min_impact) and never reaches Watch."""
+    rows = [stub_row("ent", 5, commercial_segment="Enterprise / Cross-Segment",
+                     headline="Enterprise five row"),
+            stub_row("seg", 5, commercial_segment="Packaging", headline="Packaging five row")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert _watch_hashes(model) == ["seg"]
+
+
+def test_watch_items_carry_the_display_segment_without_mutating_input():
+    cfg = {"reporting": {**WATCH_CFG["reporting"],
+                         "segment_display_groups": {"Transportation — Vehicles": ["Transportation - Automotive"]}}}
+    row = stub_row("w", 5, commercial_segment="Transportation - Automotive", headline="Auto watch row")
+    model = assemble_report([row], config=cfg)
+    assert model.watch_items[0]["commercial_segment"] == "Transportation — Vehicles"
+    assert row["commercial_segment"] == "Transportation - Automotive"
+
+
+def test_watch_items_rank_low_exposure_templates_last():
+    """A template row can sit in the band under the code defaults (4–5);
+    it must never displace a segment-specific Watch row."""
+    cfg = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 4,
+                         "watch_impact_threshold": 5, "max_watch_items": 1}}
+    template = stub_row("tpl", 5, headline="Template watch row", commercial_segment="Packaging",
+                        americhem_impact=f"{LOW_EXPOSURE_TEMPLATE_PREFIXES[1]} — macro commentary only.",
+                        published_at="2026-08-09T00:00:00+00:00")
+    real = stub_row("real", 5, headline="Real watch row", commercial_segment="Packaging",
+                    published_at="2026-08-01T00:00:00+00:00")
+    model = assemble_report([template, real], config=cfg)
+    assert _watch_hashes(model) == ["real"]

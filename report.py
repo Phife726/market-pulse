@@ -158,6 +158,13 @@ class ReportModel:
     # supporting threshold not shown as visible cards — the weak-relevance band
     # plus rows capped out of their segment. Empty on no_news.
     additional_articles: tuple[dict, ...] = ()
+    # The Watch List: suppression-surviving rows in the Watch band
+    # (`Scoring.is_watch` — reporting.watch_impact_threshold <= score < visible;
+    # score 5 in production) that are not cards, shown WITH their So-What
+    # between the cards and the appendix. A Watch row leaves the appendix and
+    # is not counted weak_relevance; surfaced_count (cards only) is untouched.
+    # Empty when the threshold is unconfigured, and on no_news.
+    watch_items: tuple[dict, ...] = ()
     # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
     # non-empty current_condition and >=1 signal, else None. None on no_news.
     macro_outlook: Optional[dict] = None
@@ -208,6 +215,13 @@ def _max_additional_articles(reporting_cfg: dict) -> int:
     A report-assembly knob, read here beside the visible-card caps — not a
     scoring threshold."""
     return _config_int(reporting_cfg, "max_additional_articles", DEFAULT_MAX_ADDITIONAL_ARTICLES)
+
+
+DEFAULT_MAX_WATCH_ITEMS = 8
+
+
+def _max_watch_items(reporting_cfg: dict) -> int:
+    return _config_int(reporting_cfg, "max_watch_items", DEFAULT_MAX_WATCH_ITEMS)
 
 
 def _appendix_exclude_categories(reporting_cfg: dict) -> frozenset[str]:
@@ -446,35 +460,64 @@ def _partition_appendix_exclusions(
     return eligible, excluded
 
 
+def _rank_optional_rows(pool: list[dict]) -> list[dict]:
+    """The one ordering for the optional sections (Watch List, appendix).
+
+    Deterministic (applied as stable sorts, least-significant first):
+    url_hash asc -> normalized headline asc -> recency desc -> effective impact
+    desc -> non-template before template. So cap overflow (score 6+) precedes
+    every score-5, which precedes every score-4; ties break by recency then
+    headline then hash — and every RULE 6 low-exposure template row
+    (`_is_low_exposure_template`) ranks after every non-template row whatever
+    its score, so template rows fill a section only when there is room and
+    are the first its cap pushes out. Production data (2026-08-27) showed the
+    appendix cap binds daily and is decided within the score-4 tier by
+    recency, where macro-group template rows — stored last, so newest — would
+    otherwise displace segment-specific rows. Returns a new list."""
+    ranked = list(pool)
+    ranked.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
+                               r.get("url_hash") or ""))
+    ranked.sort(key=_appendix_recency_token, reverse=True)
+    ranked.sort(key=lambda r: _effective_impact(r), reverse=True)
+    ranked.sort(key=_is_low_exposure_template)
+    return ranked
+
+
+def _select_watch_items(
+    kept: list[dict],
+    final_hashes: set,
+    scorer: Scoring,
+    cap: int,
+) -> tuple[dict, ...]:
+    """Pick the Watch List from suppression survivors not shown as cards:
+    the rows in the Watch band (`Scoring.is_watch`) with a headline and a
+    URL, ranked like the appendix (`_rank_optional_rows`) and capped at
+    `cap`. Empty when no band is configured. Rows the cap pushes out are
+    still in the appendix band and fall through to it."""
+    pool = [
+        r for r in kept
+        if r.get("url_hash") not in final_hashes
+        and scorer.is_watch(r)
+        and bool((r.get("headline") or "").strip())
+        and bool((r.get("source_url") or "").strip())
+    ]
+    return tuple(_rank_optional_rows(pool)[:cap])
+
+
 def _select_additional_articles(
     kept: list[dict],
     final_hashes: set,
     scorer: Scoring,
     cap: int,
 ) -> tuple[dict, ...]:
-    """Pick the appendix rows from suppression survivors not shown as cards.
-
-    Deterministic order (applied as stable sorts, least-significant first):
-    url_hash asc -> normalized headline asc -> recency desc -> effective impact
-    desc -> non-template before template. So cap overflow (score 6+) precedes
-    every score-5, which precedes every score-4; ties break by recency then
-    headline then hash — and every RULE 6 low-exposure template row
-    (`_is_low_exposure_template`) ranks after every non-template row whatever
-    its score, so template rows fill the appendix only when there is room and
-    are the first the cap pushes out. Production data (2026-08-27) showed the
-    cap binds daily and is decided within the score-4 tier by recency, where
-    macro-group template rows — stored last, so newest — would otherwise
-    displace segment-specific rows. Capped at `cap`."""
+    """Pick the appendix rows from suppression survivors not already shown
+    (`final_hashes`: the cards, and the Watch List when one is configured),
+    ranked by `_rank_optional_rows` and capped at `cap`."""
     pool = [
         r for r in kept
         if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
     ]
-    pool.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
-                             r.get("url_hash") or ""))
-    pool.sort(key=_appendix_recency_token, reverse=True)
-    pool.sort(key=lambda r: _effective_impact(r), reverse=True)
-    pool.sort(key=_is_low_exposure_template)
-    return tuple(pool[:cap])
+    return tuple(_rank_optional_rows(pool)[:cap])
 
 
 def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
@@ -662,23 +705,33 @@ def assemble_report(
             url=row.get("source_url") or "",
             title=row.get("headline") or "",
         )
-    additional_articles = _select_additional_articles(
-        appendix_pool, final_hashes, scorer, _max_additional_articles(reporting_cfg),
+    # 6a. The Watch List: the Watch band (score 5 in production) out of the
+    #     same pool — so the category exclusion above governs it too and is
+    #     recorded once — shown with its So-What ahead of the appendix. A
+    #     Watch row is shown, so it leaves the appendix pool below.
+    watch_items = _select_watch_items(
+        appendix_pool, final_hashes, scorer, _max_watch_items(reporting_cfg),
     )
-    # Show the merged display label in the appendix segment column too, so the
-    # reader sees one consistent header for the merged segment across cards and
-    # appendix. Copy-on-write — the caller's rows are never mutated.
+    watch_hashes = {w.get("url_hash") for w in watch_items}
+    additional_articles = _select_additional_articles(
+        appendix_pool, final_hashes | watch_hashes, scorer, _max_additional_articles(reporting_cfg),
+    )
+    # Show the merged display label in the Watch and appendix segment columns
+    # too, so the reader sees one consistent header for the merged segment
+    # across every section. Copy-on-write — the caller's rows are never mutated.
+    watch_items = tuple(_with_display_segment(r, display_map) for r in watch_items)
     additional_articles = tuple(
         _with_display_segment(r, display_map) for r in additional_articles
     )
 
     # 7. weak_relevance: weak-relevance rows (supporting..visible, exclusive)
-    #    shown NOWHERE — neither a
-    #    visible card nor the appendix (e.g. pushed out by the appendix cap).
+    #    shown NOWHERE — neither a visible card, a Watch row, nor the appendix
+    #    (e.g. pushed out by the appendix cap).
     #    (below_impact_threshold above is deliberately broader: it counts every
-    #    suppression-surviving below-visible row, including ones the appendix
-    #    now displays — it describes the visible-card decision, not end hiding.)
-    shown_hashes = final_hashes | {a.get("url_hash") for a in additional_articles}
+    #    suppression-surviving below-visible row, including ones the Watch List
+    #    or appendix now display — it describes the visible-card decision, not
+    #    end hiding.)
+    shown_hashes = final_hashes | watch_hashes | {a.get("url_hash") for a in additional_articles}
     weak_relevance_count = sum(
         1 for r in kept
         if scorer.is_weak_relevance(r)
@@ -703,6 +756,7 @@ def assemble_report(
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
+        watch_items=watch_items,
         macro_outlook=macro_outlook,
         citations=citations,
     )

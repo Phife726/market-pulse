@@ -267,14 +267,23 @@ zero-I/O purity is untouched.
   schema, numbering belongs to the rendered report.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
+- **Watch List** — `ReportModel.watch_items` (2026-09-08): suppression-surviving
+  rows in the **Watch band** (`reporting.watch_impact_threshold` ≤ score <
+  visible, `Scoring.is_watch`; production 5 — RULE 3's band for a value-chain
+  actor's operationally material event) that are not cards, rendered WITH their
+  So-What between Commercial Segment Watch and the appendix, ranked like the
+  appendix (`report._rank_optional_rows`) and capped at `max_watch_items`
+  (default 8). Shown, so excluded from the appendix and from `weak_relevance`;
+  never affects `surfaced_count`. Absent threshold = no section.
 - **Additional Articles to Explore** — the optional-discovery appendix
   (`ReportModel.additional_articles`): suppression-surviving rows scoring at
   or above the supporting threshold (code default 4; production 3) that are
   not visible cards — the
-  weak-relevance band plus cap overflow — ranked deterministically
-  (non-template rows before **low-exposure template** rows, then impact,
-  then recency) and capped at `reporting.max_additional_articles` (default 10). Rendered
-  compactly below Commercial Segment Watch, without the "So what" narrative.
+  weak-relevance band plus cap overflow, minus the **Watch List** rows — ranked
+  deterministically (non-template rows before **low-exposure template** rows,
+  then impact, then recency) and capped at `reporting.max_additional_articles`
+  (default 10). Rendered compactly below the Watch List, without the "So what"
+  narrative.
   Never affects `surfaced_count`. Rows shown here are excluded from the
   `weak_relevance` count (but still counted in the broader
   `below_impact_threshold`). Enterprise / Cross-Segment rows below

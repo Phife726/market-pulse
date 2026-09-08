@@ -161,6 +161,27 @@ def _render_meta_strip(item: dict) -> str:
     return f'{score_html}{tag_html}{signal_html}{critical_html}'
 
 
+def _render_so_what(item: dict) -> str:
+    """The "So what" line with its sentiment-direction glyph (▼ / ● / ▲ keyed
+    by sentiment_tag; no glyph for an unrecognized tag). Shared by the card and
+    the Watch List row. Empty when the row carries no So-What. Escaped."""
+    americhem_impact = html.escape(item.get("americhem_impact", "") or "")
+    if not americhem_impact:
+        return ""
+    tag = item.get("sentiment_tag") or ""
+    glyph = _SENTIMENT_TAG_GLYPHS.get(tag)
+    glyph_html = (
+        f'<span style="color:{_SENTIMENT_TAG_COLORS.get(tag, "#6B7280")};'
+        f'font-family:Arial,sans-serif;">{glyph}</span> '
+        if glyph else ""
+    )
+    return (
+        f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
+        f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
+        f'{glyph_html}<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
+    )
+
+
 def _render_card(item: dict) -> str:
     """Render one article card row: meta strip, linked headline, "So what".
 
@@ -172,20 +193,7 @@ def _render_card(item: dict) -> str:
     _safe_http_url inside _link (an unsafe URL renders the headline unlinked)."""
     meta = _render_meta_strip(item)
     headline = html.escape(item.get("headline", "") or "")
-    americhem_impact = html.escape(item.get("americhem_impact", "") or "")
-    tag = item.get("sentiment_tag") or ""
-    glyph = _SENTIMENT_TAG_GLYPHS.get(tag)
-    glyph_html = (
-        f'<span style="color:{_SENTIMENT_TAG_COLORS.get(tag, "#6B7280")};'
-        f'font-family:Arial,sans-serif;">{glyph}</span> '
-        if glyph else ""
-    )
-    so_what_html = (
-        f'<p style="margin:4px 0 0 0;font-size:13px;color:#374151;'
-        f"font-family:Georgia,'Times New Roman',serif;line-height:1.55;\">"
-        f'{glyph_html}<strong style="color:{_BRAND_NAVY};">So what:</strong> {americhem_impact}</p>'
-        if americhem_impact else ""
-    )
+    so_what_html = _render_so_what(item)
     headline_style = (
         f'font-size:14px;font-weight:700;color:{_BRAND_NAVY};'
         f'font-family:Arial,sans-serif;text-decoration:none;line-height:1.35;'
@@ -247,6 +255,60 @@ def _render_segment_watch_section(
 
     return _section("COMMERCIAL SEGMENT WATCH", blocks_html,
                     title_color=_BRAND_NAVY, rule_color=_BRAND_NAVY)
+
+
+# ---------------------------------------------------------------------------
+# Watch List — the Watch band (score 5) with its So-What, ahead of the appendix
+# ---------------------------------------------------------------------------
+
+def _render_watch_section(items: list[dict]) -> str:
+    """Render the Watch List: `ReportModel.watch_items` — the rows a named
+    customer's, supplier's or competitor's material event scored into the
+    Watch band (5 in production: worth a glance, not a card).
+
+    One row per item: a meta line (segment · Impact X/10 · Signal · source),
+    the linked headline, and the same "So what" line a card carries — the
+    section is a flat list, so the segment travels on the row instead of a
+    block header. Untrusted values are HTML-escaped and hrefs pass through
+    _link's guard. Omitted entirely when there are no items."""
+    if not items:
+        return ""
+
+    rows_html = ""
+    for item in items:
+        headline = html.escape(item.get("headline", "") or "")
+        segment = html.escape((item.get("commercial_segment") or "").strip())
+        score = item.get("americhem_impact_score")
+        try:
+            score_txt = f"Impact: {int(score)}/10" if score is not None else ""
+        except (TypeError, ValueError):
+            score_txt = ""
+        signal = html.escape((item.get("signal_type") or "").strip())
+        signal_txt = f"Signal: {signal}" if signal else ""
+        source = html.escape(_appendix_source_label(item))
+
+        meta_parts = [p for p in (segment, score_txt, signal_txt, source) if p]
+        meta = ' <span style="color:#9CA3AF;">&middot;</span> '.join(meta_parts)
+
+        headline_style = (
+            f'font-size:14px;font-weight:700;color:{_BRAND_NAVY};'
+            f'font-family:Arial,sans-serif;text-decoration:none;line-height:1.35;'
+        )
+        headline_html = _link(item.get("source_url"), headline,
+                              style=headline_style, unlinked_style=headline_style)
+
+        rows_html += (
+            f'<tr><td style="padding:6px 0 10px 0;">'
+            f'<p style="margin:0 0 4px 0;font-size:11px;color:#6B7280;'
+            f'font-family:Arial,sans-serif;">{meta}</p>'
+            f'{headline_html}'
+            f'{_render_so_what(item)}'
+            f'</td></tr>'
+        )
+
+    listing = f'                <table width="100%" cellpadding="0" cellspacing="0" border="0">{rows_html}</table>'
+    return _section("Watch List", _single_cell(listing),
+                    title_color=_BRAND_NAVY, rule_color="#E5E7EB")
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +761,7 @@ def render_report(
     macro_summary = model.macro_summary
 
     sections_html = _render_segment_watch_section(model.groups, model.synthesis)
+    watch_html = _render_watch_section(list(model.watch_items))
     additional_html = _render_additional_articles_section(list(model.additional_articles))
     # One citation set, built during assembly, read by all three citation-bearing
     # sections — the numbering agrees by construction, not by convention.
@@ -788,6 +851,7 @@ def render_report(
             {exec_html}
             {macro_outlook_html}
             {sections_html}
+            {watch_html}
             {additional_html}
             {sources_html}
             {qa_html}

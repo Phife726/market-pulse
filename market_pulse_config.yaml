@@ -29,6 +29,19 @@ reporting:
   # Raised 10 -> 20 on 2026-08-03 alongside the threshold change above.
   max_additional_articles: 20
 
+  # The Watch List (2026-09-08). Suppression-surviving rows scoring at or above
+  # watch_impact_threshold but below visible_impact_threshold — score 5 under
+  # the recalibrated RULE 3, the band for a named customer's / supplier's /
+  # competitor's operationally material event — render WITH their So-What
+  # between the cards and the Additional Articles appendix, ranked like the
+  # appendix and capped at max_watch_items. A Watch row is shown, so it leaves
+  # the appendix and is not counted weak_relevance; surfaced_count (cards only)
+  # is unchanged. Absent or null = no Watch section (config-only rollback:
+  # score-5 rows go back to the top of the appendix). A value at or above
+  # visible_impact_threshold is ignored with a warning.
+  watch_impact_threshold: 5
+  max_watch_items: 8
+
   # Discovery categories (targets.yaml group keys) whose rows never reach the
   # Additional Articles appendix (issue #73). The macro_* concept groups exist
   # to feed the Macroeconomic Outlook (their signal_type == "Macro" rows get

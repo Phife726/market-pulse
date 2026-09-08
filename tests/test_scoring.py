@@ -99,3 +99,41 @@ def test_legacy_critical_false_for_higher_sentiment():
 
 def test_legacy_critical_false_when_no_sentiment():
     assert scoring.is_legacy_critical({}) is False
+
+
+# --- the Watch band (reporting.watch_impact_threshold) ----------------------
+
+def test_watch_absent_by_default_and_is_watch_false():
+    s = Scoring.from_config({})
+    assert s.watch is None
+    assert s.is_watch({"americhem_impact_score": 5}) is False
+
+
+def test_from_config_reads_watch_threshold():
+    s = Scoring.from_config({"reporting": {"visible_impact_threshold": 6, "watch_impact_threshold": 5}})
+    assert s.watch == 5
+
+
+def test_is_watch_is_the_half_open_band_below_visible():
+    s = Scoring(visible=6, supporting=3, watch=5)
+    assert s.is_watch({"americhem_impact_score": 5}) is True
+    assert s.is_watch({"americhem_impact_score": 6}) is False   # a card, never Watch
+    assert s.is_watch({"americhem_impact_score": 4}) is False   # appendix
+
+
+def test_watch_band_can_be_wider_than_one_score():
+    s = Scoring(visible=7, supporting=3, watch=5)
+    assert [s.is_watch({"americhem_impact_score": n}) for n in (4, 5, 6, 7)] == [False, True, True, False]
+
+
+def test_watch_at_or_above_visible_is_disabled_with_a_warning(caplog):
+    """A Watch band that starts at the card threshold is empty by construction;
+    treat it as unconfigured rather than silently rendering nothing."""
+    s = Scoring.from_config({"reporting": {"visible_impact_threshold": 6, "watch_impact_threshold": 6}})
+    assert s.watch is None
+    assert "watch_impact_threshold" in caplog.text
+
+
+def test_watch_null_or_bad_value_means_unconfigured(caplog):
+    assert Scoring.from_config({"reporting": {"watch_impact_threshold": None}}).watch is None
+    assert Scoring.from_config({"reporting": {"watch_impact_threshold": "five"}}).watch is None
