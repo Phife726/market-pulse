@@ -1,0 +1,130 @@
+name: Scorer Backtest
+
+run-name: >-
+  Scorer backtest - ${{ github.event.inputs.mode || 'csv' }} - ${{ github.head_ref || github.ref_name }} - ${{ github.actor }}
+
+# Never scheduled. Re-scores the labeled backtest set (or a replay of recent
+# production rows) through the live insight prompt on the ref it runs against,
+# so a rubric change is validated against real model output before it reaches
+# the cron. Runs automatically on a pull request that touches the prompt, the
+# gate, the set, or the runner (a same-repo PR sees the secrets, and the
+# workflow file on the PR branch is the one that runs — so a branch can carry
+# its own acceptance test), and by hand for the replay. Costs ~150 nano calls
+# per csv run; no Serper, Firecrawl, Supabase writes, or email.
+on:
+  pull_request:
+    paths:
+      - "prompts.py"
+      - "market_reports.py"
+      - "insight.py"
+      - "scoring.py"
+      - "market_pulse_config.yaml"
+      - "scripts/backtest_scorer.py"
+      - "backtest/market_pulse_scorer_backtest.csv"
+      - ".github/workflows/scorer_backtest.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "csv = the labeled backtest set; replay = re-score recent daily_intelligence rows"
+        required: true
+        default: "csv"
+        type: choice
+        options:
+          - "csv"
+          - "replay"
+      replay_days:
+        description: "replay only: how many days of rows to re-score"
+        required: false
+        default: "5"
+      workers:
+        description: "parallel LLM calls"
+        required: false
+        default: "6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scorer-backtest-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  MODE: ${{ github.event.inputs.mode || 'csv' }}
+  REPLAY_DAYS: ${{ github.event.inputs.replay_days || '5' }}
+  WORKERS: ${{ github.event.inputs.workers || '6' }}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Run the backtest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -o pipefail
+          if [ "$MODE" = "replay" ]; then
+            python scripts/backtest_scorer.py replay --days "$REPLAY_DAYS" --workers "$WORKERS" | tee backtest/report.txt
+          else
+            python scripts/backtest_scorer.py csv --workers "$WORKERS" | tee backtest/report.txt
+          fi
+
+      - name: Upload the filled-in set and the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorer-backtest-${{ env.MODE }}-${{ github.run_number }}-attempt${{ github.run_attempt }}
+          path: |
+            backtest/report.txt
+            backtest/market_pulse_scorer_backtest_v2.csv
+            backtest/replay_rescored.csv
+          if-no-files-found: ignore
+
+  # The order-of-magnitude check on surfaced_count without a live cycle: the
+  # last five production days' stored rows re-scored through the branch's
+  # prompt (read-only; ~450 nano calls). Only on pull requests — the manual
+  # dispatch above runs a replay by itself when asked.
+  replay:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+      - name: Replay the last five production days
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -o pipefail
+          python scripts/backtest_scorer.py replay --days 5 --workers "$WORKERS" --output backtest/replay_rescored.csv | tee backtest/replay_report.txt
+      - name: Upload the replay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorer-replay-${{ github.run_number }}-attempt${{ github.run_attempt }}
+          path: |
+            backtest/replay_report.txt
+            backtest/replay_rescored.csv
+          if-no-files-found: ignore

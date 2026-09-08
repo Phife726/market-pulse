@@ -12,7 +12,7 @@ from mailer import EmailMessage, _mailer
 from run_instant import RunInstant, SummaryKey
 import prompts
 import config
-from scoring import tier as _alert_tier
+from scoring import Scoring, tier as _alert_tier
 # Report assembly lives in report.py (the pure decision pipeline) and
 # rendering in renderer.py (the pure email renderer); tests exercise their
 # internals via those modules directly.
@@ -64,6 +64,15 @@ def delivery_window(now: datetime, last_delivered_at: Optional[datetime]) -> Del
     return DeliveryWindow(cutoff=now - timedelta(hours=hours), anchored=False)
 
 
+def _delivery_cutoff(run: RunInstant, key: SummaryKey) -> DeliveryWindow:
+    """This run's delivery window, resolved once per call: anchored to the last
+    PRODUCTION delivery on a run_date earlier than `key`'s (issue #76), else
+    the wall-clock fallback (`delivery_window`). Shared by today's fetch and
+    the prior-shown lookback so both sit on the same cutoff."""
+    anchor = _repo().fetch_last_delivery(run_mode=ANCHOR_RUN_MODE, before_date=key.run_date)
+    return delivery_window(run.now, anchor)
+
+
 def fetch_todays_intelligence(run: RunInstant, key: SummaryKey) -> list[dict]:
     """Rows created since the last production email (see delivery_window).
 
@@ -79,8 +88,7 @@ def fetch_todays_intelligence(run: RunInstant, key: SummaryKey) -> list[dict]:
     successful send); it is naive UTC to match created_at. Propagates a failed read —
     a no-news email on a database outage would be wrong, and its stamp would
     hide the rows the outage concealed."""
-    anchor = _repo().fetch_last_delivery(run_mode=ANCHOR_RUN_MODE, before_date=key.run_date)
-    window = delivery_window(run.now, anchor)
+    window = _delivery_cutoff(run, key)
     rows = _repo().fetch_since(window.cutoff)
     if window.anchored:
         logger.info(
@@ -94,6 +102,50 @@ def fetch_todays_intelligence(run: RunInstant, key: SummaryKey) -> list[dict]:
             len(rows), window.cutoff.isoformat(),
         )
     return rows
+
+
+#: Rule 8's lookback: how many days before the delivery-window cutoff the
+#: prior-shown read covers (delivery_suppression.prior_surfaced_lookback_days).
+DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS = 3
+
+
+def fetch_prior_shown(
+    run: RunInstant,
+    key: SummaryKey,
+    *,
+    report_config: dict | None = None,
+) -> list[dict]:
+    """What earlier emails showed — the comparison set for delivery
+    suppression rule 8 (the entity-keyed multi-day near-duplicate).
+
+    Rows created in the `prior_surfaced_lookback_days` (default 3) before
+    this run's delivery-window cutoff (`_delivery_cutoff` — the same cutoff
+    today's fetch starts from), filtered to what an email would have shown:
+    visible cards and Watch-band rows (`Scoring`). An approximation on
+    purpose — caps and suppression are not replayed: a row scored into those
+    bands was on the reader's screen or one cap away from it. [] when the
+    rule is disabled; a failed read is [] too (`fetch_between` is tolerant),
+    so a database blip costs at most a repeated headline, never the email.
+    report_config=None loads market_pulse_config.yaml; tests pass a dict."""
+    cfg = report_config if report_config is not None else config.mp_config()
+    sup_cfg = cfg.get("delivery_suppression") or {}
+    if not sup_cfg.get("enable_prior_surfaced_duplicate", True):
+        return []
+    try:
+        days = int(sup_cfg.get("prior_surfaced_lookback_days", DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS))
+    except (TypeError, ValueError):
+        logger.warning("Invalid delivery_suppression.prior_surfaced_lookback_days; using %d",
+                       DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS)
+        days = DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS
+    window = _delivery_cutoff(run, key)
+    rows = _repo().fetch_between(window.cutoff - timedelta(days=days), window.cutoff)
+    scorer = Scoring.from_config(cfg)
+    shown = [r for r in rows if scorer.is_visible(r) or scorer.is_watch(r)]
+    logger.info(
+        "Prior-shown lookback: %d of %d row(s) in the %d day(s) before %s were cards or Watch rows.",
+        len(shown), len(rows), days, window.cutoff.isoformat(),
+    )
+    return shown
 
 
 def _prefer_production_summary(
@@ -299,6 +351,7 @@ def prepare_report(
     *,
     key: SummaryKey,
     report_config: dict | None = None,
+    prior_surfaced: list[dict] | tuple[dict, ...] = (),
 ) -> ReportModel:
     """Assemble the report model and perform the run's two side effects —
     the daily_summaries write-back (repo seam, same-day-retry merge) and
@@ -307,10 +360,11 @@ def prepare_report(
     Both effects are skipped for the no_news variant: that path never wrote
     back, and there is nothing to synthesize. `key` is the row the write-back
     names — the one resolve_summary_row read. report_config=None loads
-    market_pulse_config.yaml; tests pass a dict. The returned model is ready
-    for render_report."""
+    market_pulse_config.yaml; tests pass a dict. `prior_surfaced` is what
+    earlier emails showed (`fetch_prior_shown`), rule 8's comparison set.
+    The returned model is ready for render_report."""
     cfg = report_config if report_config is not None else config.mp_config()
-    model = assemble_report(rows, macro_summary, cfg)
+    model = assemble_report(rows, macro_summary, cfg, prior_surfaced=prior_surfaced)
     if model.variant == "daily":
         _update_delivery_summary_counts(
             key=key,
@@ -365,6 +419,9 @@ def execute_pipeline(run: RunInstant) -> None:
     # only names the row when there is none to read (issue #76).
     key, macro_summary = resolve_summary_row(run)
     data               = fetch_todays_intelligence(run, key)
+    # What earlier emails showed, for the multi-day dedup (rule 8) — only
+    # worth reading when there is something to dedup against it.
+    prior_shown        = fetch_prior_shown(run, key) if data else []
 
     if not data:
         logger.warning("No intelligence records for today — sending no-news notification.")
@@ -377,7 +434,7 @@ def execute_pipeline(run: RunInstant) -> None:
             critical_count, strategic_count, routine_count,
         )
 
-    model = prepare_report(data, macro_summary, key=key)
+    model = prepare_report(data, macro_summary, key=key, prior_surfaced=prior_shown)
     html = render_report(model, today_str=run.header_date, test_mode=run.test_mode)
     send_email(html, run=run)
     _record_delivery(key, delivered_at=run.now)

@@ -55,6 +55,7 @@ INGESTION = Harness(
     deliberately_real=frozenset({
         # Pure transforms and predicates
         "normalize_url", "compute_url_hash", "_is_unscrapable_domain",
+        "market_reports.is_market_report_candidate",
         "RunBudget.for_targets", "_new_provider_yield", "_discovery_metadata",
         "insight.is_discard", "is_synthesis_outage",
         # Value types / outcome variants
@@ -79,8 +80,9 @@ DELIVERY = Harness(
     # The run, its two fetches, report preparation (assembly + write-back +
     # thematic synthesis), composition/send, and the post-send stamp.
     functions=(
-        "execute_pipeline", "fetch_todays_intelligence", "resolve_summary_row",
-        "prepare_report", "_update_delivery_summary_counts",
+        "execute_pipeline", "fetch_todays_intelligence", "fetch_prior_shown",
+        "_delivery_cutoff", "resolve_summary_row", "prepare_report",
+        "_update_delivery_summary_counts",
         "synthesize_thematic_paragraphs", "send_email", "_record_delivery",
     ),
     deliberately_real=frozenset({
@@ -89,7 +91,7 @@ DELIVERY = Harness(
         "delivery_window", "assemble_report", "render_report",
         "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
         "EmailMessage", "SuppressionLedger.from_row", "_as_candidate",
-        "SummaryKey", "_run_day",
+        "SummaryKey", "_run_day", "Scoring.from_config", "timedelta",
     }),
 )
 

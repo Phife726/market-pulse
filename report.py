@@ -14,7 +14,7 @@ Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 """
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
 
@@ -26,6 +26,7 @@ from insight import (
 )
 from scoring import Scoring
 from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES
+import market_reports
 from macro_summary import MacroSummary
 from suppression_ledger import SuppressionLedger
 
@@ -158,6 +159,13 @@ class ReportModel:
     # supporting threshold not shown as visible cards — the weak-relevance band
     # plus rows capped out of their segment. Empty on no_news.
     additional_articles: tuple[dict, ...] = ()
+    # The Watch List: suppression-surviving rows in the Watch band
+    # (`Scoring.is_watch` — reporting.watch_impact_threshold <= score < visible;
+    # score 5 in production) that are not cards, shown WITH their So-What
+    # between the cards and the appendix. A Watch row leaves the appendix and
+    # is not counted weak_relevance; surfaced_count (cards only) is untouched.
+    # Empty when the threshold is unconfigured, and on no_news.
+    watch_items: tuple[dict, ...] = ()
     # Renderable Macroeconomic Outlook pulled from macro_summary — a dict with a
     # non-empty current_condition and >=1 signal, else None. None on no_news.
     macro_outlook: Optional[dict] = None
@@ -208,6 +216,13 @@ def _max_additional_articles(reporting_cfg: dict) -> int:
     A report-assembly knob, read here beside the visible-card caps — not a
     scoring threshold."""
     return _config_int(reporting_cfg, "max_additional_articles", DEFAULT_MAX_ADDITIONAL_ARTICLES)
+
+
+DEFAULT_MAX_WATCH_ITEMS = 8
+
+
+def _max_watch_items(reporting_cfg: dict) -> int:
+    return _config_int(reporting_cfg, "max_watch_items", DEFAULT_MAX_WATCH_ITEMS)
 
 
 def _appendix_exclude_categories(reporting_cfg: dict) -> frozenset[str]:
@@ -269,17 +284,50 @@ def _is_low_exposure_template(row: dict) -> bool:
     return any(opener.startswith(prefix.casefold()) for prefix in LOW_EXPOSURE_TEMPLATE_PREFIXES)
 
 
+#: Rule 8's default: token_sort_ratio must EXCEED this against a prior-shown
+#: headline of the same entity. 70 catches the reworded copies of one story
+#: (the Univar / Interpur copies in production scored 74–85) and sits ~20
+#: points above two different stories about one entity (36–49).
+DEFAULT_PRIOR_SURFACED_DUPLICATE_THRESHOLD = 70
+
+
+def _entity_key(value: object) -> str:
+    """The trigger_entity as rule 8 keys on it: whitespace-folded, casefolded;
+    '' for a missing / blank value (which never matches)."""
+    if value is None:
+        return ""
+    return " ".join(str(value).split()).casefold()
+
+
+def _prior_headlines_by_entity(prior_surfaced: Sequence[Optional[dict]]) -> dict[str, list[str]]:
+    """Index what earlier emails showed: entity key -> lowercased headlines.
+    Tolerant of a None / non-dict entry and of a blank entity or headline —
+    the read behind it is best-effort and may hand back ragged rows."""
+    index: dict[str, list[str]] = {}
+    for prior in prior_surfaced or ():
+        if not isinstance(prior, dict):
+            continue
+        key = _entity_key(prior.get("trigger_entity"))
+        headline = (prior.get("headline") or "")
+        if not key or not isinstance(headline, str) or not headline.strip():
+            continue
+        index.setdefault(key, []).append(headline.lower())
+    return index
+
+
 def _apply_delivery_suppression(
     rows: list[dict],
     config: dict,
     scorer: Optional[Scoring] = None,
+    prior_surfaced: Sequence[Optional[dict]] = (),
 ) -> tuple[list[dict], SuppressionLedger]:
-    """Run the deterministic seven-rule guardrail over fetched rows.
+    """Run the deterministic eight-rule guardrail over fetched rows.
 
     Returns (kept_rows, ledger). First matching rule wins; each suppressed
     row is counted once and contributes at most one sample (deduped).
     `scorer` supplies the visible threshold rule 1's template exemption reads;
-    None resolves it from config.
+    None resolves it from config. `prior_surfaced` is what earlier emails
+    showed (rows with `trigger_entity` + `headline`) — rule 8's comparison set.
 
     Rules 6/7 keep the first row seen of a duplicate pair. Rows arrive
     impact-desc, so a score-4 RULE 6 template row would precede — and
@@ -299,6 +347,10 @@ def _apply_delivery_suppression(
 
     threshold = int(sup_cfg.get("headline_duplicate_threshold", 90))
     enterprise_min_impact = int(sup_cfg.get("enterprise_min_impact", 7))
+    enable_prior_dup = bool(sup_cfg.get("enable_prior_surfaced_duplicate", True))
+    prior_threshold = int(sup_cfg.get("prior_surfaced_duplicate_threshold",
+                                      DEFAULT_PRIOR_SURFACED_DUPLICATE_THRESHOLD))
+    prior_by_entity = _prior_headlines_by_entity(prior_surfaced) if enable_prior_dup else {}
     override_action = sup_cfg.get("job_posting_override_action", "Escalate to leadership")
 
     product_patterns   = sup_cfg.get("url_patterns_product_listing", [])
@@ -348,9 +400,15 @@ def _apply_delivery_suppression(
                 ledger = ledger.record("job_posting", url=url, title=headline)
                 continue
 
-        # Rule 4: Generic market report title with empty entities
+        # Rule 4: Generic market report — a market-research PUBLISHER (by
+        # domain, or the LLM-extracted source_publication; market_reports.py,
+        # the definition the ingestion gate drops by, for the rows stored
+        # before that gate existed or through a wire it missed) whatever the
+        # entities, or a generic-report title with empty entities.
         if sup_cfg.get("enable_generic_market_report", True):
-            if _matches_any_pattern(headline, market_patterns) and not entities:
+            if (market_reports.is_market_report_domain(url)
+                    or market_reports.is_market_report_publication(row.get("source_publication"))
+                    or (_matches_any_pattern(headline, market_patterns) and not entities)):
                 ledger = ledger.record("generic_market_report", url=url, title=headline)
                 continue
 
@@ -380,6 +438,21 @@ def _apply_delivery_suppression(
             if scores and max(scores) >= threshold:
                 ledger = ledger.record("semantic_duplicate_headline", url=url, title=headline)
                 continue
+
+        # Rule 8: prior-surfaced near-duplicate (2026-09-08) — the entity-keyed
+        # multi-day dedup. Keyed on trigger_entity and compared by
+        # token_sort_ratio against the headlines earlier emails showed for
+        # that entity (cards and Watch rows within the lookback the caller
+        # read): a reworded repeat of a story the reader already saw. Rules
+        # 6/7 only see the current run, at 90; this is strictly greater than
+        # its own threshold. Last, so every other reason wins first-match.
+        if prior_by_entity and headline:
+            candidates = prior_by_entity.get(_entity_key(row.get("trigger_entity")), ())
+            if candidates:
+                hl_lower = headline.lower()
+                if max(_token_sort_ratio(hl_lower, h) for h in candidates) > prior_threshold:
+                    ledger = ledger.record("prior_surfaced_duplicate", url=url, title=headline)
+                    continue
 
         kept_indexed.append((index, row))
         if headline:
@@ -446,35 +519,64 @@ def _partition_appendix_exclusions(
     return eligible, excluded
 
 
+def _rank_optional_rows(pool: list[dict]) -> list[dict]:
+    """The one ordering for the optional sections (Watch List, appendix).
+
+    Deterministic (applied as stable sorts, least-significant first):
+    url_hash asc -> normalized headline asc -> recency desc -> effective impact
+    desc -> non-template before template. So cap overflow (score 6+) precedes
+    every score-5, which precedes every score-4; ties break by recency then
+    headline then hash — and every RULE 6 low-exposure template row
+    (`_is_low_exposure_template`) ranks after every non-template row whatever
+    its score, so template rows fill a section only when there is room and
+    are the first its cap pushes out. Production data (2026-08-27) showed the
+    appendix cap binds daily and is decided within the score-4 tier by
+    recency, where macro-group template rows — stored last, so newest — would
+    otherwise displace segment-specific rows. Returns a new list."""
+    ranked = list(pool)
+    ranked.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
+                               r.get("url_hash") or ""))
+    ranked.sort(key=_appendix_recency_token, reverse=True)
+    ranked.sort(key=lambda r: _effective_impact(r), reverse=True)
+    ranked.sort(key=_is_low_exposure_template)
+    return ranked
+
+
+def _select_watch_items(
+    kept: list[dict],
+    final_hashes: set,
+    scorer: Scoring,
+    cap: int,
+) -> tuple[dict, ...]:
+    """Pick the Watch List from suppression survivors not shown as cards:
+    the rows in the Watch band (`Scoring.is_watch`) with a headline and a
+    URL, ranked like the appendix (`_rank_optional_rows`) and capped at
+    `cap`. Empty when no band is configured. Rows the cap pushes out are
+    still in the appendix band and fall through to it."""
+    pool = [
+        r for r in kept
+        if r.get("url_hash") not in final_hashes
+        and scorer.is_watch(r)
+        and bool((r.get("headline") or "").strip())
+        and bool((r.get("source_url") or "").strip())
+    ]
+    return tuple(_rank_optional_rows(pool)[:cap])
+
+
 def _select_additional_articles(
     kept: list[dict],
     final_hashes: set,
     scorer: Scoring,
     cap: int,
 ) -> tuple[dict, ...]:
-    """Pick the appendix rows from suppression survivors not shown as cards.
-
-    Deterministic order (applied as stable sorts, least-significant first):
-    url_hash asc -> normalized headline asc -> recency desc -> effective impact
-    desc -> non-template before template. So cap overflow (score 6+) precedes
-    every score-5, which precedes every score-4; ties break by recency then
-    headline then hash — and every RULE 6 low-exposure template row
-    (`_is_low_exposure_template`) ranks after every non-template row whatever
-    its score, so template rows fill the appendix only when there is room and
-    are the first the cap pushes out. Production data (2026-08-27) showed the
-    cap binds daily and is decided within the score-4 tier by recency, where
-    macro-group template rows — stored last, so newest — would otherwise
-    displace segment-specific rows. Capped at `cap`."""
+    """Pick the appendix rows from suppression survivors not already shown
+    (`final_hashes`: the cards, and the Watch List when one is configured),
+    ranked by `_rank_optional_rows` and capped at `cap`."""
     pool = [
         r for r in kept
         if r.get("url_hash") not in final_hashes and _is_usable_additional_article(r, scorer)
     ]
-    pool.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
-                             r.get("url_hash") or ""))
-    pool.sort(key=_appendix_recency_token, reverse=True)
-    pool.sort(key=lambda r: _effective_impact(r), reverse=True)
-    pool.sort(key=_is_low_exposure_template)
-    return tuple(pool[:cap])
+    return tuple(_rank_optional_rows(pool)[:cap])
 
 
 def _group_by_commercial_segment(items: list[dict]) -> dict[str, list[dict]]:
@@ -583,12 +685,17 @@ def assemble_report(
     rows: list[dict],
     macro_summary: Optional[MacroSummary] = None,
     config: Optional[dict] = None,
+    *,
+    prior_surfaced: Sequence[Optional[dict]] = (),
 ) -> ReportModel:
     """Run the full decision pipeline over fetched Insight rows.
 
     Pure and deterministic. config is the parsed market_pulse_config.yaml dict;
-    None means built-in defaults, never a file read. Never raises on malformed
-    rows — field reads fall back exactly as the renderer's defensive reads did.
+    None means built-in defaults, never a file read. `prior_surfaced` is what
+    earlier emails showed — rows carrying `trigger_entity` and `headline`, the
+    comparison set for suppression rule 8; empty means no multi-day dedup.
+    Never raises on malformed rows — field reads fall back exactly as the
+    renderer's defensive reads did.
     """
     config = config or {}
 
@@ -609,7 +716,7 @@ def assemble_report(
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, ledger = _apply_delivery_suppression(rows, config, scorer)
+    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if scorer.is_visible(r)]
@@ -662,23 +769,33 @@ def assemble_report(
             url=row.get("source_url") or "",
             title=row.get("headline") or "",
         )
-    additional_articles = _select_additional_articles(
-        appendix_pool, final_hashes, scorer, _max_additional_articles(reporting_cfg),
+    # 6a. The Watch List: the Watch band (score 5 in production) out of the
+    #     same pool — so the category exclusion above governs it too and is
+    #     recorded once — shown with its So-What ahead of the appendix. A
+    #     Watch row is shown, so it leaves the appendix pool below.
+    watch_items = _select_watch_items(
+        appendix_pool, final_hashes, scorer, _max_watch_items(reporting_cfg),
     )
-    # Show the merged display label in the appendix segment column too, so the
-    # reader sees one consistent header for the merged segment across cards and
-    # appendix. Copy-on-write — the caller's rows are never mutated.
+    watch_hashes = {w.get("url_hash") for w in watch_items}
+    additional_articles = _select_additional_articles(
+        appendix_pool, final_hashes | watch_hashes, scorer, _max_additional_articles(reporting_cfg),
+    )
+    # Show the merged display label in the Watch and appendix segment columns
+    # too, so the reader sees one consistent header for the merged segment
+    # across every section. Copy-on-write — the caller's rows are never mutated.
+    watch_items = tuple(_with_display_segment(r, display_map) for r in watch_items)
     additional_articles = tuple(
         _with_display_segment(r, display_map) for r in additional_articles
     )
 
     # 7. weak_relevance: weak-relevance rows (supporting..visible, exclusive)
-    #    shown NOWHERE — neither a
-    #    visible card nor the appendix (e.g. pushed out by the appendix cap).
+    #    shown NOWHERE — neither a visible card, a Watch row, nor the appendix
+    #    (e.g. pushed out by the appendix cap).
     #    (below_impact_threshold above is deliberately broader: it counts every
-    #    suppression-surviving below-visible row, including ones the appendix
-    #    now displays — it describes the visible-card decision, not end hiding.)
-    shown_hashes = final_hashes | {a.get("url_hash") for a in additional_articles}
+    #    suppression-surviving below-visible row, including ones the Watch List
+    #    or appendix now display — it describes the visible-card decision, not
+    #    end hiding.)
+    shown_hashes = final_hashes | watch_hashes | {a.get("url_hash") for a in additional_articles}
     weak_relevance_count = sum(
         1 for r in kept
         if scorer.is_weak_relevance(r)
@@ -703,6 +820,7 @@ def assemble_report(
         ledger=ledger,
         macro_summary=macro_summary,
         additional_articles=additional_articles,
+        watch_items=watch_items,
         macro_outlook=macro_outlook,
         citations=citations,
     )

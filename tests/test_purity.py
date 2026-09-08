@@ -25,7 +25,7 @@ from tests.conftest import REPO_ROOT
 #: `urllib.parse` is harmless while `urllib.request` is not on the list.
 HARMLESS_LIBRARIES = frozenset({
     "__future__", "typing", "dataclasses", "collections", "itertools", "re",
-    "hashlib", "html", "datetime", "urllib.parse", "logging",
+    "hashlib", "html", "datetime", "urllib.parse", "logging", "textwrap",
     "yaml", "rapidfuzz.fuzz",
 })
 
@@ -50,6 +50,7 @@ PURE_MODULES = {
     "macro_summary": Purity(),
     "run_budget": Purity(),
     "suppression_ledger": Purity(),
+    "market_reports": Purity(),
     "target_enricher": Purity(),
     # The two file-backed parsers (targets.yaml, target_metadata.yaml): one read each.
     "targets": Purity(reads_files=1),

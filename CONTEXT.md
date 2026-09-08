@@ -101,7 +101,29 @@ zero-I/O purity is untouched.
 - **Materiality** (`americhem_impact_score`, 1–10) — how much an article matters to
   Americhem, independent of tone. The report filters on materiality, **not** on
   `sentiment_tag` (tone). `insight.effective_impact` reads it (with the legacy
-  `sentiment_score` fallback).
+  `sentiment_score` fallback). RULE 3 of the insight prompt scores the **event**
+  and the actor's place in Americhem's value chain, never whether the article
+  names Americhem (recalibrated 2026-09-08 — see the **score-3 floor** entry).
+  Its bands are closed membership lists, checked floor-first (an exception
+  inside a band does not hold with this model; a list does): **1** not about
+  the business, **2** no event for the entity (incl. every macro statistic but
+  the two US prints), **3** business content that is not an event
+  (market-research forecasts, analyst / investor items, trade shows, guides,
+  showcases, growth features, one-company settlements), **4** thin, **5** the
+  two demand prints (US ISM PMI, US industrial production) or a generic event,
+  **6 WATCH** the default for a **value-chain actor**'s operationally material
+  event with the mechanism *implied* by its position, **7–8 DIRECT** (input
+  price reports and increases, named-target M&A in the supply chain or channel,
+  feedstock disruptions naming polymers, supplier distress) and **9–10
+  STRATEGIC**.
+- **Score-3 floor** — the Aug 4 – Sep 8 2026 scoring regression: two prompt-only
+  changes (#62 on 2026-08-03, #74 on 2026-08-27) bound the RULE 6 low-exposure
+  templates to the 3–4 band and then defined the template as the destination
+  for any correct-entity article "that matters little", so every article that
+  did not spell out an Americhem mechanism — i.e. nearly all of them — landed
+  at 3 (76% of rows) and cards fell from ~22/day to ~3/day. Reversed by the
+  RULE 3 recalibration above, not by reverting: the pre-#62 rubric surfaced
+  market-report boilerplate at 6. `backtest/` holds the labeled acceptance set.
 - **Relevance thresholds** — what a materiality score means for the report:
   **visible** (≥ `visible_impact_threshold`, default 6), **weak-relevance**
   (supporting context, `supporting_impact_threshold ≤ score < visible`), and the
@@ -250,14 +272,41 @@ zero-I/O purity is untouched.
   schema, numbering belongs to the rendered report.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
+- **Market-report publisher gate** — `market_reports.py` (2026-09-08): the one
+  definition of the market-research publishers (IndexBox, Fact.MR, Future
+  Market Insights, MarketsandMarkets, Lucintel, openPR, …) and the "market
+  forecast to 20XX" headline shapes whose releases discovery keeps pulling in.
+  A forecast of a market's size is not an event: the ingestion gauntlet drops a
+  matching candidate before the scrape (`market_report_publisher`), RULE 3's
+  FLOOR names the publishers to the model, and delivery rule 4 drops a stored
+  row whose domain or `source_publication` is one of them whatever it scored.
+  *Avoid*: blocklist (it is a predicate with three consumers, not a list one
+  gate reads).
+- **Prior-shown lookback** — `delivery_engine.fetch_prior_shown` (2026-09-08): the
+  rows earlier emails showed — cards and **Watch List** rows created in the
+  `prior_surfaced_lookback_days` (default 3) before this run's **delivery
+  window** cutoff, read tolerantly through `IntelligenceRepo.fetch_between`.
+  The comparison set for delivery suppression **rule 8**, the entity-keyed
+  multi-day near-duplicate (`prior_surfaced_duplicate`: same `trigger_entity`,
+  headline `token_sort_ratio` strictly above the configured threshold, default
+  70). An approximation on purpose: caps and suppression are not replayed.
+- **Watch List** — `ReportModel.watch_items` (2026-09-08): suppression-surviving
+  rows in the **Watch band** (`reporting.watch_impact_threshold` ≤ score <
+  visible, `Scoring.is_watch`; production 5 — RULE 3's band for a value-chain
+  actor's operationally material event) that are not cards, rendered WITH their
+  So-What between Commercial Segment Watch and the appendix, ranked like the
+  appendix (`report._rank_optional_rows`) and capped at `max_watch_items`
+  (default 8). Shown, so excluded from the appendix and from `weak_relevance`;
+  never affects `surfaced_count`. Absent threshold = no section.
 - **Additional Articles to Explore** — the optional-discovery appendix
   (`ReportModel.additional_articles`): suppression-surviving rows scoring at
   or above the supporting threshold (code default 4; production 3) that are
   not visible cards — the
-  weak-relevance band plus cap overflow — ranked deterministically
-  (non-template rows before **low-exposure template** rows, then impact,
-  then recency) and capped at `reporting.max_additional_articles` (default 10). Rendered
-  compactly below Commercial Segment Watch, without the "So what" narrative.
+  weak-relevance band plus cap overflow, minus the **Watch List** rows — ranked
+  deterministically (non-template rows before **low-exposure template** rows,
+  then impact, then recency) and capped at `reporting.max_additional_articles`
+  (default 10). Rendered compactly below the Watch List, without the "So what"
+  narrative.
   Never affects `surfaced_count`. Rows shown here are excluded from the
   `weak_relevance` count (but still counted in the broader
   `below_impact_threshold`). Enterprise / Cross-Segment rows below
@@ -277,7 +326,10 @@ zero-I/O purity is untouched.
   supporting band (`prompts.low_exposure_score_band`, derived from `Scoring`)
   on the promise that they reach the appendix; because an adjacent-market row
   is Enterprise / Cross-Segment by construction, rule 1 exempts template rows
-  below the visible threshold (issue #65). Never a visible card; in the
+  below the visible threshold (issue #65). Since the 2026-09-08 recalibration
+  a template is legal only for a RULE 3 FLOOR / 4-band article: a value-chain
+  actor's WATCH event gets the implied-mechanism So-What instead (a template
+  there was the **score-3 floor**'s main path). Never a visible card; in the
   appendix always ranked after every non-template row, and in delivery
   dedup (rules 6/7) always processed after every non-template row so a
   duplicate contest never goes to a template — last-resort reading that

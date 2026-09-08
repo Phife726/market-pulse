@@ -17,6 +17,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
     ("scrape_failed",            "scrape failed"),
     ("synthesis_failed",         "LLM synthesis failed"),
     ("unscrapable_domain",       "unscrapable domain"),
+    ("market_report_publisher",  "market-research report (publisher or headline)"),
     ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
 _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
@@ -30,6 +31,7 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("unrelated_color_result",              "unrelated color result"),
     ("enterprise_cross_segment_low_impact", "Enterprise / Cross-Segment, low impact"),
     ("appendix_excluded_category",          "appendix-excluded category (macro group)"),
+    ("prior_surfaced_duplicate",            "near-duplicate of a headline shown in a prior email (same entity)"),
 )
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)

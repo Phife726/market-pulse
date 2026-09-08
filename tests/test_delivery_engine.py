@@ -1004,3 +1004,104 @@ def test_update_delivery_summary_counts_writes_when_no_prior_row(monkeypatch):
     got = fake.get_delivery_state(run_date=today, run_mode="production")
     assert got["surfaced_count"] == 3
     assert got["suppression_breakdown"] == {"below_impact_threshold": 2}
+
+
+# ===========================================================================
+# Prior-shown lookback (rule 8, 2026-09-08): what earlier emails showed, read
+# from the days before this run's delivery-window cutoff
+# ===========================================================================
+
+
+def test_fetch_prior_shown_reads_the_lookback_before_the_anchor_and_keeps_shown_rows(monkeypatch):
+    """The prior set is (cutoff - lookback, cutoff] filtered to what an email
+    would have shown — visible cards and Watch-band rows — never the
+    appendix band."""
+    import delivery_engine
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    anchor = datetime(2026, 8, 26, 10, 44, 12)
+    fake.fetch_last_delivery.return_value = anchor
+    fake.fetch_between.return_value = [
+        {"url_hash": "card", "headline": "Card", "trigger_entity": "X", "americhem_impact_score": 7},
+        {"url_hash": "watch", "headline": "Watch", "trigger_entity": "X", "americhem_impact_score": 5},
+        {"url_hash": "appx", "headline": "Appx", "trigger_entity": "X", "americhem_impact_score": 4},
+    ]
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    cfg = {"reporting": {"visible_impact_threshold": 6, "watch_impact_threshold": 5},
+           "delivery_suppression": {"prior_surfaced_lookback_days": 3}}
+
+    prior = delivery_engine.fetch_prior_shown(_RUN, _RUN.summary_key, report_config=cfg)
+
+    fake.fetch_between.assert_called_once_with(anchor - timedelta(days=3), anchor)
+    assert [p["url_hash"] for p in prior] == ["card", "watch"]
+
+
+def test_fetch_prior_shown_without_a_watch_band_keeps_only_cards(monkeypatch):
+    import delivery_engine
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    fake.fetch_last_delivery.return_value = datetime(2026, 8, 26, 10, 44, 12)
+    fake.fetch_between.return_value = [
+        {"url_hash": "card", "headline": "Card", "trigger_entity": "X", "americhem_impact_score": 6},
+        {"url_hash": "five", "headline": "Five", "trigger_entity": "X", "americhem_impact_score": 5},
+    ]
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    prior = delivery_engine.fetch_prior_shown(_RUN, _RUN.summary_key, report_config=VISIBLE_6_CFG)
+    assert [p["url_hash"] for p in prior] == ["card"]
+
+
+def test_fetch_prior_shown_uses_the_fallback_cutoff_when_no_anchor(monkeypatch):
+    """No recorded production delivery: the window's cutoff is the wall-clock
+    fallback, and the prior lookback sits behind that same cutoff."""
+    import delivery_engine
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    fake.fetch_last_delivery.return_value = None
+    fake.fetch_between.return_value = []
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    fixed = datetime(2026, 5, 27, 9, 0, 0)   # a Wednesday: 24 h fallback
+    run = replace(_RUN, now=fixed)
+    delivery_engine.fetch_prior_shown(run, run.summary_key, report_config=VISIBLE_6_CFG)
+    cutoff = fixed - timedelta(hours=24)
+    fake.fetch_between.assert_called_once_with(cutoff - timedelta(days=3), cutoff)
+
+
+def test_fetch_prior_shown_returns_nothing_and_reads_nothing_when_rule_disabled(monkeypatch):
+    import delivery_engine
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_prior_surfaced_duplicate": False}}
+    assert delivery_engine.fetch_prior_shown(_RUN, _RUN.summary_key, report_config=cfg) == []
+    fake.fetch_between.assert_not_called()
+
+
+def test_delivery_execute_pipeline_suppresses_a_prior_surfaced_near_duplicate(run_delivery_pipeline):
+    """End to end: a story that was a card in yesterday's production email
+    comes back today under the same entity with a reworded headline. It is
+    kept out of today's email and ledgered as prior_surfaced_duplicate; an
+    unrelated row still ships."""
+    yesterday = _RUN.now - timedelta(days=1)
+    fake = InMemoryIntelligenceRepo(now=lambda: _RUN.now)
+    # Yesterday's email: its row, and the delivered_at stamp that anchors today's window.
+    fake.upsert_summary(stub_summary_row(run_date=(_RUN.now - timedelta(days=1)).strftime("%Y-%m-%d")))
+    fake.record_delivery(run_date=(_RUN.now - timedelta(days=1)).strftime("%Y-%m-%d"),
+                         run_mode="production", delivered_at=yesterday)
+    fake.upsert_insight(_row("prior", 8, trigger_entity="Univar Solutions", commercial_segment="Industrial",
+                             headline="Univar Solutions acquires H.M. Royal specialty distributor",
+                             source_url="https://x/prior",
+                             created_at=(yesterday - timedelta(hours=2)).isoformat()))
+    # Today's window.
+    fake.upsert_insight(_row("repeat", 8, trigger_entity="Univar Solutions", commercial_segment="Industrial",
+                             headline="Univar Solutions acquires H.M. Royal distributor",
+                             source_url="https://x/repeat",
+                             created_at=(_RUN.now - timedelta(hours=2)).isoformat()))
+    fake.upsert_insight(_row("fresh", 8, trigger_entity="Chemours", commercial_segment="Packaging",
+                             headline="Chemours lifts TiO2 price again", source_url="https://x/fresh",
+                             created_at=(_RUN.now - timedelta(hours=1)).isoformat()))
+    fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date))
+
+    result = run_delivery_pipeline(fake)
+
+    html = result.sent[-1].html
+    assert "Chemours lifts TiO2 price again" in html
+    assert "H.M. Royal distributor" not in html
+    stored = fake.get_delivery_state(run_date=_RUN.run_date, run_mode="production")
+    assert stored["surfaced_count"] == 1
+    assert stored["suppression_breakdown"].get("prior_surfaced_duplicate") == 1

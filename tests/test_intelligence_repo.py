@@ -838,3 +838,51 @@ def test_coerce_timestamp_rejects_garbage_and_non_strings():
     assert _coerce_timestamp("not a timestamp") is None
     assert _coerce_timestamp(None) is None
     assert _coerce_timestamp(1724668000) is None
+
+
+# ---------------------------------------------------------------------------
+# fetch_between — the prior-shown lookback read (rule 8, 2026-09-08)
+# ---------------------------------------------------------------------------
+
+def test_fetch_between_in_memory_is_start_exclusive_end_inclusive():
+    """(start, end]: rows AT the end (the last delivery's cutoff) were in that
+    email and belong to the prior set; rows AT the start do not."""
+    now = datetime(2026, 9, 8, 12, 0, 0)
+    repo = InMemoryIntelligenceRepo(now=lambda: now)
+    end, start = now - timedelta(days=1), now - timedelta(days=4)
+    for h, ts in (("before", start - timedelta(hours=1)), ("at_start", start),
+                  ("inside", now - timedelta(days=2)), ("at_end", end),
+                  ("after", now - timedelta(hours=1))):
+        repo.upsert_insight({"url_hash": h, "headline": h, "created_at": ts.isoformat()})
+    assert {r["url_hash"] for r in repo.fetch_between(start, end)} == {"inside", "at_end"}
+
+
+def test_fetch_between_returns_independent_copies():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_insight({"url_hash": "abc", "headline": "Original"})
+    rows = repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1))
+    rows[0]["headline"] = "Mutated"
+    assert repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1))[0]["headline"] == "Original"
+
+
+def test_supabase_fetch_between_filters_created_at_and_selects_the_dedup_columns(supabase_repo):
+    repo, mock_client = supabase_repo
+    select = mock_client.table.return_value.select
+    chain = select.return_value.gt.return_value.lte.return_value.execute
+    chain.return_value.data = [{"url_hash": "a", "headline": "x", "trigger_entity": "E"}]
+    rows = repo.fetch_between(datetime(2026, 8, 23, 10, 44, 12), datetime(2026, 8, 26, 10, 44, 12))
+    assert rows == [{"url_hash": "a", "headline": "x", "trigger_entity": "E"}]
+    mock_client.table.assert_called_with("daily_intelligence")
+    columns = select.call_args.args[0]
+    for col in ("url_hash", "headline", "trigger_entity", "americhem_impact_score", "sentiment_score"):
+        assert col in columns
+    select.return_value.gt.assert_called_with("created_at", "2026-08-23T10:44:12")
+    select.return_value.gt.return_value.lte.assert_called_with("created_at", "2026-08-26T10:44:12")
+
+
+def test_supabase_fetch_between_swallows_errors(supabase_repo):
+    """A tolerant read: a failure here can only let a repeat through, never
+    produce a wrong email, so it must not turn the job red."""
+    repo, mock_client = supabase_repo
+    mock_client.table.side_effect = Exception("read failed")
+    assert repo.fetch_between(datetime(2026, 8, 23), datetime(2026, 8, 26)) == []

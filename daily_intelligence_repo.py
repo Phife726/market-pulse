@@ -38,6 +38,7 @@ class IntelligenceRepo(Protocol):
     def upsert_insight(self, payload: dict) -> None: ...
     def recent_headlines(self, hours: int) -> set[str]: ...
     def fetch_since(self, cutoff: datetime) -> list[dict]: ...
+    def fetch_between(self, start: datetime, end: datetime) -> list[dict]: ...
     # daily_summaries (one row per (run_date, run_mode))
     def upsert_summary(self, row: dict) -> None: ...
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]: ...
@@ -121,6 +122,29 @@ class SupabaseIntelligenceRepo:
             .execute()
         )
         return list(result.data or [])
+
+    def fetch_between(self, start: datetime, end: datetime) -> list[dict]:
+        """Rows created in (start, end] — the prior-shown lookback behind
+        delivery suppression rule 8 (naive datetimes are UTC). Only the
+        columns the entity-keyed dedup and the shown-band filter read.
+
+        Tolerant read: a failure returns []. The worst case is one repeated
+        headline in one email — never a wrong email, and nothing downstream
+        stamps or writes on the strength of it — so it must not turn the job
+        red (contrast fetch_since)."""
+        try:
+            result = (
+                self._supabase().table("daily_intelligence")
+                .select("url_hash, headline, trigger_entity, americhem_impact_score, "
+                        "sentiment_score, created_at")
+                .gt("created_at", start.isoformat())
+                .lte("created_at", end.isoformat())
+                .execute()
+            )
+            return list(result.data or [])
+        except Exception as exc:
+            logger.error("Supabase fetch_between failed: %s", exc)
+            return []
 
     def upsert_summary(self, row: dict) -> None:
         self._supabase().table("daily_summaries").upsert(
@@ -314,6 +338,17 @@ class InMemoryIntelligenceRepo:
             if ts is None:
                 continue
             if ts > cutoff:
+                rows.append(dict(row))
+        return rows
+
+    def fetch_between(self, start: datetime, end: datetime) -> list[dict]:
+        start, end = _coerce_timestamp(start), _coerce_timestamp(end)
+        rows: list[dict] = []
+        for row in self._articles.values():
+            ts = _coerce_timestamp(row.get("created_at"))
+            if ts is None:
+                continue
+            if start < ts <= end:
                 rows.append(dict(row))
         return rows
 

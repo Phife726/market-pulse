@@ -3,7 +3,7 @@
 Text assembly only: callers keep validation, the LLM seam (`llm.py`) keeps
 transport. Config enters as a dict (same discipline as `report.py`); no I/O,
 no clock, no env reads — purity is pinned structurally in tests/test_purity.py (this module
-imports only `insight`, `scoring`, and stdlib).
+imports only `insight`, `scoring`, `market_reports`, and stdlib).
 
 The unit of exchange is the **prompt spec** (`PromptSpec` / `MacroPrompt`) —
 a fully-assembled call as plain frozen data, splatted into the LLM seam via
@@ -18,10 +18,12 @@ exactly what it was told, from one definition; drift is an import error, not
 a diff-review discipline.
 """
 import hashlib
+import textwrap
 from dataclasses import dataclass
 from typing import Optional
 
 import insight
+import market_reports
 from scoring import Scoring
 
 
@@ -150,8 +152,9 @@ def _build_low_exposure_score_rule(scorer: Scoring) -> str:
         f"  {names} wording with an americhem_impact_score of {band}\n"
         f"  — never above {high} (that would overstate it), and never below {low} "
         "(the article still passed Rule 7).\n"
-        "  A template is for articles that are about the right entity but matter little; it is\n"
-        "  not a substitute for RULE 1's DISCARD."
+        "  A template is only for a FLOOR or 4-band article (RULE 3) that is about the right\n"
+        "  entity; it is never a substitute for RULE 1's DISCARD, and never the So-What for a\n"
+        "  WATCH-or-above event."
     )
 
 
@@ -238,21 +241,126 @@ Also assign sentiment_score (1–10, kept for compatibility) using the same dire
 1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
 
 RULE 3 — AMERICHEM IMPACT SCORE (relevance and materiality, 1–10):
-Score how relevant and materially important this article is to Americhem's business,
-independent of sentiment direction.
+Score how materially the EVENT bears on Americhem's business, independent of sentiment
+direction. Americhem is almost never named in the news it needs to see: score the event and
+the actor's position in Americhem's value chain, never whether the article names Americhem
+or states an effect on it. "No explicit Americhem linkage" is the normal condition of a
+relevant article and is NEVER a reason to score it low — you supply the implied mechanism.
 
-1–2: Barely related. Almost no connection to Americhem's markets or supply chain.
-3–4: Indirect exposure only. Weak or speculative connection.
-5–6: Moderately relevant. Affects an Americhem segment or supply chain with some certainty.
-7–8: Clearly relevant. Direct effect on Americhem's customers, suppliers, costs, or demand.
-9–10: High-priority strategic signal. Americhem should act or monitor closely.
+VALUE-CHAIN ACTOR: the trigger entity, or any other company that makes, sells, or distributes
+polymers, resins, compounds, masterbatch, pigments, inks, additives, adhesives, composites,
+battery or EV materials, or their feedstocks — Americhem's customers, suppliers,
+distributors, and competitors. ABSENT TRIGGER ENTITY: a query on one company often returns
+another's news. If the trigger entity is absent or incidental but the article is about
+ANOTHER value-chain actor's event (Siegwerk's ink capacity for a Sun Chemical query;
+Cambium's aerospace adhesive or a composites developer's hydrogen-line program for an
+Advanced Composites query), score that actor's event exactly as if it were the trigger.
+RULE 1's DISCARD is for a WRONG entity, never an absent one.
 
-Score by weighting these factors:
-- Segment fit (30%): directly affects a configured segment below
-- Americhem exposure (25%): named customers, end-markets, suppliers, competitors, or geographies
-- Business materiality (20%): demand volume, margin, capacity, regulatory risk, or supply risk
-- Timeliness/novelty (15%): recent, emerging, disruptive event
-- Actionability (10%): Sales or GMM team can take a concrete step
+The floor bands (1, 2, 3, 4) are checked first; an article that fits one never scores
+higher. Each floor band is a closed list: put the article in the band whose list names it.
+
+1 — NOT ABOUT THE BUSINESS: a 404, empty, or paywalled page; a job posting; a retail product
+     listing; local or sports news that only shares a name or a street with the entity.
+
+2 — NO EVENT FOR THE ENTITY: the entity is only mentioned in passing; its action is in an
+     unrelated business line (software, diagnostics equipment, semiconductors, a bus-camera
+     trial); a consumer product review, launch, or promotion; a plant visit, labor dispute,
+     or anniversary story; and every MACRO STATISTIC or policy other than the two prints in
+     band 5 — vehicle or EV sales anywhere, building permits, construction spending, credit
+     or freight indices, energy prices, another country's output, a province's 2030 vehicle
+     ban — whatever demand it "implies" (a supply disruption that names the polymers hit is
+     not a statistic — it is DIRECT, below). So-What opener for 1–2: "No material signal — …".
+
+3 — BUSINESS CONTENT, NOT AN EVENT: market-research forecasts — any "market to reach / CAGR
+     / forecast to 20XX" report ({market_report_publishers},
+     and wire syndications of them on EIN Presswire, GlobeNewswire or PRNewswire), even
+     about masterbatch, even listing a competitor "among key players"; analyst ratings and
+     price targets, stock screens, "better-ranked stock" lists, valuation or resilience
+     commentary, fund stakes, dividends, earnings-date scheduling, share-price moves; a law
+     firm's shareholder investigation of a deal; trade-show exhibits, awards, sponsorships;
+     personnel changes below CEO/CFO/COO; industry rankings; a trade body's or
+     consultancy's guides, explainers, or regulatory roundups — a document about rules is
+     not a rule (UKFT publishing packaging guides); an application showcase or brochure for
+     an existing grade ("ULTEM highlighted for ADAS readiness", "promotes THERMOLAST K for
+     hoses"); trend or growth features and executive outlook quotes with no transaction,
+     price, capacity, launch, or figure (a trade magazine's turf-growth feature, even
+     when the trigger entity is a customer quoted in it: "highlights growth" is a feature,
+     not an event); an enforcement action against ONE company — a settlement, consent
+     decree, fine, permit dispute, or remediation order, however "binding", even one
+     mandating plant upgrades — and any lawsuit or ruling, with no outage, closure, or
+     allocation: regulation (band 6) means a rule that binds every seller in a market,
+     never one company's settlement.
+
+4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; a bare earnings beat or
+     miss — results that report NO price, volume, or capacity change (results that DO
+     report one are band 6, or DIRECT when it is an input price: Dow's "PE price up 20%"
+     is 7, never 4); results from a prior fiscal year; an end product that merely USES a
+     named polymer, however it is cleared or certified (an FDA-cleared tray made of Ultem,
+     a sponge, an analyzer); a corporate spin-off or IT project; RULE 7's
+     uncertain-relevance exit. Never a WATCH event that merely lacks a stated Americhem
+     effect.
+
+The event bands are read in this order: DIRECT (7–8) first, then WATCH (6), then 5 — an
+article that fits DIRECT is DIRECT even if it could also be called generic.
+
+7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
+     - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
+       monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
+       swing as buyers regain leverage", "prices could go up again in August" — with or
+       without a figure: these are input prices, never macro statistics
+     - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
+       caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
+       PE price +20%; Chemours: TiO2 +2%)
+     - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
+       and spandex) — a war, strait closure, or storm counts; the geography of the
+       disruption does not make it a statistic or a "generic" event
+     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
+       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
+       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
+     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
+       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
+       plant
+
+6 — WATCH (the default for an actor's event): a VALUE-CHAIN ACTOR does something
+     operationally material, or regulation binds a RULE 4 end-market. Any one of:
+     - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
+       pigment, additive, or feedstock (with a named input or a figure it is DIRECT, below)
+     - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
+       capability build — in any RULE 4 end-market (a supplier's EV battery-materials lab
+       counts)
+     - a JV, distribution-agreement change, or a deal whose counterparty is not named, in
+       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, below)
+     - financial distress — bankruptcy, restructuring, going-concern warning, guidance
+       cut — or a head-to-head competitor's earnings beat and guidance raise
+     - a launch, new grade, certification, volume milestone, partnership, or development /
+       qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
+       adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
+       states a performance figure or a target application; a competitor's launch is a
+       threat and still scores here. NOT an application showcase or brochure for an
+       existing grade (band 3).
+     - an aerospace composites program — hydrogen lines, eVTOL or airframe structures — by
+       any composites developer: in Transportation - Aerospace every program is a materials
+       decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
+     - quarterly results — a supplier's, customer's, or competitor's — that report a price,
+       volume, or capacity change for an input or a RULE 4 end-market (an input PRICE
+       change reported in results is DIRECT, below); a head-to-head competitor's (Avient,
+       Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet) beat-and-raise
+     - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
+       US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
+       effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),
+       even when reported through an explainer. NOT a guide, roundup, or explainer that
+       sets no new obligation, and NOT a settlement or consent decree (band 3).
+     A named counterparty, plant, grade, input, figure, or effective date confirms 6.
+
+5 — DEMAND PRINT, or a generic event that fits neither band above. (a) The two macro prints that matter to a compounder:
+     the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
+     forecast of it — and US industrial production. These two only; every other statistic
+     is band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
+     plant, grade, input, figure, or date.
+
+9–10 — STRATEGIC: Americhem must act — a key supplier's exit, a binding regulation with a
+     near deadline across a whole end-market, a major competitor acquiring a compounder.
 
 {rule4}
 
@@ -261,8 +369,14 @@ Score by weighting these factors:
 RULE 6 — RIGOROUS, HONEST IMPACT STATEMENT:
 Write a specific So-What for Americhem, but NEVER invent impact the article does not support.
 Where the article supports a direct effect, identify which business unit or cost line is
-affected and in what direction. Where it does not, take one of the exits below instead of
-naming a business unit speculatively.
+affected and in what direction. Where the event is a RULE 3 WATCH-or-above event (score 5+),
+the So-What states the mechanism IMPLIED by the actor's value-chain position, framed as an
+inference rather than as a fact the article reports — e.g. "As a TiO2 supplier, Chemours'
+increase raises Americhem's pigment input cost" or "Univar's added distribution reach can
+shift additive channel pricing". That is the required So-What for such articles: a
+low-exposure template on a WATCH event understates it and is wrong. Where the article
+supports no direct effect and the event is FLOOR or 4-band (RULE 3), take one of the exits
+below instead of naming a business unit speculatively.
 - DIRECTION CONSISTENCY: the So-What's direction must agree with sentiment_tag. Never
   describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
 - UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
@@ -270,9 +384,13 @@ naming a business unit speculatively.
   those segments, write: "{adjacent_market_template} — no direct Americhem participation indicated."
 - HONEST LOW EXPOSURE IS LEGAL: when true impact is limited, write
   "{limited_exposure_template} — [specific reason]" instead of inventing a commercial effect.
+- FLOOR CLASS A (RULE 3, score 1–2) takes neither template: write
+  "No material signal — [what the article actually is]" and score 1 or 2.
 {low_exposure_score_rule}
 Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
-Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
+Do NOT claim demand or sales UPSIDE ("may increase demand") without data from the article; a
+cost, supply, channel, competitive, or regulatory mechanism implied by the actor's position
+needs no such data.
 
 RULE 7 — DOMAIN RELEVANCE FIREWALL:
 Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
@@ -305,6 +423,14 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
 }"""
 
 
+def _market_report_publisher_list() -> str:
+    """RULE 3's FLOOR names the market-research publishers the ingestion gate
+    drops by domain — one definition (market_reports.PUBLISHERS), wrapped to
+    the prompt's hand-wrapped width."""
+    return textwrap.fill(", ".join(market_reports.PUBLISHER_NAMES), width=90,
+                         subsequent_indent="     ")
+
+
 def _insight_system_prompt(config: dict) -> str:
     """Assemble the full system prompt, injecting commercial segment and signal
     type taxonomies. Assembly is str.replace() on named markers, never
@@ -323,6 +449,7 @@ def _insight_system_prompt(config: dict) -> str:
         .replace("{limited_exposure_template}", limited)
         .replace("{low_exposure_score_rule}", _build_low_exposure_score_rule(scorer))
         .replace("{uncertain_relevance_score}", str(uncertain_score))
+        .replace("{market_report_publishers}", _market_report_publisher_list())
     )
 
 

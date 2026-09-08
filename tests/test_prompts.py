@@ -5,8 +5,11 @@ the builders are pure functions over dicts. The engine tests keep one thin
 wiring check each (e.g. the non-English-body regression in test_ingestion_engine.py)
 proving the assembled spec actually crosses the LLM seam.
 """
+from typing import Optional
+
 import prompts
 from prompts import MacroPrompt, PromptSpec
+from scoring import Scoring
 
 _ENGLISH_ANCHORS = ("business English", "regardless of the source article")
 
@@ -191,7 +194,9 @@ def test_rule6_permits_honest_low_exposure_and_keeps_the_ban():
     # "identify which business unit is affected" re-creates the pressure to
     # fabricate a commercial connection that the exits above exist to relieve.
     assert "Where the article supports a direct effect" in system
-    assert "Where it does not, take one of the exits below" in system
+    # ...and since the 2026-09-08 recalibration the exits are scoped to the
+    # RULE 3 FLOOR / 4-band: a WATCH event gets the implied-mechanism So-What.
+    assert "FLOOR or 4-band (RULE 3), take one of the exits" in system
 
 
 _PROD_STYLE_CFG = {"reporting": {"supporting_impact_threshold": 3,
@@ -441,11 +446,124 @@ def test_rule1_verdict_precedes_the_rule6_and_rule7_exits():
 
 def test_rule6_template_is_not_a_substitute_for_rule1_discard():
     """The SCORE MUST MATCH sub-rule must scope the templates to articles that
-    ARE about the right entity but matter little — not to false matches."""
+    ARE about the right entity and sit in the RULE 3 FLOOR / 4-band — not to
+    false matches (RULE 1), and not to WATCH events (the 2026-09-08
+    recalibration: a template on a named actor's material event was the
+    score-3 floor's main path)."""
     rule6 = _rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —")
     assert "SCORE MUST MATCH THE TEMPLATE" in rule6
-    assert "about the right entity but matter little" in rule6
-    assert "not a substitute for RULE 1" in rule6
+    assert "only for a FLOOR or 4-band article (RULE 3)" in rule6
+    assert "never a substitute for RULE 1" in rule6
+    assert "never the So-What for a" in rule6
+
+
+# ---------------------------------------------------------------------------
+# Insight prompt — RULE 3 recalibration (2026-09-08): score the event, not the
+# Americhem mention. Pins the shape that reversed the Aug 4 / Aug 27 score-3
+# floor; the labeled set in backtest/ is the behavioural acceptance test.
+# ---------------------------------------------------------------------------
+
+def _flat(text: str) -> str:
+    """Whitespace-normalized: the prompt is hand-wrapped at ~95 columns and a
+    phrase may break across lines; these tests pin wording, not line breaks."""
+    return " ".join(text.split())
+
+
+def _rule3(cfg: Optional[dict] = None) -> str:
+    return _flat(_rule_section(_insight_spec(cfg).system, "RULE 3 —", "RULE 4 —"))
+
+
+def test_rule3_scores_the_event_not_whether_americhem_is_named():
+    """The Aug 4 floor came from RULE 3 phrasing its bands as 'connection to
+    Americhem' — an article that never names Americhem read as weak. The
+    recalibrated rule says so outright and defines the actor set the bands
+    hang off."""
+    rule3 = _rule3()
+    assert "NEVER a reason to score it low" in rule3
+    assert "VALUE-CHAIN ACTOR:" in rule3
+    assert "you supply the implied mechanism" in rule3
+    assert "NEVER a reason to score it low" in rule3
+
+
+def test_rule3_floor_is_applied_first_and_names_every_noise_class():
+    """The hard floor (<= 3) is stated before the WATCH band and wins over it —
+    a market report about masterbatch or a competitor's trade-show exhibit
+    must not climb into 5–6 on the strength of the entity alone."""
+    rule3 = _rule3()
+    # Floor lists first; then the event bands top-down with DIRECT ahead of
+    # WATCH ahead of 5 — a price-direction call must meet the DIRECT bullet
+    # that names it before it can be read as a "generic" event.
+    assert (rule3.index("1 — NOT ABOUT THE BUSINESS") < rule3.index("7–8 — DIRECT")
+            < rule3.index("6 — WATCH") < rule3.index("5 — DEMAND PRINT"))
+    assert "DIRECT (7–8) first, then WATCH (6), then 5" in rule3
+    assert "The floor bands (1, 2, 3, 4) are checked first" in rule3
+    assert "every MACRO STATISTIC or policy other than the two prints" in rule3
+    for noise in ("market-research forecasts", "analyst ratings and price targets",
+                  "stock screens", "trade-show exhibits", "only mentioned in passing",
+                  "unrelated business line", "building permits"):
+        assert noise in rule3, noise
+
+
+def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
+    """The event classes a named customer / supplier / competitor can score
+    5–6 on without literal Americhem linkage — the recalibration's core."""
+    rule3 = _rule3()
+    for event in ("price change, force majeure", "capacity opened, closed, expanded",
+                  "M&A, divestiture, or plant sale with a NAMED target", "financial distress", "launch, new grade",
+                  "quarterly results — a supplier's, customer's, or competitor's — that report a price",
+                  "(EPR, PFAS, recycled content, food contact)",
+                  "ISM Manufacturing PMI"):
+        assert event in rule3, event
+    assert "A named counterparty, plant, grade, input, figure, or effective date confirms 6" in rule3
+    assert "5 — DEMAND PRINT, or a generic event" in rule3
+    assert "These two only; every other statistic is band 2" in rule3 and "ISM Manufacturing PMI" in rule3
+
+
+def test_rule3_scores_another_value_chain_actors_event_when_the_trigger_is_absent():
+    """A query on one company returns another's news (Siegwerk for Sun
+    Chemical, Cambium for Advanced Composites); the first real-model pass
+    scored those 3 as 'passing mention'. The rule must say the FLOOR's passing
+    mention is about the article's own actor, not the trigger."""
+    rule3 = _rule3()
+    assert "ABSENT TRIGGER ENTITY:" in rule3
+    assert "score that actor's event exactly as if it were the trigger" in rule3
+    assert "RULE 1's DISCARD is for a WRONG entity, never an absent one" in rule3
+
+
+def test_rule3_floor_has_a_real_1_to_2_class_and_rule6_gives_it_an_opener():
+    """The first real-model pass put 58% of the proportional sample at 3 and
+    nothing at 1–2: the template band ('never below 3') read as a floor for
+    everything. Class A noise now scores 1–2 with its own So-What opener."""
+    rule3 = _rule3()
+    assert "1 — NOT ABOUT THE BUSINESS" in rule3 and "2 — NO EVENT FOR THE ENTITY" in rule3
+    assert 'So-What opener for 1–2: "No material signal —' in rule3
+    rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
+    assert '"No material signal — [what the article actually is]" and score 1 or 2' in rule6
+
+
+def test_rule3_watch_band_sits_above_the_template_band_under_production_thresholds():
+    """WATCH is 5–6: 5 is the Watch band, 6 the first card score (visible at
+    6). RULE 6's low-exposure template band must end below it, so a template
+    row and a WATCH row can never share a score — with the production
+    thresholds (3 / 6) the template band is 3–4."""
+    system = _insight_spec(_PROD_STYLE_CFG).system
+    assert "6 — WATCH (the default for an actor's event)" in system and "5 — DEMAND PRINT" in system
+    _, template_high = prompts.low_exposure_score_band(Scoring.from_config(_PROD_STYLE_CFG))
+    assert template_high < 5
+
+
+def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():
+    """The other half of the floor: RULE 6 offered the template as the honest
+    exit for any article that did not spell out an Americhem effect. It now
+    demands the implied mechanism, framed as an inference, for WATCH events —
+    and confines the upside ban to upside claims."""
+    rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
+    assert "mechanism IMPLIED by the actor's value-chain position" in rule6
+    assert "framed as an inference rather than as a fact the article reports" in rule6
+    assert "low-exposure template on a WATCH event understates it and is wrong" in rule6
+    assert "Do NOT claim demand or sales UPSIDE" in rule6
+    assert "needs no such data" in rule6
+    assert '"could affect" without citing specific data' not in rule6
 
 
 def test_rule7_uncertainty_exit_is_scoped_to_the_correct_entity():
@@ -455,3 +573,13 @@ def test_rule7_uncertainty_exit_is_scoped_to_the_correct_entity():
     rule7 = _rule_section(_insight_spec(_PROD_STYLE_CFG).system, "RULE 7 —", "If the article passes all rules")
     assert "correct entity" in rule7
     assert "Set americhem_impact_score to 4 and apply Rule 6" in rule7
+
+
+def test_rule3_floor_names_every_market_report_publisher_from_the_one_definition():
+    """The publishers the ingestion gate drops by domain are the ones RULE 3's
+    FLOOR names — one definition (market_reports.PUBLISHERS), so a publisher
+    added to the gate is named to the model too, and vice versa."""
+    from market_reports import PUBLISHER_NAMES
+    rule3 = _rule3()
+    for name in PUBLISHER_NAMES:
+        assert name in rule3, name

@@ -1406,3 +1406,313 @@ def test_model_screened_count_none_when_unrecorded():
     assert model.screened_count is None
     assert assemble_report([stub_row("a", 8)], macro_summary=None).screened_count is None
     assert assemble_report([], macro_summary=None).screened_count is None
+
+
+# ===========================================================================
+# The Watch section (ReportModel.watch_items) — score-5 items shown with
+# their So-What between the cards and the appendix (2026-09-08).
+# ===========================================================================
+
+WATCH_CFG = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
+                           "watch_impact_threshold": 5}}
+
+
+def _watch_hashes(model) -> list[str]:
+    return [w["url_hash"] for w in model.watch_items]
+
+
+def test_report_model_has_watch_items_tuple_empty_by_default():
+    model = assemble_report([stub_row("v", 8)], config=VISIBLE_6_CFG)
+    assert model.watch_items == ()
+    assert assemble_report([], config=WATCH_CFG).watch_items == ()
+
+
+def test_watch_items_absent_when_threshold_not_configured():
+    """Config-only rollback: no watch_impact_threshold, no Watch section — a
+    score-5 row stays where it was, at the top of the appendix."""
+    model = assemble_report([stub_row("w", 5, headline="Watch-band row", commercial_segment="Packaging")],
+                            config=VISIBLE_6_CFG)
+    assert model.watch_items == ()
+    assert appendix_hashes(model) == ["w"]
+
+
+def test_watch_items_are_the_watch_band_not_cards_not_appendix():
+    rows = [
+        stub_row("card", 7, commercial_segment="Packaging", headline="Card row alpha"),
+        stub_row("watch", 5, commercial_segment="Packaging", headline="Watch row bravo"),
+        stub_row("appx", 4, commercial_segment="Packaging", headline="Appendix row charlie"),
+        stub_row("floor", 3, commercial_segment="Packaging", headline="Floor row delta"),
+    ]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["card"]
+    assert _watch_hashes(model) == ["watch"]
+    assert appendix_hashes(model) == ["appx", "floor"]     # a Watch row is shown, so not repeated
+    assert model.surfaced_count == 1                         # cards only, unchanged
+
+
+def test_watch_rows_are_not_counted_weak_relevance():
+    """A Watch row is shown, so it is not 'weak-relevance shown nowhere';
+    below_impact_threshold stays the broader visible-card decision."""
+    rows = [stub_row("card", 7, headline="Card row alpha", commercial_segment="Packaging"),
+            stub_row("watch", 5, headline="Watch row bravo", commercial_segment="Packaging")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+    assert model.ledger.breakdown.get("below_impact_threshold") == 1
+
+
+def test_watch_items_ranked_impact_then_recency_then_headline_then_hash():
+    cfg = {"reporting": {"visible_impact_threshold": 7, "supporting_impact_threshold": 3,
+                         "watch_impact_threshold": 5}}
+    rows = [
+        stub_row("old6", 6, headline="Zulu six old", commercial_segment="Packaging",
+                 published_at="2026-08-01T00:00:00+00:00"),
+        stub_row("new6", 6, headline="Yankee six new", commercial_segment="Packaging",
+                 published_at="2026-08-05T00:00:00+00:00"),
+        stub_row("b5", 5, headline="Bravo five", commercial_segment="Packaging"),
+        stub_row("a5", 5, headline="Alpha five", commercial_segment="Packaging"),
+    ]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["new6", "old6", "a5", "b5"]
+
+
+# Dissimilar headlines: rule 7 (semantic duplicate, token_sort_ratio >= 90)
+# would otherwise fold near-identical fixtures into one row.
+_DISTINCT_HEADLINES = ("Chemours lifts TiO2 pricing", "Univar buys Interpur distributor",
+                       "Trinseo styrene force majeure", "SABIC launches Ultem grade",
+                       "Lanxess opens battery lab", "AdvanSix nylon price rise",
+                       "Dow polyethylene volumes slip", "Avient raises guidance again",
+                       "Kraiburg TPE recycled series", "Clariant additive labs China",
+                       "Cabot carbon black plant closes", "Teknor Apex Danimer deal")
+
+
+def test_watch_items_capped_and_overflow_falls_to_the_appendix():
+    cfg = {"reporting": {**WATCH_CFG["reporting"], "max_watch_items": 2}}
+    rows = [stub_row(f"w{i}", 5, headline=_DISTINCT_HEADLINES[i], commercial_segment="Packaging",
+                     published_at=f"2026-08-0{i}T00:00:00+00:00") for i in range(1, 5)]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["w4", "w3"]
+    assert appendix_hashes(model) == ["w2", "w1"]           # still in the appendix band, still shown
+    assert model.ledger.breakdown.get("weak_relevance", 0) == 0
+
+
+def test_max_watch_items_default_is_eight():
+    rows = [stub_row(f"w{i}", 5, headline=_DISTINCT_HEADLINES[i], commercial_segment="Packaging")
+            for i in range(12)]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert len(model.watch_items) == 8
+
+
+def test_watch_excludes_appendix_excluded_categories_and_records_once():
+    """The macro_* groups feed the Macroeconomic Outlook; a score-5 macro row
+    is no more a Watch item than an appendix item, and the exclusion is
+    ledgered once."""
+    cfg = {"reporting": {**WATCH_CFG["reporting"], "appendix_exclude_categories": ["macro_manufacturing"]}}
+    rows = [stub_row("macro", 5, category="macro_manufacturing", headline="PMI reading row",
+                     commercial_segment="Industrial"),
+            stub_row("seg", 5, category="competitors", headline="Competitor watch row",
+                     commercial_segment="Industrial")]
+    model = assemble_report(rows, config=cfg)
+    assert _watch_hashes(model) == ["seg"]
+    assert appendix_hashes(model) == []
+    assert model.ledger.breakdown.get("appendix_excluded_category") == 1
+
+
+def test_watch_items_require_headline_and_url():
+    rows = [stub_row("nohead", 5, headline="", commercial_segment="Packaging"),
+            stub_row("nourl", 5, headline="No url watch row", source_url="", commercial_segment="Packaging"),
+            stub_row("ok", 5, headline="Usable watch row", commercial_segment="Packaging")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert _watch_hashes(model) == ["ok"]
+
+
+def test_watch_items_never_include_delivery_suppressed_rows():
+    """Suppression runs first: an Enterprise / Cross-Segment score-5 row is
+    rule-1 noise (below enterprise_min_impact) and never reaches Watch."""
+    rows = [stub_row("ent", 5, commercial_segment="Enterprise / Cross-Segment",
+                     headline="Enterprise five row"),
+            stub_row("seg", 5, commercial_segment="Packaging", headline="Packaging five row")]
+    model = assemble_report(rows, config=WATCH_CFG)
+    assert _watch_hashes(model) == ["seg"]
+
+
+def test_watch_items_carry_the_display_segment_without_mutating_input():
+    cfg = {"reporting": {**WATCH_CFG["reporting"],
+                         "segment_display_groups": {"Transportation — Vehicles": ["Transportation - Automotive"]}}}
+    row = stub_row("w", 5, commercial_segment="Transportation - Automotive", headline="Auto watch row")
+    model = assemble_report([row], config=cfg)
+    assert model.watch_items[0]["commercial_segment"] == "Transportation — Vehicles"
+    assert row["commercial_segment"] == "Transportation - Automotive"
+
+
+def test_watch_items_rank_low_exposure_templates_last():
+    """A template row can sit in the band under the code defaults (4–5);
+    it must never displace a segment-specific Watch row."""
+    cfg = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 4,
+                         "watch_impact_threshold": 5, "max_watch_items": 1}}
+    template = stub_row("tpl", 5, headline="Template watch row", commercial_segment="Packaging",
+                        americhem_impact=f"{LOW_EXPOSURE_TEMPLATE_PREFIXES[1]} — macro commentary only.",
+                        published_at="2026-08-09T00:00:00+00:00")
+    real = stub_row("real", 5, headline="Real watch row", commercial_segment="Packaging",
+                    published_at="2026-08-01T00:00:00+00:00")
+    model = assemble_report([template, real], config=cfg)
+    assert _watch_hashes(model) == ["real"]
+
+
+# ===========================================================================
+# Delivery suppression rule 8: prior-surfaced near-duplicate — the
+# entity-keyed multi-day dedup (2026-09-08). `prior_surfaced` is what earlier
+# emails showed (cards and Watch rows); a same-entity row whose headline is
+# near-identical to one of them is a repeat the reader already saw.
+# ===========================================================================
+
+
+def _prior(entity: str, headline: str) -> dict:
+    return {"trigger_entity": entity, "headline": headline}
+
+
+_ROYAL_TODAY = "Univar Solutions acquires H.M. Royal distributor"
+_ROYAL_PRIOR = "Univar Solutions acquires H.M. Royal specialty distributor"   # token_sort_ratio 90.6
+_INTERPUR_TODAY = "Univar Solutions acquires Interpur Chemicals for EMEA performance materials"
+_INTERPUR_PRIOR = "Univar Solutions acquires Interpur Chemicals to expand EMEA specialty materials"  # 77.9
+
+
+def _univar(hash_: str, headline: str, **kw) -> dict:
+    fields = {"trigger_entity": "Univar Solutions", "commercial_segment": "Industrial",
+              "headline": headline, **kw}
+    return stub_row(hash_, fields.pop("americhem_impact_score", 8), **fields)
+
+
+def test_assemble_report_accepts_no_prior_surfaced_and_changes_nothing():
+    row = _univar("today", _ROYAL_TODAY)
+    assert [a["url_hash"] for a in assemble_report([row], config=VISIBLE_6_CFG).groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_suppresses_a_same_entity_near_duplicate():
+    row = _univar("today", _ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("prior_surfaced_duplicate") == 1
+    assert any(s.reason == "prior_surfaced_duplicate" and s.title == _ROYAL_TODAY
+               for s in model.ledger.samples)
+
+
+def test_prior_surfaced_duplicate_requires_the_same_trigger_entity():
+    """Keyed on trigger_entity: the same headline under another entity is a
+    different discovery, and two different stories about one entity score
+    well under the threshold (36–49 on production data)."""
+    row = stub_row("today", 8, trigger_entity="Avient", commercial_segment="Industrial",
+                   headline=_ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+    assert "prior_surfaced_duplicate" not in model.ledger.breakdown
+
+
+def test_prior_surfaced_duplicate_entity_match_folds_case_and_whitespace():
+    row = _univar("today", _ROYAL_TODAY, trigger_entity="  univar solutions ")
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("UNIVAR SOLUTIONS", _ROYAL_PRIOR)])
+    assert model.groups == {}
+
+
+def test_prior_surfaced_duplicate_threshold_is_strictly_greater_and_configurable():
+    """token_sort_ratio > threshold. The Interpur pair scores 77.9: suppressed
+    at the default 70 and at 77, kept at 78."""
+    def _run(threshold=None):
+        cfg = {**VISIBLE_6_CFG}
+        if threshold is not None:
+            cfg = {**cfg, "delivery_suppression": {"prior_surfaced_duplicate_threshold": threshold}}
+        return assemble_report([_univar("today", _INTERPUR_TODAY)], config=cfg,
+                               prior_surfaced=[_prior("Univar Solutions", _INTERPUR_PRIOR)])
+    assert _run().groups == {}
+    assert _run(77).groups == {}
+    assert [a["url_hash"] for a in _run(78).groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_ignores_blank_prior_entity_or_headline():
+    row = _univar("today", _ROYAL_TODAY)
+    prior = [_prior("", _ROYAL_PRIOR), _prior("Univar Solutions", ""), {"headline": _ROYAL_PRIOR}, None]
+    model = assemble_report([row], config=VISIBLE_6_CFG, prior_surfaced=prior)
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_can_be_disabled_by_config():
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_prior_surfaced_duplicate": False}}
+    model = assemble_report([_univar("today", _ROYAL_TODAY)], config=cfg,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert [a["url_hash"] for a in model.groups["Industrial"]] == ["today"]
+
+
+def test_prior_surfaced_duplicate_is_scoped_to_prior_emails_not_the_current_run():
+    """Same-run duplicates stay rules 6/7's business (threshold 90): two
+    same-entity rows at ~78 both survive when neither was shown before."""
+    rows = [_univar("a", _INTERPUR_TODAY), _univar("b", _INTERPUR_PRIOR)]
+    model = assemble_report(rows, config=VISIBLE_6_CFG, prior_surfaced=[])
+    assert sorted(a["url_hash"] for a in model.groups["Industrial"]) == ["a", "b"]
+
+
+def test_prior_surfaced_duplicate_runs_after_the_other_rules():
+    """First match wins and rule 8 is last: a row that is rule-1 noise AND a
+    prior-surfaced repeat is ledgered as rule-1 noise."""
+    row = stub_row("today", 5, trigger_entity="Univar Solutions",
+                   commercial_segment="Enterprise / Cross-Segment", headline=_ROYAL_TODAY)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert model.ledger.breakdown.get("enterprise_cross_segment_low_impact") == 1
+    assert "prior_surfaced_duplicate" not in model.ledger.breakdown
+
+
+def test_prior_surfaced_duplicate_also_keeps_a_repeat_out_of_the_appendix():
+    row = _univar("today", _ROYAL_TODAY, americhem_impact_score=4)
+    model = assemble_report([row], config=VISIBLE_6_CFG,
+                            prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
+    assert appendix_hashes(model) == []
+    assert model.ledger.breakdown.get("prior_surfaced_duplicate") == 1
+
+
+# ===========================================================================
+# Rule 4 also fires on a market-research PUBLISHER (2026-09-08) — the
+# delivery-side half of the publisher gate: a report that reached the store
+# before the ingestion gate existed (or through a wire the headline pattern
+# missed) can never be a card, whatever it scored.
+# ===========================================================================
+
+
+def test_generic_market_report_fires_on_a_publisher_domain_regardless_of_entities():
+    row = stub_row("dom", 8, commercial_segment="Packaging", entities_mentioned=["RTP Company"],
+                   headline="Polycarbonate demand keeps climbing",
+                   source_url="https://www.indexbox.io/blog/polycarbonate-market-forecast/")
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("generic_market_report") == 1
+
+
+def test_generic_market_report_fires_on_a_publisher_source_publication():
+    row = stub_row("pub", 8, commercial_segment="Packaging", entities_mentioned=["Dow", "Kuraray"],
+                   headline="Agricultural films demand climbs",
+                   source_url="https://www.globenewswire.com/news-release/x.html",
+                   source_publication="Research and Markets")
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("generic_market_report") == 1
+
+
+def test_generic_market_report_title_pattern_still_needs_empty_entities():
+    """The pre-existing title-pattern half keeps its entities guard: a real
+    article that happens to say 'market report' about named companies is not
+    a market report."""
+    row = stub_row("news", 8, commercial_segment="Packaging", entities_mentioned=["Dow"],
+                   headline="Dow market report flags polyethylene oversupply",
+                   source_url="https://www.plasticsnews.com/x")
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"title_patterns_generic_market_report": ["market report"]}}
+    model = assemble_report([row], config=cfg)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["news"]
+
+
+def test_generic_market_report_publisher_check_honours_the_rule_switch():
+    row = stub_row("dom", 8, commercial_segment="Packaging", headline="Polycarbonate demand",
+                   source_url="https://www.indexbox.io/blog/x/")
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_generic_market_report": False}}
+    model = assemble_report([row], config=cfg)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["dom"]

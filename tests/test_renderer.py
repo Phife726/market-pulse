@@ -1726,7 +1726,7 @@ def _poisoned_macro(*, structured: bool) -> dict:
 # never appears), `date` (an unparseable published_at renders no date), and
 # `sentiment` (dominant_condition shadows macro_sentiment).
 _RENDERED_EVERYWHERE = frozenset({
-    "headline_a", "headline_b", "headline_c", "so_what", "tag", "signal", "segment", "pub",
+    "headline_a", "headline_b", "headline_c", "headline_d", "so_what", "tag", "signal", "segment", "pub",
     "synthesis", "condition", "current", "indicator", "direction", "implication", "affected",
     "src_headline", "src_domain", "reason", "sample_title", "sample_url", "today",
     "screened", "surfaced",   # integer columns in production; data all the same
@@ -1744,12 +1744,15 @@ def test_every_interpolated_data_value_is_escaped(structured):
     the whole email in test mode, and require the raw marker nowhere and the
     escaped one at every site that renders. Pinned once across the email,
     not once per site: two cards (a synthesis paragraph needs 2+), one
-    appendix-band row, the outlook, the citations, the Sources footer, the
-    QA block, the header."""
+    Watch-band row, one appendix-band row, the outlook, the citations, the
+    Sources footer, the QA block, the header."""
     rows = [_poisoned_row("a", 8, "alpha bravo charlie delta"),
             _poisoned_row("b", 8, "echo foxtrot golf hotel"),
-            _poisoned_row("c", 4, "india juliet kilo lima")]
-    model = assemble_report(rows, stub_summary(_poisoned_macro(structured=structured)), config=VISIBLE_6_CFG)
+            _poisoned_row("c", 4, "india juliet kilo lima"),
+            _poisoned_row("d", 5, "mike november oscar papa")]   # the Watch List row
+    cfg = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
+                         "watch_impact_threshold": 5}}
+    model = assemble_report(rows, stub_summary(_poisoned_macro(structured=structured)), config=cfg)
     model = model.with_synthesis({_poison("segment"): _poison("synthesis")})
 
     out = render_report(model, today_str=_poison("today"), test_mode=True)
@@ -1810,3 +1813,64 @@ def test_qa_debug_section_samples_cap_and_heading_derive_from_samples_cap():
     # FIFO: the newest SAMPLES_CAP survive, the oldest are dropped.
     assert "T0" not in out
     assert f"T{SAMPLES_CAP + 3}" in out
+
+
+# ===========================================================================
+# Watch List — score-5 items with their So-What, between the cards and the
+# appendix (2026-09-08)
+# ===========================================================================
+
+
+_WATCH_TITLE = "Watch List"
+_WATCH_CFG = {"reporting": {"visible_impact_threshold": 6, "supporting_impact_threshold": 3,
+                            "watch_impact_threshold": 5}}
+
+
+def test_watch_section_renders_headline_meta_and_so_what():
+    row = stub_row("w", 5, commercial_segment="Packaging", signal_type="Supply Chain",
+                   headline="Chemours lifts TiO2 price again", source_publication="Plastics News",
+                   americhem_impact="As a TiO2 supplier, the increase raises pigment input cost.")
+    model = assemble_report([row], config=_WATCH_CFG)
+    assert [w["url_hash"] for w in model.watch_items] == ["w"]
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _WATCH_TITLE in html
+    assert "Chemours lifts TiO2 price again" in html
+    assert 'href="https://news.com/article"' in html
+    assert "Impact: 5/10" in html and "Packaging" in html and "Supply Chain" in html
+    assert "Plastics News" in html
+    assert "So what:" in html
+    assert "As a TiO2 supplier, the increase raises pigment input cost." in html
+
+
+def test_watch_section_absent_when_no_watch_items():
+    model = assemble_report([stub_row("v", 8, headline="Visible card only")], config=_WATCH_CFG)
+    assert model.watch_items == ()
+    assert _WATCH_TITLE not in render_report(model, today_str=_TODAY_STR)
+
+
+def test_watch_section_absent_when_threshold_not_configured():
+    model = assemble_report([stub_row("w", 5, headline="Would be a watch row", commercial_segment="Packaging")],
+                            config=VISIBLE_6_CFG)
+    html = render_report(model, today_str=_TODAY_STR)
+    assert _WATCH_TITLE not in html
+    assert _APPENDIX_TITLE in html            # the row is still reachable, in the appendix
+
+
+def test_watch_section_renders_between_segment_watch_and_appendix():
+    rows = [stub_row("v", 8, commercial_segment="Packaging", headline="High-impact packaging card"),
+            stub_row("w", 5, commercial_segment="Industrial", headline="Industrial watch row"),
+            stub_row("a", 4, commercial_segment="Industrial", headline="Industrial appendix row")]
+    html = render_report(assemble_report(rows, config=_WATCH_CFG), today_str=_TODAY_STR)
+    i_cards, i_watch, i_appendix = (html.find("COMMERCIAL SEGMENT WATCH"), html.find(_WATCH_TITLE),
+                                    html.find(_APPENDIX_TITLE))
+    assert -1 not in (i_cards, i_watch, i_appendix)
+    assert i_cards < i_watch < i_appendix
+
+
+def test_watch_section_escapes_untrusted_and_guards_href():
+    row = stub_row("w", 5, commercial_segment="Packaging", headline="<script>alert('x')</script> watch",
+                   americhem_impact="<b>bold</b> so what", source_url="javascript:alert(1)")
+    html = render_report(assemble_report([row], config=_WATCH_CFG), today_str=_TODAY_STR)
+    assert "<script>alert" not in html and "<b>bold</b>" not in html
+    assert "&lt;script&gt;" in html and "&lt;b&gt;bold" in html
+    assert 'href="javascript:' not in html
