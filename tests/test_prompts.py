@@ -481,7 +481,7 @@ def test_rule3_scores_the_event_not_whether_americhem_is_named():
     rule3 = _rule3()
     assert "NEVER a reason to score it low" in rule3
     assert "VALUE-CHAIN ACTOR:" in rule3
-    assert "The mechanism is IMPLIED by the actor's position" in rule3
+    assert "you supply the implied mechanism" in rule3
     assert "NEVER a reason to score it low" in rule3
 
 
@@ -490,10 +490,11 @@ def test_rule3_floor_is_applied_first_and_names_every_noise_class():
     a market report about masterbatch or a competitor's trade-show exhibit
     must not climb into 5–6 on the strength of the entity alone."""
     rule3 = _rule3()
-    assert rule3.index("FLOOR — applies first") < rule3.index("5–6 (WATCH)") < rule3.index("7–8 (DIRECT)")
-    assert "applies first" in rule3
+    assert rule3.index("1–2 — NOISE") < rule3.index("6 — WATCH") < rule3.index("7–8 — DIRECT")
+    assert "The floor bands (1–2, 3, 4) are checked first" in rule3
+    assert "MACRO STATISTICS ARE NOT EVENTS" in rule3
     for noise in ("market-research forecasts", "analyst ratings and price targets",
-                  "stock screens", "trade-show attendance", "only mentioned in passing",
+                  "stock screens", "trade-show exhibits", "only mentioned in passing",
                   "unrelated business line", "local building permits"):
         assert noise in rule3, noise
 
@@ -503,15 +504,14 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     5–6 on without literal Americhem linkage — the recalibration's core."""
     rule3 = _rule3()
     for event in ("price change, force majeure", "capacity opened, closed, expanded",
-                  "M&A, divestiture, plant sale, JV", "financial distress", "product launch, new grade",
-                  "quarterly results that carry a pricing or volume signal",
+                  "M&A, divestiture, plant sale, JV", "financial distress", "launch, new grade",
+                  "quarterly results that carry a price or volume signal",
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
         assert event in rule3, event
-    assert "SCORE 6 (specific) when the article names ANY ONE of" in rule3
-    assert "SCORE 5 (generic) ONLY when it names none of those" in rule3
-    assert "these TWO only" in rule3
-    assert "ISM Manufacturing PMI" in rule3 and "core demand indicators, scored 5" in rule3
+    assert "A named counterparty, plant, grade, input, figure, or effective date confirms 6" in rule3
+    assert "5 — WATCH-LITE, two cases only" in rule3
+    assert "Exactly two prints score above 3" in rule3 and "ISM Manufacturing PMI" in rule3
 
 
 def test_rule3_scores_another_value_chain_actors_event_when_the_trigger_is_absent():
@@ -530,8 +530,8 @@ def test_rule3_floor_has_a_real_1_to_2_class_and_rule6_gives_it_an_opener():
     nothing at 1–2: the template band ('never below 3') read as a floor for
     everything. Class A noise now scores 1–2 with its own So-What opener."""
     rule3 = _rule3()
-    assert "3 is not a default: class A is 1–2" in rule3
-    assert "1–2 (class A, no business event at all)" in rule3
+    assert "1–2 — NOISE" in rule3
+    assert 'So-What opener: "No material signal —' in rule3
     rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
     assert '"No material signal — [what the article actually is]" and score 1 or 2' in rule6
 
@@ -542,7 +542,7 @@ def test_rule3_watch_band_sits_above_the_template_band_under_production_threshol
     row and a WATCH row can never share a score — with the production
     thresholds (3 / 6) the template band is 3–4."""
     system = _insight_spec(_PROD_STYLE_CFG).system
-    assert "5–6 (WATCH)" in system
+    assert "6 — WATCH (the default for an actor's event)" in system and "5 — WATCH-LITE" in system
     _, template_high = prompts.low_exposure_score_band(Scoring.from_config(_PROD_STYLE_CFG))
     assert template_high < 5
 
