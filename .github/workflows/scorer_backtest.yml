@@ -1,0 +1,77 @@
+name: Scorer Backtest
+
+run-name: >-
+  Scorer backtest - ${{ github.event.inputs.mode }} - ${{ github.ref_name }} - ${{ github.actor }}
+
+# Operator tool, never scheduled: re-scores the labeled backtest set (or a
+# replay of recent production rows) through the live insight prompt on the
+# ref it is dispatched against, so a rubric change can be validated against
+# real model output before it reaches the cron. Costs ~150 nano calls per csv
+# run; no Serper, Firecrawl, Supabase writes, or email.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "csv = the labeled backtest set; replay = re-score recent daily_intelligence rows"
+        required: true
+        default: "csv"
+        type: choice
+        options:
+          - "csv"
+          - "replay"
+      replay_days:
+        description: "replay only: how many days of rows to re-score"
+        required: false
+        default: "5"
+      workers:
+        description: "parallel LLM calls"
+        required: false
+        default: "6"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scorer-backtest
+  cancel-in-progress: false
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Run the backtest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -o pipefail
+          if [ "${{ github.event.inputs.mode }}" = "replay" ]; then
+            python scripts/backtest_scorer.py replay --days "${{ github.event.inputs.replay_days }}" --workers "${{ github.event.inputs.workers }}" | tee backtest/report.txt
+          else
+            python scripts/backtest_scorer.py csv --workers "${{ github.event.inputs.workers }}" | tee backtest/report.txt
+          fi
+
+      - name: Upload the filled-in set and the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorer-backtest-${{ github.event.inputs.mode }}-${{ github.run_number }}
+          path: |
+            backtest/report.txt
+            backtest/market_pulse_scorer_backtest_v2.csv
+            backtest/replay_rescored.csv
+          if-no-files-found: ignore
