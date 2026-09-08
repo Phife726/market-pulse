@@ -1,14 +1,27 @@
 name: Scorer Backtest
 
 run-name: >-
-  Scorer backtest - ${{ github.event.inputs.mode }} - ${{ github.ref_name }} - ${{ github.actor }}
+  Scorer backtest - ${{ github.event.inputs.mode || 'csv' }} - ${{ github.head_ref || github.ref_name }} - ${{ github.actor }}
 
-# Operator tool, never scheduled: re-scores the labeled backtest set (or a
-# replay of recent production rows) through the live insight prompt on the
-# ref it is dispatched against, so a rubric change can be validated against
-# real model output before it reaches the cron. Costs ~150 nano calls per csv
-# run; no Serper, Firecrawl, Supabase writes, or email.
+# Never scheduled. Re-scores the labeled backtest set (or a replay of recent
+# production rows) through the live insight prompt on the ref it runs against,
+# so a rubric change is validated against real model output before it reaches
+# the cron. Runs automatically on a pull request that touches the prompt, the
+# gate, the set, or the runner (a same-repo PR sees the secrets, and the
+# workflow file on the PR branch is the one that runs — so a branch can carry
+# its own acceptance test), and by hand for the replay. Costs ~150 nano calls
+# per csv run; no Serper, Firecrawl, Supabase writes, or email.
 on:
+  pull_request:
+    paths:
+      - "prompts.py"
+      - "market_reports.py"
+      - "insight.py"
+      - "scoring.py"
+      - "market_pulse_config.yaml"
+      - "scripts/backtest_scorer.py"
+      - "backtest/market_pulse_scorer_backtest.csv"
+      - ".github/workflows/scorer_backtest.yml"
   workflow_dispatch:
     inputs:
       mode:
@@ -32,8 +45,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: scorer-backtest
-  cancel-in-progress: false
+  group: scorer-backtest-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  MODE: ${{ github.event.inputs.mode || 'csv' }}
+  REPLAY_DAYS: ${{ github.event.inputs.replay_days || '5' }}
+  WORKERS: ${{ github.event.inputs.workers || '6' }}
 
 jobs:
   backtest:
@@ -59,17 +77,17 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           set -o pipefail
-          if [ "${{ github.event.inputs.mode }}" = "replay" ]; then
-            python scripts/backtest_scorer.py replay --days "${{ github.event.inputs.replay_days }}" --workers "${{ github.event.inputs.workers }}" | tee backtest/report.txt
+          if [ "$MODE" = "replay" ]; then
+            python scripts/backtest_scorer.py replay --days "$REPLAY_DAYS" --workers "$WORKERS" | tee backtest/report.txt
           else
-            python scripts/backtest_scorer.py csv --workers "${{ github.event.inputs.workers }}" | tee backtest/report.txt
+            python scripts/backtest_scorer.py csv --workers "$WORKERS" | tee backtest/report.txt
           fi
 
       - name: Upload the filled-in set and the report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: scorer-backtest-${{ github.event.inputs.mode }}-${{ github.run_number }}
+          name: scorer-backtest-${{ env.MODE }}-${{ github.run_number }}
           path: |
             backtest/report.txt
             backtest/market_pulse_scorer_backtest_v2.csv
