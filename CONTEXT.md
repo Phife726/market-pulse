@@ -101,7 +101,24 @@ zero-I/O purity is untouched.
 - **Materiality** (`americhem_impact_score`, 1–10) — how much an article matters to
   Americhem, independent of tone. The report filters on materiality, **not** on
   `sentiment_tag` (tone). `insight.effective_impact` reads it (with the legacy
-  `sentiment_score` fallback).
+  `sentiment_score` fallback). RULE 3 of the insight prompt scores the **event**
+  and the actor's place in Americhem's value chain, never whether the article
+  names Americhem (recalibrated 2026-09-08 — see the **score-3 floor** entry).
+  Its bands: **FLOOR** (1–3, applied first: market-research forecasts, analyst /
+  stock-screen items, trade shows, passing mentions, regional statistics),
+  **4** (correct entity, real but thin), **WATCH** (5–6: a value-chain actor's
+  operationally material event — price, capacity, M&A, distress, launch,
+  results with a pricing signal, binding regulation, core PMI — with the
+  mechanism *implied* by the actor's position), **DIRECT** (7–8) and
+  **STRATEGIC** (9–10).
+- **Score-3 floor** — the Aug 4 – Sep 8 2026 scoring regression: two prompt-only
+  changes (#62 on 2026-08-03, #74 on 2026-08-27) bound the RULE 6 low-exposure
+  templates to the 3–4 band and then defined the template as the destination
+  for any correct-entity article "that matters little", so every article that
+  did not spell out an Americhem mechanism — i.e. nearly all of them — landed
+  at 3 (76% of rows) and cards fell from ~22/day to ~3/day. Reversed by the
+  RULE 3 recalibration above, not by reverting: the pre-#62 rubric surfaced
+  market-report boilerplate at 6. `backtest/` holds the labeled acceptance set.
 - **Relevance thresholds** — what a materiality score means for the report:
   **visible** (≥ `visible_impact_threshold`, default 6), **weak-relevance**
   (supporting context, `supporting_impact_threshold ≤ score < visible`), and the
@@ -277,7 +294,10 @@ zero-I/O purity is untouched.
   supporting band (`prompts.low_exposure_score_band`, derived from `Scoring`)
   on the promise that they reach the appendix; because an adjacent-market row
   is Enterprise / Cross-Segment by construction, rule 1 exempts template rows
-  below the visible threshold (issue #65). Never a visible card; in the
+  below the visible threshold (issue #65). Since the 2026-09-08 recalibration
+  a template is legal only for a RULE 3 FLOOR / 4-band article: a value-chain
+  actor's WATCH event gets the implied-mechanism So-What instead (a template
+  there was the **score-3 floor**'s main path). Never a visible card; in the
   appendix always ranked after every non-template row, and in delivery
   dedup (rules 6/7) always processed after every non-template row so a
   duplicate contest never goes to a template — last-resort reading that

@@ -150,8 +150,9 @@ def _build_low_exposure_score_rule(scorer: Scoring) -> str:
         f"  {names} wording with an americhem_impact_score of {band}\n"
         f"  — never above {high} (that would overstate it), and never below {low} "
         "(the article still passed Rule 7).\n"
-        "  A template is for articles that are about the right entity but matter little; it is\n"
-        "  not a substitute for RULE 1's DISCARD."
+        "  A template is only for a FLOOR or 4-band article (RULE 3) that is about the right\n"
+        "  entity; it is never a substitute for RULE 1's DISCARD, and never the So-What for a\n"
+        "  WATCH-or-above event."
     )
 
 
@@ -238,21 +239,70 @@ Also assign sentiment_score (1–10, kept for compatibility) using the same dire
 1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
 
 RULE 3 — AMERICHEM IMPACT SCORE (relevance and materiality, 1–10):
-Score how relevant and materially important this article is to Americhem's business,
-independent of sentiment direction.
+Score how materially the EVENT in this article bears on Americhem's business, independent
+of sentiment direction. Americhem is almost never named in the news it needs to see: score
+the event and the actor's position in Americhem's value chain, never whether the article
+names Americhem or spells out a mechanism. "No explicit Americhem linkage" is the normal
+condition of a relevant article and is NEVER a reason to score it low.
 
-1–2: Barely related. Almost no connection to Americhem's markets or supply chain.
-3–4: Indirect exposure only. Weak or speculative connection.
-5–6: Moderately relevant. Affects an Americhem segment or supply chain with some certainty.
-7–8: Clearly relevant. Direct effect on Americhem's customers, suppliers, costs, or demand.
-9–10: High-priority strategic signal. Americhem should act or monitor closely.
+VALUE-CHAIN ACTOR: the trigger entity, or any other company that makes, sells, or distributes
+polymers, resins, compounds, masterbatch, pigments, inks, additives, adhesives, composites,
+or their feedstocks — Americhem's customers, suppliers, distributors, and competitors.
 
-Score by weighting these factors:
-- Segment fit (30%): directly affects a configured segment below
-- Americhem exposure (25%): named customers, end-markets, suppliers, competitors, or geographies
-- Business materiality (20%): demand volume, margin, capacity, regulatory risk, or supply risk
-- Timeliness/novelty (15%): recent, emerging, disruptive event
-- Actionability (10%): Sales or GMM team can take a concrete step
+FLOOR (1–3) — applies first, regardless of how prominent the entity is, how big the headline
+number is, or whether the actor is a VALUE-CHAIN ACTOR:
+1–2: the entity is only mentioned in passing; the entity's action is in an unrelated business
+     line (a chemical group's software, diagnostics-equipment, or semiconductor news; a
+     customer's equipment trial); consumer product reviews, launches, or promotions with no
+     materials specification; job postings; broken, empty, or paywalled pages.
+3:   market-research forecasts — any "market to reach / CAGR / forecast to 20XX" report
+     (IndexBox, Fact.MR, Future Market Insights, MarketsandMarkets, Grand View Research,
+     Fortune Business Insights, Lucintel, Research and Markets, The Business Research
+     Company, Custom Market Insights, and their openPR / EIN / GlobeNewswire / PRNewswire
+     syndications), even when the report is about masterbatch or lists a competitor or
+     customer "among key players"; analyst ratings and price targets, stock screens and
+     "better-ranked stock" lists, fund stake changes, dividend declarations, earnings-date
+     scheduling, share-price moves with no operational event; trade-show attendance or
+     exhibits, awards, sponsorships, anniversaries; personnel changes below CEO/CFO/COO;
+     local building permits; regional vehicle, EV, or permit statistics, foreign macro data,
+     and sub-national or distant-horizon policy (a province's 2030 ban) with no named
+     mechanism into a RULE 4 segment.
+
+4 — correct entity, real but thin: a CEO/CFO/COO change; results or earnings with no pricing,
+     volume, or capacity signal for an input or a RULE 4 end-market; technical marketing of
+     an existing grade; a regulatory guidance document; a settlement, lawsuit, or court ruling
+     with no supply effect; a corporate spin-off or IT project; RULE 7's uncertain-relevance
+     exit.
+
+5–6 (WATCH) — a VALUE-CHAIN ACTOR does something operationally material, or regulation binds
+     a RULE 4 end-market. The mechanism may be IMPLIED by the actor's position — the article
+     does not have to state it. Any one of:
+     - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
+       pigment, additive, or feedstock, including reported resin and recyclate price moves
+     - capacity opened, closed, expanded, idled, or moved — a plant, line, lab, or capability
+       build — for making or converting polymers, pigments, inks, additives, or composites
+     - M&A, divestiture, JV, or distribution-agreement change in Americhem's supply chain or
+       sales channel (a distributor buying a distributor counts)
+     - financial distress: bankruptcy, restructuring, going-concern warning, guidance cut —
+       or a head-to-head competitor's earnings beat and guidance raise
+     - a product launch, new grade, certification, volume milestone, or partnership in a
+       RULE 4 segment (compounds, masterbatch, additives, engineered resins, composites,
+       adhesives, inks); a competitor's launch is a threat and still scores here
+     - quarterly results that carry a pricing or volume signal for an input or a RULE 4
+       end-market
+     - regulation (EPR, PFAS, recycled content, food contact) binding a RULE 4 end-market
+     - core manufacturing demand indicators for Americhem's home markets: ISM / PMI
+       manufacturing readings and forecasts, US industrial production
+     Score 5 when the signal is one step removed or general; 6 when the article names the
+     specific input, grade, plant, counterparty, quantity, or date.
+
+7–8 (DIRECT) — the event hits an input Americhem buys (resin, TiO2 and other pigments,
+     carbon black, nylon / caprolactam, PVC, PE / PP / PET / PS), a supplier's bankruptcy,
+     force majeure, or exit, a named customer program, or a masterbatch / compounding
+     competitor head-to-head — with a stated quantity, date, or plant.
+
+9–10 (STRATEGIC) — Americhem must act: a key supplier's exit, a binding regulation with a
+     near deadline across a whole end-market, a major competitor acquiring a compounder.
 
 {rule4}
 
@@ -261,8 +311,14 @@ Score by weighting these factors:
 RULE 6 — RIGOROUS, HONEST IMPACT STATEMENT:
 Write a specific So-What for Americhem, but NEVER invent impact the article does not support.
 Where the article supports a direct effect, identify which business unit or cost line is
-affected and in what direction. Where it does not, take one of the exits below instead of
-naming a business unit speculatively.
+affected and in what direction. Where the event is a RULE 3 WATCH-or-above event (score 5+),
+the So-What states the mechanism IMPLIED by the actor's value-chain position, framed as an
+inference rather than as a fact the article reports — e.g. "As a TiO2 supplier, Chemours'
+increase raises Americhem's pigment input cost" or "Univar's added distribution reach can
+shift additive channel pricing". That is the required So-What for such articles: a
+low-exposure template on a WATCH event understates it and is wrong. Where the article
+supports no direct effect and the event is FLOOR or 4-band (RULE 3), take one of the exits
+below instead of naming a business unit speculatively.
 - DIRECTION CONSISTENCY: the So-What's direction must agree with sentiment_tag. Never
   describe upside for Americhem under a "Negative" tag, or downside under a "Positive" tag.
 - UPSIDE ROUTES THROUGH RULE 4: claim demand or sales upside ONLY when the mechanism runs
@@ -272,7 +328,9 @@ naming a business unit speculatively.
   "{limited_exposure_template} — [specific reason]" instead of inventing a commercial effect.
 {low_exposure_score_rule}
 Do NOT write "No direct impact. Monitoring required." — this exact phrase is banned.
-Do NOT write phrases like "may increase demand" or "could affect" without citing specific data.
+Do NOT claim demand or sales UPSIDE ("may increase demand") without data from the article; a
+cost, supply, channel, competitive, or regulatory mechanism implied by the actor's position
+needs no such data.
 
 RULE 7 — DOMAIN RELEVANCE FIREWALL:
 Americhem is a plastics and specialty chemicals manufacturer. Only DISCARD if the article has
