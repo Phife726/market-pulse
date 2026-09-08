@@ -158,8 +158,17 @@ def _share_line(label: str, rows: list[dict]) -> tuple[bool, str]:
                 f"      distribution: {dist_txt}")
 
 
+def _prompt_fingerprint(config: dict) -> str:
+    """The insight system prompt's identity (PromptSpec.system_fingerprint) —
+    printed at the top of every report so a result is never read against the
+    wrong wording."""
+    spec = prompts.insight_prompt(config, article_text="", source_url="", trigger_entity="", category="")
+    return spec.system_fingerprint
+
+
 def run_csv(path_in: str, path_out: str, workers: int) -> int:
     config = _load_config()
+    print(f"Insight prompt fingerprint: {_prompt_fingerprint(config)}")
     with open(path_in, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         fieldnames = list(reader.fieldnames or [])
@@ -280,6 +289,7 @@ def run_replay(days: int, path_out: str, workers: int) -> int:
     from scoring import Scoring
 
     config = _load_config()
+    print(f"Insight prompt fingerprint: {_prompt_fingerprint(config)}")
     scorer = Scoring.from_config(config)
     cutoff = naive_utcnow() - timedelta(days=days)
     rows = _repo().fetch_since(cutoff)

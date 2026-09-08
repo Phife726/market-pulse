@@ -93,3 +93,38 @@ jobs:
             backtest/market_pulse_scorer_backtest_v2.csv
             backtest/replay_rescored.csv
           if-no-files-found: ignore
+
+  # The order-of-magnitude check on surfaced_count without a live cycle: the
+  # last five production days' stored rows re-scored through the branch's
+  # prompt (read-only; ~450 nano calls). Only on pull requests — the manual
+  # dispatch above runs a replay by itself when asked.
+  replay:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install requirements.txt
+        run: pip install -r requirements.txt
+      - name: Replay the last five production days
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -o pipefail
+          python scripts/backtest_scorer.py replay --days 5 --workers "$WORKERS" --output backtest/replay_rescored.csv | tee backtest/replay_report.txt
+      - name: Upload the replay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorer-replay-${{ github.run_number }}-attempt${{ github.run_attempt }}
+          path: |
+            backtest/replay_report.txt
+            backtest/replay_rescored.csv
+          if-no-files-found: ignore
