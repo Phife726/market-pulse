@@ -104,13 +104,18 @@ zero-I/O purity is untouched.
   `sentiment_score` fallback). RULE 3 of the insight prompt scores the **event**
   and the actor's place in Americhem's value chain, never whether the article
   names Americhem (recalibrated 2026-09-08 — see the **score-3 floor** entry).
-  Its bands: **FLOOR** (1–3, applied first: market-research forecasts, analyst /
-  stock-screen items, trade shows, passing mentions, regional statistics),
-  **4** (correct entity, real but thin), **WATCH** (5–6: a value-chain actor's
-  operationally material event — price, capacity, M&A, distress, launch,
-  results with a pricing signal, binding regulation, core PMI — with the
-  mechanism *implied* by the actor's position), **DIRECT** (7–8) and
-  **STRATEGIC** (9–10).
+  Its bands are closed membership lists, checked floor-first (an exception
+  inside a band does not hold with this model; a list does): **1** not about
+  the business, **2** no event for the entity (incl. every macro statistic but
+  the two US prints), **3** business content that is not an event
+  (market-research forecasts, analyst / investor items, trade shows, guides,
+  showcases, growth features, one-company settlements), **4** thin, **5** the
+  two demand prints (US ISM PMI, US industrial production) or a generic event,
+  **6 WATCH** the default for a **value-chain actor**'s operationally material
+  event with the mechanism *implied* by its position, **7–8 DIRECT** (input
+  price reports and increases, named-target M&A in the supply chain or channel,
+  feedstock disruptions naming polymers, supplier distress) and **9–10
+  STRATEGIC**.
 - **Score-3 floor** — the Aug 4 – Sep 8 2026 scoring regression: two prompt-only
   changes (#62 on 2026-08-03, #74 on 2026-08-27) bound the RULE 6 low-exposure
   templates to the 3–4 band and then defined the template as the destination
