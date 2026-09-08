@@ -257,84 +257,91 @@ Cambium's aerospace adhesive or a composites developer's hydrogen-line program f
 Advanced Composites query), score that actor's event exactly as if it were the trigger.
 RULE 1's DISCARD is for a WRONG entity, never an absent one.
 
-MACRO STATISTICS ARE NOT EVENTS. Exactly two prints score above 3: the US ISM Manufacturing
-PMI (readings, consensus previews, and a bank lifting its PMI forecast all count) and US
-industrial production — 5. Every other statistic or policy — vehicle or EV sales anywhere,
-building permits, construction spending, credit or freight indices, energy prices, another
-country's output, a province's 2030 vehicle ban — is 3, whatever demand it "implies".
-A resin, recyclate, or pigment PRICE REPORT is NOT a macro statistic: "R-PET fell
-€30–40/tonne", "PET bottle resin prices fall again", "resin markets swing as buyers regain
-leverage" are input prices — DIRECT, 7.
+The floor bands (1, 2, 3, 4) are checked first; an article that fits one never scores
+higher. Each floor band is a closed list: put the article in the band whose list names it.
 
-The floor bands (1–2, 3, 4) are checked first; an article that fits one never scores higher.
+1 — NOT ABOUT THE BUSINESS: a 404, empty, or paywalled page; a job posting; a retail product
+     listing; local or sports news that only shares a name or a street with the entity.
 
-1–2 — NOISE. 1: the page is not about the entity's business at all — a 404 or paywalled
-     page, a job posting, a retail product listing, local news that only shares a name or a
-     street. 2: the entity is only mentioned in passing; its action is in an unrelated
-     business line (software, diagnostics equipment, semiconductors, a bus-camera trial); a
-     consumer product review, launch, or promotion; a plant visit, labor dispute, or
-     anniversary story. So-What opener: "No material signal — …".
+2 — NO EVENT FOR THE ENTITY: the entity is only mentioned in passing; its action is in an
+     unrelated business line (software, diagnostics equipment, semiconductors, a bus-camera
+     trial); a consumer product review, launch, or promotion; a plant visit, labor dispute,
+     or anniversary story; and every MACRO STATISTIC or policy other than the two prints in
+     band 5 — vehicle or EV sales anywhere, building permits, construction spending, credit
+     or freight indices, energy prices, another country's output, a province's 2030 vehicle
+     ban — whatever demand it "implies". So-What opener for 1–2: "No material signal — …".
 
-3 — NOT AN EVENT: market-research forecasts — any "market to reach / CAGR / forecast to
-     20XX" report ({market_report_publishers},
+3 — BUSINESS CONTENT, NOT AN EVENT: market-research forecasts — any "market to reach / CAGR
+     / forecast to 20XX" report ({market_report_publishers},
      and wire syndications of them on EIN Presswire, GlobeNewswire or PRNewswire), even
      about masterbatch, even listing a competitor "among key players"; analyst ratings and
      price targets, stock screens, "better-ranked stock" lists, valuation or resilience
-     commentary, fund stakes, dividends, earnings-date scheduling, share-price moves;
-     trade-show exhibits, awards, sponsorships, anniversaries; personnel below
-     CEO/CFO/COO; local building permits; the macro statistics above.
+     commentary, fund stakes, dividends, earnings-date scheduling, share-price moves; a law
+     firm's shareholder investigation of a deal; trade-show exhibits, awards, sponsorships;
+     personnel changes below CEO/CFO/COO; industry rankings.
 
 4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; results or earnings with no
-     price, volume, or capacity signal, or from a prior fiscal year — except a head-to-head
-     competitor's (Avient, Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet, Clariant
-     additives) beat-and-raise, which is 6; an end product that
-     merely USES a named polymer (a tray made of Ultem, a sponge, an analyzer); brochure-
-     style marketing of an existing grade (headline verbs promotes / highlights /
-     showcases / features); trend commentary or executive outlook quotes with no
-     transaction, price, capacity, launch, or figure; a trade body's guides or roundups
-     that set no new obligation; a settlement, fine, consent decree, remediation order
-     (even one mandating plant upgrades), lawsuit, or ruling with no outage, closure, or
-     allocation; a corporate spin-off or IT project; RULE 7's uncertain-relevance exit.
-     Never a WATCH event that merely lacks a stated Americhem effect.
+     price, volume, or capacity signal, or from a prior fiscal year (except a head-to-head
+     competitor's — Avient, Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet — beat-and-
+     raise, which is 6); an end product that merely USES a named polymer, however it is
+     cleared or certified (an FDA-cleared tray made of Ultem, a sponge, an analyzer);
+     brochure-style marketing of an existing grade (headline verbs promotes / highlights /
+     showcases / features); trend or growth commentary and executive outlook quotes with no
+     transaction, price, capacity, launch, or figure; a trade body's guides, explainers, or
+     roundups that set no new obligation; a settlement, fine, consent decree, or remediation
+     order — however "binding", even one mandating plant upgrades — and any lawsuit or
+     ruling, with no outage, closure, or allocation; a corporate spin-off or IT project;
+     RULE 7's uncertain-relevance exit. Never a WATCH event that merely lacks a stated
+     Americhem effect.
+
+5 — DEMAND PRINT, or a generic event. (a) The two macro prints that matter to a compounder:
+     the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
+     forecast of it — and US industrial production. These two only; every other statistic
+     is band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
+     plant, grade, input, figure, or date.
 
 6 — WATCH (the default for an actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
-     - price change, force majeure, allocation, outage, or shortage on a polymer, resin,
-       pigment, additive, or feedstock
+     - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
+       pigment, additive, or feedstock (with a named input or a figure it is DIRECT, below)
      - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
        capability build — in any RULE 4 end-market (a supplier's EV battery-materials lab
        counts)
-     - M&A, divestiture, plant sale, JV, or distribution-agreement change in Americhem's
-       supply chain or sales channel, buyer's and seller's side alike (a distributor
-       buying a named distributor; a pigment maker selling a plant)
+     - a JV, distribution-agreement change, or a deal whose counterparty is not named, in
+       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, below)
      - financial distress — bankruptcy, restructuring, going-concern warning, guidance
        cut — or a head-to-head competitor's earnings beat and guidance raise
      - a launch, new grade, certification, volume milestone, partnership, or development /
        qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
        adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
-       states a performance figure or a target application (thermoplastic composite LH2
-       lines, 50–60% lighter); a competitor's launch is a threat and still scores here
+       states a performance figure or a target application; a competitor's launch is a
+       threat and still scores here
+     - an aerospace composites program — hydrogen lines, eVTOL or airframe structures — by
+       any composites developer: in Transportation - Aerospace every program is a materials
+       decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
      - quarterly results that carry a price or volume signal for an input or a RULE 4
        end-market
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
        US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
        effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),
        even when reported through an explainer
-     A named counterparty, plant, grade, input, figure, or effective date confirms 6 —
-     "Univar acquires Interpur" is 6, whatever the So-What hedges.
+     A named counterparty, plant, grade, input, figure, or effective date confirms 6.
 
-5 — WATCH-LITE, two cases only: (a) the two macro prints above; (b) a WATCH-class event
-     told so generically that it names NO counterparty, plant, grade, input, figure, or
-     date.
-
-7–8 — DIRECT: a PRICE REPORT or announced price move on an input Americhem buys — a monthly
-     resin, recyclate, or pigment price report (PE / PP / PET / PS / PC / ABS, R-PET /
-     R-PP, TiO2; any direction, e.g. "R-PET fell €30–40/tonne") or an announced increase
-     on resin, TiO2 and other pigments, carbon black, nylon / caprolactam, or PVC, with a
-     figure or a month — including a supplier's quarterly results that report such a
-     price change (Dow: PE price +20%; Chemours: TiO2 +2%); a supplier's bankruptcy,
-     force majeure, or exit; a named customer program; a masterbatch / compounding
-     competitor head-to-head with a stated quantity, date, or plant.
+7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
+     - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
+       monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
+       swing as buyers regain leverage", "prices could go up again in August" — with or
+       without a figure: these are input prices, never macro statistics
+     - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
+       caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
+       PE price +20%; Chemours: TiO2 +2%)
+     - a feedstock disruption that names the polymers hit (Hormuz: polyester and spandex)
+     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
+       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
+       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
+     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
+       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
+       plant
 
 9–10 — STRATEGIC: Americhem must act — a key supplier's exit, a binding regulation with a
      near deadline across a whole end-market, a major competitor acquiring a compounder.
