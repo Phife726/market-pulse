@@ -258,17 +258,22 @@ Advanced Composites query), score that actor's event exactly as if it were the t
 RULE 1's DISCARD is for a WRONG entity, never an absent one.
 
 MACRO STATISTICS ARE NOT EVENTS. Exactly two prints score above 3: the US ISM Manufacturing
-PMI (readings, consensus previews, bank forecasts of it) and US industrial production — 5.
-Every other statistic or policy — vehicle or EV sales anywhere, building permits,
-construction spending, credit or freight indices, energy prices, another country's output,
-a province's 2030 vehicle ban — is 3, whatever demand it "implies".
+PMI (readings, consensus previews, and a bank lifting its PMI forecast all count) and US
+industrial production — 5. Every other statistic or policy — vehicle or EV sales anywhere,
+building permits, construction spending, credit or freight indices, energy prices, another
+country's output, a province's 2030 vehicle ban — is 3, whatever demand it "implies".
+A resin, recyclate, or pigment PRICE REPORT is NOT a macro statistic: "R-PET fell
+€30–40/tonne", "PET bottle resin prices fall again", "resin markets swing as buyers regain
+leverage" are input prices — DIRECT, 7.
 
 The floor bands (1–2, 3, 4) are checked first; an article that fits one never scores higher.
 
-1–2 — NOISE: the entity is only mentioned in passing; its action is in an unrelated business
-     line (software, diagnostics equipment, semiconductors, a bus-camera trial); a consumer
-     product review, launch, or promotion; a job posting; a broken, empty, or paywalled
-     page. So-What opener: "No material signal — …".
+1–2 — NOISE. 1: the page is not about the entity's business at all — a 404 or paywalled
+     page, a job posting, a retail product listing, local news that only shares a name or a
+     street. 2: the entity is only mentioned in passing; its action is in an unrelated
+     business line (software, diagnostics equipment, semiconductors, a bus-camera trial); a
+     consumer product review, launch, or promotion; a plant visit, labor dispute, or
+     anniversary story. So-What opener: "No material signal — …".
 
 3 — NOT AN EVENT: market-research forecasts — any "market to reach / CAGR / forecast to
      20XX" report ({market_report_publishers},
@@ -280,7 +285,9 @@ The floor bands (1–2, 3, 4) are checked first; an article that fits one never 
      CEO/CFO/COO; local building permits; the macro statistics above.
 
 4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; results or earnings with no
-     price, volume, or capacity signal, or from a prior fiscal year; an end product that
+     price, volume, or capacity signal, or from a prior fiscal year — except a head-to-head
+     competitor's (Avient, Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet, Clariant
+     additives) beat-and-raise, which is 6; an end product that
      merely USES a named polymer (a tray made of Ultem, a sponge, an analyzer); brochure-
      style marketing of an existing grade (headline verbs promotes / highlights /
      showcases / features); trend commentary or executive outlook quotes with no
@@ -303,9 +310,10 @@ The floor bands (1–2, 3, 4) are checked first; an article that fits one never 
      - financial distress — bankruptcy, restructuring, going-concern warning, guidance
        cut — or a head-to-head competitor's earnings beat and guidance raise
      - a launch, new grade, certification, volume milestone, partnership, or development /
-       qualification program with a stated performance figure, by a MATERIAL MAKER
-       (resin, compound, masterbatch, additive, adhesive, ink, or composite) in a RULE 4
-       segment — a competitor's launch is a threat and still scores here
+       qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
+       adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
+       states a performance figure or a target application (thermoplastic composite LH2
+       lines, 50–60% lighter); a competitor's launch is a threat and still scores here
      - quarterly results that carry a price or volume signal for an input or a RULE 4
        end-market
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
