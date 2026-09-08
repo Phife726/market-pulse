@@ -269,7 +269,8 @@ higher. Each floor band is a closed list: put the article in the band whose list
      or anniversary story; and every MACRO STATISTIC or policy other than the two prints in
      band 5 — vehicle or EV sales anywhere, building permits, construction spending, credit
      or freight indices, energy prices, another country's output, a province's 2030 vehicle
-     ban — whatever demand it "implies". So-What opener for 1–2: "No material signal — …".
+     ban — whatever demand it "implies" (a supply disruption that names the polymers hit is
+     not a statistic — it is DIRECT, below). So-What opener for 1–2: "No material signal — …".
 
 3 — BUSINESS CONTENT, NOT AN EVENT: market-research forecasts — any "market to reach / CAGR
      / forecast to 20XX" report ({market_report_publishers},
@@ -278,21 +279,23 @@ higher. Each floor band is a closed list: put the article in the band whose list
      price targets, stock screens, "better-ranked stock" lists, valuation or resilience
      commentary, fund stakes, dividends, earnings-date scheduling, share-price moves; a law
      firm's shareholder investigation of a deal; trade-show exhibits, awards, sponsorships;
-     personnel changes below CEO/CFO/COO; industry rankings.
+     personnel changes below CEO/CFO/COO; industry rankings; a trade body's or
+     consultancy's guides, explainers, or regulatory roundups — a document about rules is
+     not a rule (UKFT publishing packaging guides); an application showcase or brochure for
+     an existing grade ("ULTEM highlighted for ADAS readiness", "promotes THERMOLAST K for
+     hoses"); trend or growth features and executive outlook quotes with no transaction,
+     price, capacity, launch, or figure (a trade magazine's turf-growth feature); a
+     settlement, consent decree, fine, or remediation order and any lawsuit or ruling —
+     however "binding", even one mandating plant upgrades — with no outage, closure, or
+     allocation.
 
 4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; results or earnings with no
      price, volume, or capacity signal, or from a prior fiscal year (except a head-to-head
      competitor's — Avient, Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet — beat-and-
      raise, which is 6); an end product that merely USES a named polymer, however it is
-     cleared or certified (an FDA-cleared tray made of Ultem, a sponge, an analyzer);
-     brochure-style marketing of an existing grade (headline verbs promotes / highlights /
-     showcases / features); trend or growth commentary and executive outlook quotes with no
-     transaction, price, capacity, launch, or figure; a trade body's guides, explainers, or
-     roundups that set no new obligation; a settlement, fine, consent decree, or remediation
-     order — however "binding", even one mandating plant upgrades — and any lawsuit or
-     ruling, with no outage, closure, or allocation; a corporate spin-off or IT project;
-     RULE 7's uncertain-relevance exit. Never a WATCH event that merely lacks a stated
-     Americhem effect.
+     cleared or certified (an FDA-cleared tray made of Ultem, a sponge, an analyzer); a
+     corporate spin-off or IT project; RULE 7's uncertain-relevance exit. Never a WATCH
+     event that merely lacks a stated Americhem effect.
 
 5 — DEMAND PRINT, or a generic event. (a) The two macro prints that matter to a compounder:
      the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
@@ -315,7 +318,8 @@ higher. Each floor band is a closed list: put the article in the band whose list
        qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
        adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
        states a performance figure or a target application; a competitor's launch is a
-       threat and still scores here
+       threat and still scores here. NOT an application showcase or brochure for an
+       existing grade (band 3).
      - an aerospace composites program — hydrogen lines, eVTOL or airframe structures — by
        any composites developer: in Transportation - Aerospace every program is a materials
        decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
@@ -324,7 +328,8 @@ higher. Each floor band is a closed list: put the article in the band whose list
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
        US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
        effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),
-       even when reported through an explainer
+       even when reported through an explainer. NOT a guide, roundup, or explainer that
+       sets no new obligation, and NOT a settlement or consent decree (band 3).
      A named counterparty, plant, grade, input, figure, or effective date confirms 6.
 
 7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
@@ -335,7 +340,9 @@ higher. Each floor band is a closed list: put the article in the band whose list
      - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
        caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
        PE price +20%; Chemours: TiO2 +2%)
-     - a feedstock disruption that names the polymers hit (Hormuz: polyester and spandex)
+     - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
+       and spandex) — a war, strait closure, or storm counts; the geography of the
+       disruption does not make it a statistic or a "generic" event
      - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
        chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
        plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
