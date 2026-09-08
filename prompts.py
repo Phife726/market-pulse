@@ -284,18 +284,22 @@ higher. Each floor band is a closed list: put the article in the band whose list
      not a rule (UKFT publishing packaging guides); an application showcase or brochure for
      an existing grade ("ULTEM highlighted for ADAS readiness", "promotes THERMOLAST K for
      hoses"); trend or growth features and executive outlook quotes with no transaction,
-     price, capacity, launch, or figure (a trade magazine's turf-growth feature); a
-     settlement, consent decree, fine, or remediation order and any lawsuit or ruling —
-     however "binding", even one mandating plant upgrades — with no outage, closure, or
-     allocation.
+     price, capacity, launch, or figure (a trade magazine's turf-growth feature, even
+     when the trigger entity is a customer quoted in it: "highlights growth" is a feature,
+     not an event); an enforcement action against ONE company — a settlement, consent
+     decree, fine, permit dispute, or remediation order, however "binding", even one
+     mandating plant upgrades — and any lawsuit or ruling, with no outage, closure, or
+     allocation: regulation (band 6) means a rule that binds every seller in a market,
+     never one company's settlement.
 
-4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; results or earnings with no
-     price, volume, or capacity signal, or from a prior fiscal year (except a head-to-head
-     competitor's — Avient, Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet — beat-and-
-     raise, which is 6); an end product that merely USES a named polymer, however it is
-     cleared or certified (an FDA-cleared tray made of Ultem, a sponge, an analyzer); a
-     corporate spin-off or IT project; RULE 7's uncertain-relevance exit. Never a WATCH
-     event that merely lacks a stated Americhem effect.
+4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; a bare earnings beat or
+     miss — results that report NO price, volume, or capacity change (results that DO
+     report one are band 6, or DIRECT when it is an input price: Dow's "PE price up 20%"
+     is 7, never 4); results from a prior fiscal year; an end product that merely USES a
+     named polymer, however it is cleared or certified (an FDA-cleared tray made of Ultem,
+     a sponge, an analyzer); a corporate spin-off or IT project; RULE 7's
+     uncertain-relevance exit. Never a WATCH event that merely lacks a stated Americhem
+     effect.
 
 5 — DEMAND PRINT, or a generic event. (a) The two macro prints that matter to a compounder:
      the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
@@ -323,8 +327,10 @@ higher. Each floor band is a closed list: put the article in the band whose list
      - an aerospace composites program — hydrogen lines, eVTOL or airframe structures — by
        any composites developer: in Transportation - Aerospace every program is a materials
        decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
-     - quarterly results that carry a price or volume signal for an input or a RULE 4
-       end-market
+     - quarterly results — a supplier's, customer's, or competitor's — that report a price,
+       volume, or capacity change for an input or a RULE 4 end-market (an input PRICE
+       change reported in results is DIRECT, below); a head-to-head competitor's (Avient,
+       Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet) beat-and-raise
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
        US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
        effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),

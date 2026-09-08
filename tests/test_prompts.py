@@ -505,7 +505,7 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     rule3 = _rule3()
     for event in ("price change, force majeure", "capacity opened, closed, expanded",
                   "M&A, divestiture, or plant sale with a NAMED target", "financial distress", "launch, new grade",
-                  "quarterly results that carry a price or volume signal",
+                  "quarterly results — a supplier's, customer's, or competitor's — that report a price",
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
         assert event in rule3, event
