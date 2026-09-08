@@ -497,7 +497,7 @@ def test_rule3_floor_is_applied_first_and_names_every_noise_class():
             < rule3.index("6 — WATCH") < rule3.index("5 — DEMAND PRINT"))
     assert "DIRECT (7–8) first, then WATCH (6), then 5" in rule3
     assert "The floor bands (1, 2, 3, 4) are checked first" in rule3
-    assert "every MACRO STATISTIC or policy other than the two US prints" in rule3
+    assert "every MACRO STATISTIC or policy other than the two prints" in rule3
     for noise in ("market-research forecasts", "analyst ratings and price targets",
                   "stock screens", "trade-show exhibits", "only mentioned in passing",
                   "unrelated business line", "building permits"):
@@ -516,8 +516,7 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
         assert event in rule3, event
     assert "A named counterparty, plant, grade, input, figure, or effective date confirms 6" in rule3
     assert "5 — DEMAND PRINT, or a generic event" in rule3
-    assert "Exactly two macro prints" in rule3 and "ISM Manufacturing PMI" in rule3
-    assert "No other print qualifies, however similar" in rule3
+    assert "These two only; every other statistic is band 2" in rule3 and "ISM Manufacturing PMI" in rule3
 
 
 def test_rule3_scores_another_value_chain_actors_event_when_the_trigger_is_absent():
