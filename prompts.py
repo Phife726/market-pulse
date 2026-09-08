@@ -266,11 +266,15 @@ higher. Each floor band is a closed list: put the article in the band whose list
 2 — NO EVENT FOR THE ENTITY: the entity is only mentioned in passing; its action is in an
      unrelated business line (software, diagnostics equipment, semiconductors, a bus-camera
      trial); a consumer product review, launch, or promotion; a plant visit, labor dispute,
-     or anniversary story; and every MACRO STATISTIC or policy other than the two prints in
-     band 5 — vehicle or EV sales anywhere, building permits, construction spending, credit
-     or freight indices, energy prices, another country's output, a province's 2030 vehicle
-     ban — whatever demand it "implies" (a supply disruption that names the polymers hit is
-     not a statistic — it is DIRECT, below). So-What opener for 1–2: "No material signal — …".
+     or anniversary story; and every MACRO STATISTIC or policy other than the two US prints
+     in band 5 — a country's or region's vehicle or EV sales (Malaysia, Thailand, China, the
+     UK), building permits (Germany, Alabama, Jonesboro), nonresidential construction
+     spending (ABC, the Census Bureau), a credit-conditions index (the ECB's), a freight-rate
+     or shipping outlook (Maersk, UBS), energy or gas prices, another country's industrial
+     output (Taiwan, Germany, Italy), a province's 2030 vehicle ban — whatever demand it
+     "implies", and whatever the print is called (a supply disruption that names the polymers
+     hit is not a statistic — it is DIRECT, below). So-What opener for 1–2: "No material
+     signal — …".
 
 3 — BUSINESS CONTENT, NOT AN EVENT: market-research forecasts — any "market to reach / CAGR
      / forecast to 20XX" report ({market_report_publishers},
@@ -353,10 +357,11 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        sets no new obligation, and NOT a settlement or consent decree (band 3).
      A named counterparty, plant, grade, input, figure, or effective date confirms 6.
 
-5 — DEMAND PRINT, or a generic event that fits neither band above. (a) The two macro prints that matter to a compounder:
-     the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
-     forecast of it — and US industrial production. These two only; every other statistic
-     is band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
+5 — DEMAND PRINT, or a generic event that fits neither band above. (a) Exactly two macro
+     prints: the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank
+     lifting its forecast of it — and US industrial production. No other print qualifies,
+     however similar: Taiwan's output, ABC's construction spending, an ECB index, a
+     freight-rate outlook are band 2. (b) A WATCH-class event told so generically that it names NO counterparty,
      plant, grade, input, figure, or date.
 
 9–10 — STRATEGIC: Americhem must act — a key supplier's exit, a binding regulation with a
