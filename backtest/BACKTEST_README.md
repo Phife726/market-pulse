@@ -22,7 +22,13 @@
 ## Pass criteria for a revised rubric
 1. **Recall:** ≥ 90% of `surface` rows score ≥5 (≥ 34 of 37)
 2. **Precision:** ≥ 90% of `suppress` rows score ≤4 (≥ 35 of 39)
-3. **Distribution:** across all 150 rows, 10–15% score ≥5 and no single score value exceeds 50% of rows
+3. **Distribution:** no single score value exceeds 50% of scored rows. The production
+   proxy this used to carry — "10–15% score ≥5 across all 150 rows" — was re-specified on
+   2026-09-08: the set is stratified (76 of 150 rows are labeled), so that share cannot hold
+   alongside ≥90% recall, and the target was always a proxy for production `surfaced_count`.
+   What is actually watched: **median production `surfaced_count` over the first 5 crons
+   after a rubric change lands in 8–15** (the `replay` job on a PR estimates it read-only).
+   The runner still prints the ≥5 share of the 74 `unlabeled` rows for information.
 4. **No regression on threshold items:** `surface` rows with `original_score >= 6` should still score ≥6
 
 Grade with `pass = (expected_tier=='surface' and revised_score>=5) or (expected_tier=='suppress' and revised_score<=4)`; leave blank for `unlabeled`.

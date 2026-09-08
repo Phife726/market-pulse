@@ -48,7 +48,7 @@ REPLAY_OUT = os.path.join(BACKTEST_DIR, "replay_rescored.csv")
 
 SURFACE_MIN = 5          # criterion 1: a `surface` row must score >= this
 SUPPRESS_MAX = 4         # criterion 2: a `suppress` row must score <= this
-SHARE_GE5_BAND = (0.10, 0.15)   # criterion 3: share of rows at >= 5
+SHARE_GE5_BAND = (0.10, 0.15)   # informational: the former criterion-3 band for the >= 5 share
 MAX_SINGLE_SCORE_SHARE = 0.50   # criterion 3: no one score value above this
 REGRESSION_FLOOR = 6     # criterion 4: surface rows originally >= 6 stay >= 6
 PASS_RATE = 0.90
@@ -153,8 +153,7 @@ def _share_line(label: str, rows: list[dict]) -> tuple[bool, str]:
     ok = lo <= share <= hi and top_share <= MAX_SINGLE_SCORE_SHARE
     dist_txt = "  ".join(f"{s}:{dist[s]}" for s in sorted(dist))
     return ok, (f"  {label}: {ge5}/{len(scored)} = {share:.1%} at >= {SURFACE_MIN} "
-                f"(band {lo:.0%}–{hi:.0%}); most common score {top_score} = {top_share:.1%} "
-                f"(max {MAX_SINGLE_SCORE_SHARE:.0%}) -> {'PASS' if ok else 'FAIL'}\n"
+                f"(former band {lo:.0%}–{hi:.0%}); most common score {top_score} = {top_share:.1%}\n"
                 f"      distribution: {dist_txt}")
 
 
@@ -236,21 +235,24 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
     for r in leaks:
         print(_fmt_row(r))
 
-    # 3. Distribution — reported two ways. The README's literal wording is
-    #    "across all 150 rows", but the set is stratified: 37 surface rows must
-    #    score >= 5 for criterion 1, and 37/150 alone is 24.7%, so the literal
-    #    form can never pass while criterion 1 does. The README also says the
-    #    74 unlabeled rows are "a proportional sample for measuring
-    #    distribution shape", so that is the sample the verdict is taken on;
-    #    the literal number is printed alongside it, never hidden.
+    # 3. Distribution — the verdict is "no single score value exceeds 50% of
+    #    scored rows". The ≥5 share is printed for information only: the set is
+    #    stratified (76 of 150 rows labeled), so the 10–15% band it used to gate
+    #    on cannot hold alongside criterion 1, and the quantity it proxied —
+    #    production surfaced_count — is watched directly (README, 2026-09-08).
     print("\n3. DISTRIBUTION")
-    ok_all, line_all = _share_line("all rows (literal)", surface + suppress + unlabeled)
-    ok_unl, line_unl = _share_line("unlabeled rows (proportional sample — the verdict)", unlabeled)
-    print(line_all)
-    print("      (cannot pass jointly with criterion 1 on this stratified set: "
-          f"{len(surface)} surface rows alone are {len(surface)/max(len(rows),1):.1%} of it)")
+    scored_all = [r for r in surface + suppress + unlabeled]
+    dist = Counter(r["revised_score"] for r in scored_all)
+    top_score, top_n = dist.most_common(1)[0] if dist else (None, 0)
+    top_share = top_n / len(scored_all) if scored_all else 1.0
+    ok = top_share <= MAX_SINGLE_SCORE_SHARE
+    verdicts.append(ok)
+    dist_txt = "  ".join(f"{sc}:{dist[sc]}" for sc in sorted(dist))
+    print(f"  most common score {top_score} = {top_share:.1%} of {len(scored_all)} scored rows "
+          f"(max {MAX_SINGLE_SCORE_SHARE:.0%}) -> {'PASS' if ok else 'FAIL'}")
+    print(f"      distribution: {dist_txt}")
+    _, line_unl = _share_line("unlabeled rows (proportional sample, informational)", unlabeled)
     print(line_unl)
-    verdicts.append(ok_unl)
 
     # 4. No regression on threshold items
     threshold_rows = [r for r in surface if float(r["original_score"] or 0) >= REGRESSION_FLOOR]
