@@ -267,6 +267,16 @@ zero-I/O purity is untouched.
   schema, numbering belongs to the rendered report.
 - **Commercial Segment Watch** — the primary rendered email zone, grouped by
   `commercial_segment`.
+- **Market-report publisher gate** — `market_reports.py` (2026-09-08): the one
+  definition of the market-research publishers (IndexBox, Fact.MR, Future
+  Market Insights, MarketsandMarkets, Lucintel, openPR, …) and the "market
+  forecast to 20XX" headline shapes whose releases discovery keeps pulling in.
+  A forecast of a market's size is not an event: the ingestion gauntlet drops a
+  matching candidate before the scrape (`market_report_publisher`), RULE 3's
+  FLOOR names the publishers to the model, and delivery rule 4 drops a stored
+  row whose domain or `source_publication` is one of them whatever it scored.
+  *Avoid*: blocklist (it is a predicate with three consumers, not a list one
+  gate reads).
 - **Prior-shown lookback** — `delivery_engine.fetch_prior_shown` (2026-09-08): the
   rows earlier emails showed — cards and **Watch List** rows created in the
   `prior_surfaced_lookback_days` (default 3) before this run's **delivery

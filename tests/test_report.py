@@ -1669,3 +1669,50 @@ def test_prior_surfaced_duplicate_also_keeps_a_repeat_out_of_the_appendix():
                             prior_surfaced=[_prior("Univar Solutions", _ROYAL_PRIOR)])
     assert appendix_hashes(model) == []
     assert model.ledger.breakdown.get("prior_surfaced_duplicate") == 1
+
+
+# ===========================================================================
+# Rule 4 also fires on a market-research PUBLISHER (2026-09-08) — the
+# delivery-side half of the publisher gate: a report that reached the store
+# before the ingestion gate existed (or through a wire the headline pattern
+# missed) can never be a card, whatever it scored.
+# ===========================================================================
+
+
+def test_generic_market_report_fires_on_a_publisher_domain_regardless_of_entities():
+    row = stub_row("dom", 8, commercial_segment="Packaging", entities_mentioned=["RTP Company"],
+                   headline="Polycarbonate demand keeps climbing",
+                   source_url="https://www.indexbox.io/blog/polycarbonate-market-forecast/")
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("generic_market_report") == 1
+
+
+def test_generic_market_report_fires_on_a_publisher_source_publication():
+    row = stub_row("pub", 8, commercial_segment="Packaging", entities_mentioned=["Dow", "Kuraray"],
+                   headline="Agricultural films demand climbs",
+                   source_url="https://www.globenewswire.com/news-release/x.html",
+                   source_publication="Research and Markets")
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert model.groups == {}
+    assert model.ledger.breakdown.get("generic_market_report") == 1
+
+
+def test_generic_market_report_title_pattern_still_needs_empty_entities():
+    """The pre-existing title-pattern half keeps its entities guard: a real
+    article that happens to say 'market report' about named companies is not
+    a market report."""
+    row = stub_row("news", 8, commercial_segment="Packaging", entities_mentioned=["Dow"],
+                   headline="Dow market report flags polyethylene oversupply",
+                   source_url="https://www.plasticsnews.com/x")
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"title_patterns_generic_market_report": ["market report"]}}
+    model = assemble_report([row], config=cfg)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["news"]
+
+
+def test_generic_market_report_publisher_check_honours_the_rule_switch():
+    row = stub_row("dom", 8, commercial_segment="Packaging", headline="Polycarbonate demand",
+                   source_url="https://www.indexbox.io/blog/x/")
+    cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_generic_market_report": False}}
+    model = assemble_report([row], config=cfg)
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["dom"]

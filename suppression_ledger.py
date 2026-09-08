@@ -17,6 +17,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
     ("scrape_failed",            "scrape failed"),
     ("synthesis_failed",         "LLM synthesis failed"),
     ("unscrapable_domain",       "unscrapable domain"),
+    ("market_report_publisher",  "market-research report (publisher or headline)"),
     ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
 _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (

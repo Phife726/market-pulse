@@ -16,7 +16,7 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 7
+    assert len(INGESTION_CODES) == 8
     assert len(DELIVERY_CODES) == 11
 
 
@@ -32,6 +32,14 @@ def test_side_of_returns_correct_side():
 def test_label_for_returns_human_label():
     assert label_for("duplicate_url") == "duplicate URL"
     assert label_for("enterprise_cross_segment_low_impact") == "Enterprise / Cross-Segment, low impact"
+
+
+def test_market_report_publisher_is_an_ingestion_code_with_a_label():
+    """The pre-scrape market-report gate (2026-09-08). Ingestion owns it — the
+    candidate never reaches the scorer."""
+    assert "market_report_publisher" in INGESTION_CODES
+    assert side_of("market_report_publisher") == "ingestion"
+    assert label_for("market_report_publisher") != "market_report_publisher"
 
 
 def test_prior_surfaced_duplicate_is_a_delivery_code_with_a_label():

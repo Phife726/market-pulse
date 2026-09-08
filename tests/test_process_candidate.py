@@ -252,3 +252,52 @@ def test_yield_table_covers_every_ingestion_reason():
     assert set(table.keys()) == set(INGESTION_CODES)
     yield_keys = set(ingestion_engine._new_provider_yield().keys())
     assert set(table.values()) <= yield_keys
+
+
+# ---------------------------------------------------------------------------
+# Market-report publisher gate (2026-09-08): a market-research report is
+# dropped BEFORE the scrape, so it can never reach the scorer whatever RULE 3
+# says — by publisher domain, or by the "market forecast to 20XX" headline
+# pattern on a wire domain.
+# ---------------------------------------------------------------------------
+
+def _past_dedup(monkeypatch) -> MagicMock:
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "is_semantic_duplicate", lambda t, s: (False, "", 0))
+    scrape = MagicMock(return_value=None)
+    monkeypatch.setattr(ingestion_engine, "scrape_article", scrape)
+    return scrape
+
+
+def test_market_report_publisher_domain_suppresses_pre_scrape(monkeypatch):
+    scrape = _past_dedup(monkeypatch)
+    ctx = make_ctx()
+    out = process_candidate(make_candidate(
+        url="https://www.indexbox.io/blog/vinyl-siding-panel-market-forecast/",
+        title="Vinyl Siding Panel Market Forecast Points Higher Toward 2035 | IndexBox"), TARGET, ctx)
+    assert out == Suppressed("market_report_publisher")
+    assert ctx.ledger.breakdown == {"market_report_publisher": 1}
+    assert ctx.provider_yield["serper"]["market_reports"] == 1
+    scrape.assert_not_called()
+    assert ctx.scrapes_attempted == 0
+
+
+def test_market_report_headline_on_a_wire_domain_suppresses_pre_scrape(monkeypatch):
+    scrape = _past_dedup(monkeypatch)
+    ctx = make_ctx()
+    out = process_candidate(make_candidate(
+        url="https://www.globenewswire.com/news-release/2026/07/20/agri-films.html",
+        title="Agricultural Films Market to Reach USD 29.08 Billion by 2033"), TARGET, ctx)
+    assert out == Suppressed("market_report_publisher")
+    scrape.assert_not_called()
+
+
+def test_ordinary_wire_headline_reaches_the_scrape(monkeypatch):
+    scrape = _past_dedup(monkeypatch)
+    ctx = make_ctx()
+    out = process_candidate(make_candidate(
+        url="https://www.globenewswire.com/news-release/2026/07/28/univar-royal.html",
+        title="Univar Solutions Acquires H.M. Royal"), TARGET, ctx)
+    assert out == Suppressed("scrape_failed")       # the stub scrape returns None
+    scrape.assert_called_once()
+    assert "market_report_publisher" not in ctx.ledger.breakdown

@@ -16,6 +16,7 @@ from run_instant import RunInstant
 from run_budget import RunBudget, SkipEntity, Stop
 from targets import load_targets
 import insight
+import market_reports
 import prompts
 # The macro summary's schema/validation + pure assembly live in macro_summary.py
 # (the run-level twin of insight.py); generate_macro_summary keeps only the LLM
@@ -110,10 +111,10 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
             "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d "
-            "synthesis_failed=%d",
+            "synthesis_failed=%d market_reports=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
             y["discards"], y["relevance_dropped"], y["scrape_failed"],
-            y["unscrapable"], y["duplicates"], y["synthesis_failed"],
+            y["unscrapable"], y["duplicates"], y["synthesis_failed"], y["market_reports"],
         )
 
 
@@ -424,6 +425,7 @@ _YIELD_KEY_FOR_REASON: dict[str, str] = {
     "duplicate_url": "duplicates",
     "semantic_duplicate": "duplicates",
     "unscrapable_domain": "unscrapable",
+    "market_report_publisher": "market_reports",
     "zoominfo_company_mismatch": "relevance_dropped",
     "scrape_failed": "scrape_failed",
     "synthesis_failed": "synthesis_failed",
@@ -496,6 +498,14 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
     if _is_unscrapable_domain(raw_url):
         logger.info("UNSCRAPABLE_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
         return ctx.suppress("unscrapable_domain", provider, url=raw_url, title=candidate_title)
+
+    # A market-research report (publisher domain, or the "market forecast to
+    # 20XX" headline on a wire) never reaches the scorer: it is not an event,
+    # and the pre-Aug-4 rubric was surfacing them at 6. One definition with
+    # RULE 3's FLOOR and delivery rule 4 (market_reports.py).
+    if market_reports.is_market_report_candidate(raw_url, candidate_title):
+        logger.info("MARKET_REPORT — skipped pre-scrape (%s): %s", provider, normalized)
+        return ctx.suppress("market_report_publisher", provider, url=raw_url, title=candidate_title)
 
     # The provider owns its own false-positive gate (Serper has none);
     # the consumer applies the decision so suppression accounting stays

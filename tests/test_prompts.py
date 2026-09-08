@@ -540,3 +540,13 @@ def test_rule7_uncertainty_exit_is_scoped_to_the_correct_entity():
     rule7 = _rule_section(_insight_spec(_PROD_STYLE_CFG).system, "RULE 7 —", "If the article passes all rules")
     assert "correct entity" in rule7
     assert "Set americhem_impact_score to 4 and apply Rule 6" in rule7
+
+
+def test_rule3_floor_names_every_market_report_publisher_from_the_one_definition():
+    """The publishers the ingestion gate drops by domain are the ones RULE 3's
+    FLOOR names — one definition (market_reports.PUBLISHERS), so a publisher
+    added to the gate is named to the model too, and vice versa."""
+    from market_reports import PUBLISHER_NAMES
+    rule3 = _rule3()
+    for name in PUBLISHER_NAMES:
+        assert name in rule3, name

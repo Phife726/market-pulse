@@ -26,6 +26,7 @@ from insight import (
 )
 from scoring import Scoring
 from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES
+import market_reports
 from macro_summary import MacroSummary
 from suppression_ledger import SuppressionLedger
 
@@ -399,9 +400,15 @@ def _apply_delivery_suppression(
                 ledger = ledger.record("job_posting", url=url, title=headline)
                 continue
 
-        # Rule 4: Generic market report title with empty entities
+        # Rule 4: Generic market report — a market-research PUBLISHER (by
+        # domain, or the LLM-extracted source_publication; market_reports.py,
+        # the definition the ingestion gate drops by, for the rows stored
+        # before that gate existed or through a wire it missed) whatever the
+        # entities, or a generic-report title with empty entities.
         if sup_cfg.get("enable_generic_market_report", True):
-            if _matches_any_pattern(headline, market_patterns) and not entities:
+            if (market_reports.is_market_report_domain(url)
+                    or market_reports.is_market_report_publication(row.get("source_publication"))
+                    or (_matches_any_pattern(headline, market_patterns) and not entities)):
                 ledger = ledger.record("generic_market_report", url=url, title=headline)
                 continue
 

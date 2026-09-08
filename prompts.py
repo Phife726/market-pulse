@@ -3,7 +3,7 @@
 Text assembly only: callers keep validation, the LLM seam (`llm.py`) keeps
 transport. Config enters as a dict (same discipline as `report.py`); no I/O,
 no clock, no env reads — purity is pinned structurally in tests/test_purity.py (this module
-imports only `insight`, `scoring`, and stdlib).
+imports only `insight`, `scoring`, `market_reports`, and stdlib).
 
 The unit of exchange is the **prompt spec** (`PromptSpec` / `MacroPrompt`) —
 a fully-assembled call as plain frozen data, splatted into the LLM seam via
@@ -18,10 +18,12 @@ exactly what it was told, from one definition; drift is an import error, not
 a diff-review discipline.
 """
 import hashlib
+import textwrap
 from dataclasses import dataclass
 from typing import Optional
 
 import insight
+import market_reports
 from scoring import Scoring
 
 
@@ -256,11 +258,10 @@ number is, or whether the actor is a VALUE-CHAIN ACTOR:
      customer's equipment trial); consumer product reviews, launches, or promotions with no
      materials specification; job postings; broken, empty, or paywalled pages.
 3:   market-research forecasts — any "market to reach / CAGR / forecast to 20XX" report
-     (IndexBox, Fact.MR, Future Market Insights, MarketsandMarkets, Grand View Research,
-     Fortune Business Insights, Lucintel, Research and Markets, The Business Research
-     Company, Custom Market Insights, and their openPR / EIN / GlobeNewswire / PRNewswire
-     syndications), even when the report is about masterbatch or lists a competitor or
-     customer "among key players"; analyst ratings and price targets, stock screens and
+     ({market_report_publishers},
+     and wire syndications of them on EIN Presswire, GlobeNewswire or PRNewswire), even
+     when the report is about masterbatch or lists a competitor or customer "among key
+     players"; analyst ratings and price targets, stock screens and
      "better-ranked stock" lists, fund stake changes, dividend declarations, earnings-date
      scheduling, share-price moves with no operational event; trade-show attendance or
      exhibits, awards, sponsorships, anniversaries; personnel changes below CEO/CFO/COO;
@@ -363,6 +364,14 @@ Output ONLY the JSON object — no preamble, no markdown, no explanation.
 }"""
 
 
+def _market_report_publisher_list() -> str:
+    """RULE 3's FLOOR names the market-research publishers the ingestion gate
+    drops by domain — one definition (market_reports.PUBLISHERS), wrapped to
+    the prompt's hand-wrapped width."""
+    return textwrap.fill(", ".join(market_reports.PUBLISHER_NAMES), width=90,
+                         subsequent_indent="     ")
+
+
 def _insight_system_prompt(config: dict) -> str:
     """Assemble the full system prompt, injecting commercial segment and signal
     type taxonomies. Assembly is str.replace() on named markers, never
@@ -381,6 +390,7 @@ def _insight_system_prompt(config: dict) -> str:
         .replace("{limited_exposure_template}", limited)
         .replace("{low_exposure_score_rule}", _build_low_exposure_score_rule(scorer))
         .replace("{uncertain_relevance_score}", str(uncertain_score))
+        .replace("{market_report_publishers}", _market_report_publisher_list())
     )
 
 
