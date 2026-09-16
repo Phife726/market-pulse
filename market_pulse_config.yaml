@@ -4,6 +4,25 @@
 # Edit this file to tune what appears in the daily email.
 # ============================================================
 
+# Security block — domains Americhem IT has flagged as compromised (malicious
+# injection code, malware). A link to one ANYWHERE in the digest scores the
+# whole email as malware at the recipient gateway (Proofpoint), which
+# quarantined the 2026-09-16 run for every recipient: a green run, "Delivered"
+# at Resend, nobody received it. One definition (blocked_domains.py), two
+# consumers: the ingestion gauntlet's FIRST gate drops a matching candidate
+# before any scrape (never scraped, stored or linked; ledgered blocked_domain),
+# and delivery rule 9 drops an already-stored row on such a domain — card,
+# Watch row, appendix row and executive-summary citation alike (ledgered
+# blocked_domain_stored). So blocking the next domain IT reports is an edit
+# here: no deploy, no database access. Bare registrable domains, one per
+# line, suffix-matched (every subdomain counts), with the date IT reported
+# it. A mis-shaped list (a scalar, a pasted URL, an empty entry) FAILS the run
+# at t=0 rather than silently unblocking. Removing a domain re-admits its
+# stored rows to the report; do that only when IT clears it.
+security:
+  blocked_domains:
+    - chargedevs.com      # 2026-09-16: malicious injection code (IT sandbox analysis)
+
 reporting:
   # Minimum americhem_impact_score (1–10) for an article to appear in the email.
   # Raise to 7 if the report feels noisy; lower to 5 if too sparse.

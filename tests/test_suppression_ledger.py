@@ -17,7 +17,7 @@ def test_taxonomy_partitions():
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
     assert len(INGESTION_CODES) == 9
-    assert len(DELIVERY_CODES) == 11
+    assert len(DELIVERY_CODES) == 12
 
 
 def test_samples_cap_is_ten():
@@ -50,6 +50,16 @@ def test_blocked_domain_is_an_ingestion_code_with_a_label():
     assert "blocked_domain" in INGESTION_CODES
     assert side_of("blocked_domain") == "ingestion"
     assert label_for("blocked_domain") != "blocked_domain"
+
+
+def test_blocked_domain_stored_is_a_delivery_code_with_a_label():
+    """Rule 9 (2026-09-16): the delivery-side half of the security block — a
+    row stored before its domain was reported must never render (card, Watch
+    row, appendix row) or be cited. Delivery owns it — the comparison is
+    against the stored row, not a candidate."""
+    assert "blocked_domain_stored" in DELIVERY_CODES
+    assert side_of("blocked_domain_stored") == "delivery"
+    assert label_for("blocked_domain_stored") != "blocked_domain_stored"
 
 
 def test_prior_surfaced_duplicate_is_a_delivery_code_with_a_label():

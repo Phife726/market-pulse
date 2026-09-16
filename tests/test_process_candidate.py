@@ -35,8 +35,9 @@ def make_candidate(**overrides) -> dict:
     return base
 
 
-def make_ctx(providers_by_name: dict | None = None) -> RunContext:
-    return RunContext(providers_by_name=providers_by_name or {})
+def make_ctx(providers_by_name: dict | None = None, *,
+             blocked_domains: frozenset[str] = frozenset()) -> RunContext:
+    return RunContext(providers_by_name=providers_by_name or {}, blocked_domains=blocked_domains)
 
 
 @pytest.fixture(autouse=True)
@@ -93,13 +94,25 @@ def test_blocked_domain_suppresses_before_any_lookup(monkeypatch):
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     scraper = MagicMock()
     monkeypatch.setattr(ingestion_engine, "scrape_article", scraper)
-    ctx = make_ctx()
+    ctx = make_ctx(blocked_domains=frozenset({"chargedevs.com"}))
     out = process_candidate(
         make_candidate(url="https://chargedevs.com/newswire/lanxess-battery-lab/"), TARGET, ctx)
     assert out == Suppressed("blocked_domain")
     assert ctx.ledger.breakdown == {"blocked_domain": 1}
     assert ctx.provider_yield["serper"]["blocked"] == 1
     scraper.assert_not_called()
+
+
+def test_blocked_domain_gate_reads_the_run_context_not_a_built_in_list(monkeypatch):
+    """The list is config-driven (security.blocked_domains, threaded onto the
+    RunContext by execute_pipeline): with nothing blocked, a chargedevs.com
+    candidate flows on to the duplicate lookup like any other."""
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: True)
+    ctx = make_ctx(blocked_domains=frozenset())
+    out = process_candidate(
+        make_candidate(url="https://chargedevs.com/newswire/lanxess-battery-lab/"), TARGET, ctx)
+    assert out == Suppressed("duplicate_url")
+    assert "blocked_domain" not in ctx.ledger.breakdown
 
 
 def test_provider_gate_drop_suppresses_with_gate_reason(monkeypatch):

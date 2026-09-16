@@ -131,6 +131,9 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         harness builds the budget from the targets it resolves, so it can
         never mis-index. `None` lets the engine build the default (the
         production path).
+      * `mp_cfg`     — the parsed market_pulse_config.yaml dict the engine's
+        `config.mp_config()` read returns (the security block lives there).
+        Default `{}`: nothing blocked.
     """
 
     def _run(
@@ -142,8 +145,12 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         scrape: Union[str, Callable] = "text " * 200,
         run: RunInstant = RUN_INSTANT,
         limits: Optional[dict] = None,
+        mp_cfg: Optional[dict] = None,
     ) -> PipelineRun:
         import ingestion_engine  # local: keeps supabase/openai imports off narrow runs
+
+        cfg = {} if mp_cfg is None else mp_cfg
+        monkeypatch.setattr(ingestion_engine.config, "mp_config", lambda: cfg)
 
         if (targets is None) == (targets_yaml is None):
             raise TypeError("pass exactly one of targets= / targets_yaml=")

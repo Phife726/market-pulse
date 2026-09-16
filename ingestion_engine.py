@@ -16,6 +16,7 @@ from run_instant import RunInstant
 from run_budget import RunBudget, SkipEntity, Stop
 from targets import load_targets
 import insight
+import blocked_domains
 import market_reports
 import prompts
 # The macro summary's schema/validation + pure assembly live in macro_summary.py
@@ -159,37 +160,18 @@ UNSCRAPABLE_HOSTS: frozenset[str] = frozenset({
 })
 
 
-BLOCKED_DOMAINS: frozenset[str] = frozenset({
-    # Security block — domains Americhem IT has flagged as compromised. A link
-    # to one in the digest scores the whole email as malware at the recipient
-    # gateway (Proofpoint), which quarantined the 2026-09-16 run for every
-    # recipient. Suffix match, checked first in the gauntlet: never scraped,
-    # never stored, never linked. Add a domain here when IT reports one;
-    # delete its stored rows from daily_intelligence by hand (source_url).
-    "chargedevs.com",   # 2026-09-16: malicious injection code (IT sandbox analysis)
-})
-
-
-def _host_of(url: str) -> str:
-    """The URL's host as the domain lists spell it: case-folded, with any
-    terminal dots stripped — `chargedevs.com.` is the same FQDN as
-    `chargedevs.com` to resolvers, browsers and mail scanners, and must not
-    slip past a suffix match. Empty for a malformed URL."""
-    return (urlparse(url).hostname or "").lower().rstrip(".")
-
-
-def _is_blocked_domain(url: str) -> bool:
-    """True when the URL's host is (a subdomain of) a security-blocked domain.
-    Malformed URLs return False (the later gates decide)."""
-    host = _host_of(url)
-    return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
+# The security block — domains Americhem IT has flagged as compromised — is
+# NOT a constant here: it is `security.blocked_domains` in
+# market_pulse_config.yaml, read once per run by execute_pipeline and threaded
+# onto the RunContext (blocked_domains.py is the one definition, shared with
+# delivery rule 9). Add a domain there when IT reports one; no deploy needed.
 
 
 def _is_unscrapable_domain(url: str) -> bool:
     """True when the URL's host is a retail storefront (exact match) or is
     (a subdomain of) a login-walled platform we never scrape — both waste the
     Firecrawl budget. Malformed URLs return False (let the scraper decide)."""
-    host = _host_of(url)
+    host = blocked_domains.host_of(url)
     if host in UNSCRAPABLE_HOSTS:
         return True
     return any(host == d or host.endswith("." + d) for d in UNSCRAPABLE_DOMAINS)
@@ -479,6 +461,10 @@ class RunContext:
     by suppress() — callers never thread a new ledger back by hand.
     """
     providers_by_name: dict
+    # The security block (security.blocked_domains), read once by
+    # execute_pipeline; the gauntlet's first gate reads it here, never the
+    # config. Empty = nothing blocked.
+    blocked_domains: frozenset = frozenset()
     seen_headlines: set = field(default_factory=set)
     stats: dict = field(default_factory=_new_run_stats)
     provider_yield: dict = field(default_factory=dict)
@@ -512,8 +498,8 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
 
     # The security block is the first gate: a compromised domain is dropped
     # before any DB read, scrape or LLM call, and is ledgered as blocked even
-    # when an earlier run stored the URL (those rows are deleted by hand).
-    if _is_blocked_domain(raw_url):
+    # when an earlier run stored the URL (delivery rule 9 hides those rows).
+    if blocked_domains.is_blocked(raw_url, ctx.blocked_domains):
         logger.warning("BLOCKED_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
         return ctx.suppress("blocked_domain", provider, url=raw_url, title=candidate_title)
 
@@ -697,9 +683,13 @@ def execute_pipeline(run: RunInstant, *, budget: Optional[RunBudget] = None) -> 
             f"run budget was built from a different targets list "
             f"({len(budget.entity_at)} targets) than the one loaded ({len(targets)})"
         )
+    # The security block, read once per run — a mis-shaped list raises here,
+    # before any seam is touched (a red job at t=0, never a silent unblock).
+    blocked = blocked_domains.from_config(config.mp_config())
     providers = _discovery_providers()
     ctx = RunContext(
         providers_by_name={p.name: p for p in providers},
+        blocked_domains=blocked,
         seen_headlines=_hydrate_seen_headlines(),
     )
 

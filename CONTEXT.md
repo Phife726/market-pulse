@@ -282,6 +282,23 @@ zero-I/O purity is untouched.
   row whose domain or `source_publication` is one of them whatever it scored.
   *Avoid*: blocklist (it is a predicate with three consumers, not a list one
   gate reads).
+- **Security block** — `blocked_domains.py` + `security.blocked_domains` in
+  `market_pulse_config.yaml` (2026-09-16): the domains Americhem IT has flagged
+  as compromised. A link to one anywhere in the digest scores the *whole email*
+  as malware at the recipient gateway (Proofpoint), which quarantined the
+  2026-09-16 run for every recipient — a green run, "Delivered" at Resend,
+  nobody received it. One definition, config-driven, two consumers: the
+  **candidate gauntlet**'s first gate drops a matching candidate before any
+  scrape (`blocked_domain`), and delivery **rule 9** drops an already-stored
+  row on such a domain (`blocked_domain_stored`) while the **citation set**
+  withdraws a blocked `executive_sources` link before numbering. Suffix match
+  on the host, case-folded, terminal dots stripped (`host_of`, the one host
+  spelling every domain gate uses). Blocking the next domain is a config
+  edit: no deploy, no database access. A mis-shaped list fails both engines
+  at t=0 (`BlockedDomainsError`) — the inverse of the report levers, which
+  warn and fall back: a bad security list must never silently unblock.
+  *Avoid*: blacklist, unscrapable (that gate is about Firecrawl budget, this
+  one about the recipient gateway).
 - **Prior-shown lookback** — `delivery_engine.fetch_prior_shown` (2026-09-08): the
   rows earlier emails showed — cards and **Watch List** rows created in the
   `prior_surfaced_lookback_days` (default 3) before this run's **delivery
@@ -383,8 +400,8 @@ zero-I/O purity is untouched.
   renderer makes the HTML, `send_email` addresses it, the mailer transports it.
   *Avoid*: template, view, email builder.
 - **Candidate gauntlet** — the ordered per-candidate decision sequence
-  ingestion runs on every discovered candidate: security block (blocked
-  domain) → duplicate URL → semantic duplicate → unscrapable domain →
+  ingestion runs on every discovered candidate: **security block** (a
+  config-driven blocked domain, read off the `RunContext`) → duplicate URL → semantic duplicate → unscrapable domain →
   provider relevance gate → scrape →
   synthesis → store. Lives in `ingestion_engine.process_candidate(candidate,
   target, ctx)`; every drop is a recorded suppression (record + provider-yield
