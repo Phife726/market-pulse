@@ -1268,6 +1268,8 @@ def test_execute_pipeline_skips_unscrapable_domain_before_scraping(run_ingestion
     ("https://chargedevs.com/newswire/lanxess-opens-a-battery-laboratory/", True),
     ("https://www.chargedevs.com/some-story", True),          # subdomains too
     ("https://CHARGEDEVS.com/x", True),                        # host is case-folded
+    ("https://chargedevs.com./newswire/x", True),              # trailing-dot FQDN resolves the same
+    ("https://www.chargedevs.com../x", True),                  # any number of terminal dots
     ("https://notchargedevs.com/article", False),              # suffix must be dot-anchored
     ("https://www.reuters.com/markets/some-article/", False),
     ("not a url", False),                                      # malformed → let the scraper decide

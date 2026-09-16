@@ -170,10 +170,18 @@ BLOCKED_DOMAINS: frozenset[str] = frozenset({
 })
 
 
+def _host_of(url: str) -> str:
+    """The URL's host as the domain lists spell it: case-folded, with any
+    terminal dots stripped — `chargedevs.com.` is the same FQDN as
+    `chargedevs.com` to resolvers, browsers and mail scanners, and must not
+    slip past a suffix match. Empty for a malformed URL."""
+    return (urlparse(url).hostname or "").lower().rstrip(".")
+
+
 def _is_blocked_domain(url: str) -> bool:
     """True when the URL's host is (a subdomain of) a security-blocked domain.
     Malformed URLs return False (the later gates decide)."""
-    host = (urlparse(url).hostname or "").lower()
+    host = _host_of(url)
     return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
 
 
@@ -181,7 +189,7 @@ def _is_unscrapable_domain(url: str) -> bool:
     """True when the URL's host is a retail storefront (exact match) or is
     (a subdomain of) a login-walled platform we never scrape — both waste the
     Firecrawl budget. Malformed URLs return False (let the scraper decide)."""
-    host = (urlparse(url).hostname or "").lower()
+    host = _host_of(url)
     if host in UNSCRAPABLE_HOSTS:
         return True
     return any(host == d or host.endswith("." + d) for d in UNSCRAPABLE_DOMAINS)
