@@ -317,25 +317,33 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
      - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
        and spandex) — a war, strait closure, or storm counts; the geography of the
        disruption does not make it a statistic or a "generic" event
-     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
-       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
-       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
-     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
-       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
-       plant
+     - an acquisition, divestiture, plant sale, or JV buy-out with a NAMED target or buyer in
+       Americhem's supply chain or sales channel — a distributor buying a distributor or a
+       product line (Univar acquires Interpur; Univar acquires H.M. Royal), a pigment or
+       additive maker buying a plant (Sudarshan buys Clariant's dyes plant), a buyer taking a
+       supplier's business (Mutares buys SABIC's ETP business), a customer buying out a JV
+       partner: "distribution expansion via acquisition", "channel consolidation", and a
+       plant's "supply ownership change" are DIRECT effects, 7 or 8
+     - a material maker's or distributor's financial distress — a Chapter 11 or other
+       bankruptcy filing, administration, a court's mediation order or ruling in the case,
+       restructuring, force majeure, allocation, or exit (Trinseo files Chapter 11; Trinseo's
+       results amid restructuring and force majeure): "supplier distress" is DIRECT, 7 or 8
+     - a named customer program; a masterbatch / compounding competitor head-to-head with a
+       stated quantity, date, or plant
 
 6 — WATCH (the default for every other actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
      - an allocation, outage, or shortage on a polymer, resin, pigment, additive, or feedstock
        with no price move stated (a price change, or a supplier's force majeure, is DIRECT, above)
-     - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
+     - capacity opened, closed, expanded, idled, or moved — a plant, line, lab, or
        capability build — in any RULE 4 end-market (a supplier's EV battery-materials lab
-       counts)
-     - a JV, distribution-agreement change, or a deal whose counterparty is not named, in
-       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, above)
-     - financial distress at a customer or competitor — restructuring, going-concern warning,
-       guidance cut — or a head-to-head competitor's earnings beat and guidance raise (a
-       SUPPLIER's bankruptcy, force majeure, or exit is DIRECT, above)
+       counts; a plant SOLD to a named buyer is DIRECT, above)
+     - a JV formed, a new distribution agreement, or a deal whose counterparty is not
+       named, in Americhem's supply chain or sales channel (an acquisition with a NAMED
+       target or buyer is DIRECT, above)
+     - a customer's or a compounding competitor's going-concern warning or guidance cut, or
+       a head-to-head competitor's earnings beat and guidance raise (a material maker's or
+       distributor's bankruptcy, restructuring, or force majeure is DIRECT, above)
      - a launch, new grade, certification, volume milestone, partnership, or development /
        qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
        adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it

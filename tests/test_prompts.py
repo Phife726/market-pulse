@@ -509,7 +509,7 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     5–6 on without literal Americhem linkage — the recalibration's core."""
     rule3 = _rule3()
     for event in ("allocation, outage, or shortage", "capacity opened, closed, expanded",
-                  "M&A, divestiture, or plant sale with a NAMED target", "financial distress", "launch, new grade",
+                  "acquisition, divestiture, plant sale, or JV buy-out with a NAMED target", "financial distress", "launch, new grade",
                   "quarterly results — a supplier's, customer's, or competitor's — that report a price",
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
@@ -581,8 +581,19 @@ def test_rule3_watch_band_points_up_to_direct_never_down():
     assert "DIRECT, below" not in watch
     assert watch.count("DIRECT, above") >= 3
     assert "a price change, force majeure" not in watch
-    assert "financial distress at a customer or competitor" in watch
-    assert "a SUPPLIER's bankruptcy, force majeure, or exit is DIRECT, above" in watch
+    # Pass 2 (2026-09-16): the first reword moved every priced input to
+    # DIRECT and left every named-target deal and supplier bankruptcy at 6 —
+    # the model's rationales ("distribution expansion via acquisition",
+    # "plant sale", "restructuring", "supplier distress") matched WATCH's own
+    # words. Those words now live in DIRECT's list, and WATCH's does not
+    # carry them.
+    for direct_word in ("financial distress", "or sold", "distribution-agreement change"):
+        assert direct_word not in watch, direct_word
+    assert "a material maker's or distributor's bankruptcy, restructuring, or force majeure is DIRECT, above" in watch
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    for own_word in ("Univar acquires H.M. Royal", "distribution expansion via acquisition", "channel consolidation",
+                     "Chapter 11", "supplier distress", "Trinseo files Chapter 11"):
+        assert own_word in direct, own_word
 
 
 def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():

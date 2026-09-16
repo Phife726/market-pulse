@@ -8,6 +8,9 @@ Inventory:
   median wins, failed runs excluded.
 - The labeled set: `expected_band` only on `surface` rows, only known values,
   and the input / output headers agree.
+- `run_replay`: re-scores production rows only — the repo read names the
+  production run mode's visible set (broken from PR #111 until #109: the
+  read gained a required `modes=` the replay never passed).
 """
 import csv
 import pathlib
@@ -15,6 +18,8 @@ import pathlib
 import pytest
 
 import backtest_scorer as bs
+from daily_intelligence_repo import InMemoryIntelligenceRepo
+from run_instant import naive_utcnow
 
 _BACKTEST_DIR = pathlib.Path(__file__).resolve().parents[1] / "backtest"
 _CSV_IN = _BACKTEST_DIR / "market_pulse_scorer_backtest.csv"
@@ -125,3 +130,35 @@ def test_labeled_set_input_and_output_headers_agree():
     fields_out, _ = _read(_CSV_OUT)
     assert fields_in == fields_out
     assert "expected_band" in fields_in and "band_pass" in fields_in
+
+
+# ---------------------------------------------------------------------------
+# run_replay — production rows only, through the real repo seam's fake
+# ---------------------------------------------------------------------------
+
+def test_run_replay_rescores_production_rows_only(tmp_path, monkeypatch):
+    """A QA ingestion's test-mode rows are not what the cron scored; the
+    replay reads the production run mode's visible set and re-scores that."""
+    repo = InMemoryIntelligenceRepo(now=naive_utcnow)
+    repo.upsert_insight({"url_hash": "prod", "headline": "Prod row", "americhem_impact_score": 6,
+                         "article_summary": "s", "source_url": "https://p.example/a",
+                         "trigger_entity": "Dow", "category": "suppliers"}, run_mode="production")
+    repo.upsert_insight({"url_hash": "qa", "headline": "QA row", "americhem_impact_score": 6,
+                         "article_summary": "s", "source_url": "https://q.example/a",
+                         "trigger_entity": "Dow", "category": "suppliers"}, run_mode="test")
+    monkeypatch.setattr("daily_intelligence_repo._repo", lambda: repo)
+    scored: list[str] = []
+
+    def fake_score(config, **kw):
+        scored.append(kw["headline"])
+        return {"score": 7, "rationale": "r", "so_what": "", "signal_type": "Supply Chain", "discard": False}
+
+    monkeypatch.setattr(bs, "score_article", fake_score)
+    out = tmp_path / "replay.csv"
+
+    assert bs.run_replay(days=5, path_out=str(out), workers=1) == 0
+
+    assert scored == ["Prod row"]
+    with out.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    assert [r["url_hash"] for r in rows] == ["prod"]

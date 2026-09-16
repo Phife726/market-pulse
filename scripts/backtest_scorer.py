@@ -350,14 +350,16 @@ def run_csv(path_in: str, path_out: str, workers: int, runs: int = DEFAULT_RUNS)
 
 def run_replay(days: int, path_out: str, workers: int) -> int:
     from daily_intelligence_repo import _repo
-    from run_instant import naive_utcnow
+    from run_instant import PRODUCTION_MODE, naive_utcnow, visible_modes
     from scoring import Scoring
 
     config = _load_config()
     print(f"Insight prompt fingerprint: {_prompt_fingerprint(config)}")
     scorer = Scoring.from_config(config)
     cutoff = naive_utcnow() - timedelta(days=days)
-    rows = _repo().fetch_since(cutoff)
+    # The rows the cron scored: the production run mode's visible set. A QA
+    # ingestion's test-mode rows are not what went out in an email.
+    rows = _repo().fetch_since(cutoff, modes=visible_modes(PRODUCTION_MODE))
     print(f"Fetched {len(rows)} daily_intelligence rows created after {cutoff.isoformat()}")
 
     def _one(r: dict) -> dict:
