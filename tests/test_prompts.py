@@ -564,7 +564,8 @@ def test_rule3_direct_band_is_the_labeled_default_for_its_own_classes():
     rule3 = _rule3()
     assert ("7–8 — DIRECT (the default for an event that names an input price, a supplier's "
             "distress, or a deal target in Americhem's supply chain or channel)") in rule3
-    assert "An event in this list is 7 or 8, never 6" in rule3
+    assert "An event in this list is 7 or 8 — 9 or 10 when it also meets STRATEGIC, below — never 6" in rule3
+    assert "STRATEGIC (9–10) lifts a DIRECT event that meets its bar" in rule3
     assert "6 — WATCH (the default for every other actor's event)" in rule3
     assert "a named INPUT PRICE, deal target, or supplier in distress is DIRECT, above" in rule3
 

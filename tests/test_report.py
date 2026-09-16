@@ -209,6 +209,34 @@ def test_per_segment_cap_still_ranks_materiality_before_recency():
     assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["old_8", "new_6"]
 
 
+def test_per_segment_cap_tie_break_compares_instants_not_offset_strings():
+    """A `published_at` written with a non-UTC offset must rank by the
+    instant it names: 12:00+10:00 is 02:00Z, older than 03:00+00:00, even
+    though it sorts later as text. (Codex review on PR #112.)"""
+    rows = _tied_rows("Healthcare", [
+        ("later_text_older_instant", "2026-09-16T12:00:00+10:00"),
+        ("earlier_text_newer_instant", "2026-09-16T03:00:00+00:00"),
+    ])
+    config = {"reporting": {"visible_impact_threshold": 6,
+                            "max_visible_articles_per_segment": 1}}
+    model = assemble_report(rows, config=config)
+
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["earlier_text_newer_instant"]
+
+
+def test_rank_by_materiality_orders_naive_and_offset_stamps_together():
+    """A naive stamp is read as UTC and ordered against offset stamps
+    without a TypeError; an unparseable one ranks last among equals."""
+    from report import _rank_by_materiality
+    rows = [
+        stub_row("naive_old", 6, headline=_TIED_HEADLINES[0], published_at="2026-09-15T08:00:00"),
+        stub_row("bad", 6, headline=_TIED_HEADLINES[1], published_at="Yesterday", created_at=None),
+        stub_row("aware_new", 6, headline=_TIED_HEADLINES[2], published_at="2026-09-16T08:00:00-04:00"),
+        stub_row("z_mid", 6, headline=_TIED_HEADLINES[3], published_at="2026-09-16T01:00:00Z"),
+    ]
+    assert [r["url_hash"] for r in _rank_by_materiality(rows)] == ["aware_new", "z_mid", "naive_old", "bad"]
+
+
 def test_total_cap_breaks_a_score_tie_by_recency_desc():
     """`max_total_visible_articles` drops the lowest-impact cards first; among
     equals it drops the oldest first, whatever segment they sit in."""

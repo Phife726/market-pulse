@@ -304,11 +304,13 @@ higher. Each floor band is a closed list: put the article in the band whose list
      effect.
 
 The event bands are read in this order: DIRECT (7–8) first, then WATCH (6), then 5 — an
-article that fits DIRECT is DIRECT even if it could also be called generic.
+article that fits DIRECT is DIRECT even if it could also be called generic; STRATEGIC (9–10)
+lifts a DIRECT event that meets its bar.
 
 7–8 — DIRECT (the default for an event that names an input price, a supplier's distress, or
      a deal target in Americhem's supply chain or channel): the event is on an input Americhem
-     buys or a company it trades through. An event in this list is 7 or 8, never 6:
+     buys or a company it trades through. An event in this list is 7 or 8 — 9 or 10 when it
+     also meets STRATEGIC, below — never 6:
      - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
        monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
        swing as buyers regain leverage", "prices could go up again in August", "recyclate

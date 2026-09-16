@@ -14,6 +14,7 @@ Rendering a model whose `synthesis` is empty IS the bullets-only fallback;
 """
 import logging
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Literal, Optional, Sequence
 
 from rapidfuzz.fuzz import token_sort_ratio as _token_sort_ratio
@@ -555,17 +556,23 @@ def _is_usable_additional_article(row: dict, scorer: Scoring) -> bool:
     )
 
 
-def _appendix_recency_token(row: dict) -> str:
+def _appendix_recency_token(row: dict) -> datetime:
     """Recency sort token: published_at when it parses as a datetime, else
-    created_at when it parses, else ''. ISO-8601 timestamptz strings sort
-    lexicographically in chronological order, so descending string order is
-    newest-first. The parse guard keeps a non-ISO scraped value (e.g.
-    'Yesterday') from spuriously ranking above real dates. No clock read."""
+    created_at when it parses, else `datetime.min` (ranks last among
+    equals). The instant is normalized to naive UTC — an offset-carrying
+    stamp is converted, a naive one is read as UTC, the repo's convention —
+    so two stamps written with different offsets compare by the instant they
+    name, not by their text (a `+10:00` string sorts after a newer `+00:00`
+    one lexicographically). The parse guard keeps a non-ISO scraped value
+    (e.g. 'Yesterday') from spuriously ranking above real dates. No clock
+    read."""
     for key in ("published_at", "created_at"):
-        val = row.get(key)
-        if _parse_timestamp(val) is not None:
-            return val.strip()
-    return ""
+        parsed = _parse_timestamp(row.get(key))
+        if parsed is not None:
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            return parsed
+    return datetime.min
 
 
 def _partition_appendix_exclusions(
