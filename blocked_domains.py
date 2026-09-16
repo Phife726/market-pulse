@@ -68,6 +68,15 @@ def _normalize_entry(raw: object) -> str:
             f"security.blocked_domains: {raw!r} is not a bare registrable domain "
             "(spell it like `chargedevs.com` — no scheme, path or whitespace)"
         )
+    if "." not in domain:
+        # A single label (`com`, `.com`) is a public suffix, not a registrable
+        # domain: suffix-matched, it would block every .com source and strip
+        # most of the digest. (A multi-label public suffix such as `co.uk`
+        # still passes — a full check needs the Public Suffix List.)
+        raise BlockedDomainsError(
+            f"security.blocked_domains: {raw!r} is a single label, not a registrable "
+            "domain — it would block every host under that suffix"
+        )
     return domain
 
 
@@ -75,8 +84,23 @@ def from_config(config: Optional[dict]) -> frozenset[str]:
     """The blocked domains out of the parsed `market_pulse_config.yaml` dict,
     normalized to the spelling `host_of` produces. Absent / null / empty list
     means nothing is blocked; any other shape raises `BlockedDomainsError`."""
-    security = (config or {}).get("security") or {}
-    raw = security.get("blocked_domains") if isinstance(security, dict) else None
+    config = config or {}
+    if "blocked_domains" in config:
+        # The likeliest indentation slip: the key de-dented out of `security:`.
+        raise BlockedDomainsError(
+            "blocked_domains must sit under `security:` in market_pulse_config.yaml, "
+            "not at the top level"
+        )
+    security = config.get("security")
+    if security is None:
+        return frozenset()
+    if not isinstance(security, dict):
+        # A present section that is not a mapping (a list one level too high,
+        # a scalar) would otherwise read as "nothing blocked".
+        raise BlockedDomainsError(
+            f"security must be a mapping, got {type(security).__name__}"
+        )
+    raw = security.get("blocked_domains")
     if raw is None:
         return frozenset()
     if not isinstance(raw, (list, tuple)):

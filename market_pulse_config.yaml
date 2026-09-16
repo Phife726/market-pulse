@@ -16,8 +16,9 @@
 # blocked_domain_stored). So blocking the next domain IT reports is an edit
 # here: no deploy, no database access. Bare registrable domains, one per
 # line, suffix-matched (every subdomain counts), with the date IT reported
-# it. A mis-shaped list (a scalar, a pasted URL, an empty entry) FAILS the run
-# at t=0 rather than silently unblocking. Removing a domain re-admits its
+# it. A mis-shaped list (a scalar, a pasted URL, an empty entry, a bare suffix
+# like `com`, or this section mis-indented) FAILS the run at t=0 rather than
+# silently unblocking (or, for `com`, silently blocking everything). Removing a domain re-admits its
 # stored rows to the report; do that only when IT clears it.
 security:
   blocked_domains:
