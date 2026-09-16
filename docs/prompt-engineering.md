@@ -106,8 +106,7 @@ criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
   never moved was framed — by the rubric, by RULE 6's own example So-What
   ("can shift additive channel pricing"), and by every rationale — as
   "channel dynamics".
-- **Pass 4 — the mechanism the model already scores** (`aa6681a868fe`,
-  shipped). The actor paragraph files a distributor (Univar, Brenntag,
+- **Pass 4 — the mechanism the model already scores** (`aa6681a868fe`). The actor paragraph files a distributor (Univar, Brenntag,
   Nexeo, H.M. Royal) as a SUPPLIER that sets the price and allocation of
   what Americhem buys through it; the deal bullet scores a distributor's
   acquisition "like a supplier's price increase, never like a 'channel
@@ -121,7 +120,17 @@ criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
   WATCH by construction). The pass is one row above the 80% line — inside
   the run-to-run noise — so the production watch in issue #109 (`direct > 0`
   on every one of the first five crons, `surfaced_count` inside 8–15) is the
-  real acceptance, not this sample.
+  real acceptance, not this sample. A second run of the identical prompt
+  gave 19/21 and 11/11.
+- **Pass 5 — the review clause** (`6162facea570`, shipped). Codex review of
+  PR #112 read DIRECT's "is 7 or 8, never 6" as forbidding STRATEGIC for a
+  supplier exit or a compounder acquisition; the clause now says "9 or 10
+  when it also meets STRATEGIC, below" and the reading-order sentence says
+  STRATEGIC lifts a DIRECT event that meets its bar. Result: **21/21 direct,
+  37/37 recall, 39/39 precision, distribution 6:15 / 7:8 / 8:18 / 9:1** —
+  the first 9 any run has produced (the EU packaging rules, the whole-market
+  binding regulation STRATEGIC names). Three samples of the pass-4 wording
+  and one of pass 5 all clear the gate; the band above WATCH is open.
 
 Corollary, added to the one above: a class the model has already decided is
 a 6 is not moved by naming it in the higher band's list, by writing its

@@ -157,8 +157,9 @@ zero-I/O purity is untouched.
   before the prompt is reworded — by band membership: DIRECT's heading names
   the default for its own classes, WATCH's covers the rest, and a distributor
   is filed as a supplier so its named acquisition is an input-cost event.
-  Four real-model passes (`docs/prompt-engineering.md`); the shipped prompt
-  (`aa6681a868fe`) put 17/21 `direct` rows at 7–8 with 39/39 precision.
+  Five real-model passes (`docs/prompt-engineering.md`); the shipped prompt
+  (`6162facea570`) put 21/21 `direct` rows at 7–8, 37/37 recall, 39/39
+  precision, and the first 9 the set has seen.
 - **Relevance thresholds** — what a materiality score means for the report:
   **visible** (≥ `visible_impact_threshold`, default 6), **weak-relevance**
   (supporting context, `supporting_impact_threshold ≤ score < visible`), and the
