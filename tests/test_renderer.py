@@ -28,6 +28,7 @@ import insight
 import renderer
 from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, SAMPLES_CAP, UNSAFE_URL_CODES, label_for
 from renderer import (
+    _LOGO_DATA_URI,
     _defang_url,
     _link,
     _render_card,
@@ -1920,3 +1921,31 @@ def test_qa_debug_section_keeps_an_ordinary_sample_url_intact():
     out = _render_qa_debug_section(stub_summary(macro))
     assert url in out
     assert "hxxps" not in out
+
+
+# ---------------------------------------------------------------------------
+# Sender hygiene (2026-09-16): the logo is inlined as a data URI, not loaded
+# from www.americhem.com — Resend's Insights flagged a brand-domain image on
+# a non-brand sender as an impersonation signal. The renderer stays pure: the
+# image is a module-level constant, never a file read at render time.
+# ---------------------------------------------------------------------------
+
+
+def test_logo_is_an_inline_png_data_uri():
+    import base64
+    assert _LOGO_DATA_URI.startswith("data:image/png;base64,")
+    png = base64.b64decode(_LOGO_DATA_URI.split(",", 1)[1], validate=True)
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(png) < 8_000, "keep the inlined logo small: it ships in every email, twice"
+
+
+def test_no_email_loads_anything_from_the_brand_domain():
+    rows = [stub_row("a", 8, commercial_segment="Packaging", headline="Dow lifts PE prices",
+                     source_url="https://www.plasticsnews.com/x")]
+    daily = render_report(assemble_report(rows, config=VISIBLE_6_CFG),
+                          today_str="September 16, 2026", test_mode=True)
+    quiet = render_report(assemble_report([], config=VISIBLE_6_CFG), today_str="September 16, 2026", test_mode=False)
+    assert daily.count('src="data:image/png;base64,') == 2      # header + footer
+    for out in (daily, quiet):                                    # the no-news shell has no logo
+        assert "americhem.com" not in out.lower()
+        assert 'src="http' not in out

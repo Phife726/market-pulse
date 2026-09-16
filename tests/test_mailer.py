@@ -6,6 +6,7 @@ other failure propagates at once) — lives here, at the adapter, instead of
 being re-asserted inside every caller. Consumer tests inject ``FakeMailer``
 and assert on the ``EmailMessage`` that crossed the seam (see test_delivery_engine.py).
 """
+import logging
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -84,6 +85,40 @@ def test_resend_mailer_posts_the_message_to_resend_with_bearer_auth(resend, monk
         "html": "<html>digest</html>",
     }
     assert kwargs["timeout"] == 30
+
+
+def test_resend_mailer_logs_the_resend_message_id_on_the_sent_line(resend, monkeypatch, caplog):
+    """The "Email sent" line carries the Resend message id from the response
+    body, so the next no-email investigation can open the dashboard entry
+    directly (2026-09-16: the search started from a subject line). Never the
+    key, never an address."""
+    _post_returning(monkeypatch, stub_http_response(200, json={"id": "49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}))
+    with caplog.at_level(logging.INFO):
+        resend.send(MESSAGE)
+    sent = [r for r in caplog.records if "Email sent" in r.getMessage()]
+    assert len(sent) == 1
+    line = sent[0].getMessage()
+    assert "49a3999c-0ce1-4ea6-ab68-afcd6dc2e794" in line
+    assert "re_test_key" not in caplog.text
+    assert "a@test.com" not in caplog.text and "b@test.com" not in caplog.text
+
+
+@pytest.mark.parametrize("body", [{}, {"id": None}, {"id": 7}], ids=["no-id", "null-id", "non-string-id"])
+def test_resend_mailer_sent_line_survives_a_body_without_an_id(resend, monkeypatch, caplog, body):
+    _post_returning(monkeypatch, stub_http_response(200, json=body))
+    with caplog.at_level(logging.INFO):
+        resend.send(MESSAGE)
+    line = next(r.getMessage() for r in caplog.records if "Email sent" in r.getMessage())
+    assert "id: ?" in line
+
+
+def test_resend_mailer_sent_line_survives_an_unparseable_body(resend, monkeypatch, caplog):
+    resp = stub_http_response(200, text="not json")
+    resp.json.side_effect = ValueError("no json")
+    _post_returning(monkeypatch, resp)
+    with caplog.at_level(logging.INFO):
+        resend.send(MESSAGE)            # a 200 is a sent email whatever the body says
+    assert any("Email sent" in r.getMessage() and "id: ?" in r.getMessage() for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
