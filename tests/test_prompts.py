@@ -508,13 +508,13 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     """The event classes a named customer / supplier / competitor can score
     5–6 on without literal Americhem linkage — the recalibration's core."""
     rule3 = _rule3()
-    for event in ("price change, force majeure", "capacity opened, closed, expanded",
+    for event in ("allocation, outage, or shortage", "capacity opened, closed, expanded",
                   "M&A, divestiture, or plant sale with a NAMED target", "financial distress", "launch, new grade",
                   "quarterly results — a supplier's, customer's, or competitor's — that report a price",
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
         assert event in rule3, event
-    assert "A named counterparty, plant, grade, input, figure, or effective date confirms 6" in rule3
+    assert "A named counterparty, plant, grade, or effective date confirms 6 over 5" in rule3
     assert "5 — DEMAND PRINT, or a generic event" in rule3
     assert "These two only; every other statistic is band 2" in rule3 and "ISM Manufacturing PMI" in rule3
 
@@ -547,9 +547,42 @@ def test_rule3_watch_band_sits_above_the_template_band_under_production_threshol
     row and a WATCH row can never share a score — with the production
     thresholds (3 / 6) the template band is 3–4."""
     system = _insight_spec(_PROD_STYLE_CFG).system
-    assert "6 — WATCH (the default for an actor's event)" in system and "5 — DEMAND PRINT" in system
+    assert "6 — WATCH (the default for every other actor's event)" in system and "5 — DEMAND PRINT" in system
     _, template_high = prompts.low_exposure_score_band(Scoring.from_config(_PROD_STYLE_CFG))
     assert template_high < 5
+
+
+def test_rule3_direct_band_is_the_labeled_default_for_its_own_classes():
+    """Issue #109: six production crons after PR #99 put 136 rows at 6 and
+    none at 8+, with named-target M&A and priced input moves — events the
+    DIRECT list names verbatim — all at 6. `docs/prompt-engineering.md`:
+    this model applies a heading's label more strongly than the bullets
+    under it, and only WATCH's heading said "default". DIRECT's heading now
+    labels the default for its own classes, WATCH's covers the rest, and the
+    sentence that closed WATCH no longer tells the model a named input or
+    figure "confirms 6"."""
+    rule3 = _rule3()
+    assert ("7–8 — DIRECT (the default for an event that names an input price, a supplier's "
+            "distress, or a deal target in Americhem's supply chain or channel)") in rule3
+    assert "An event in this list is 7 or 8, never 6" in rule3
+    assert "6 — WATCH (the default for every other actor's event)" in rule3
+    assert "a named INPUT PRICE, deal target, or supplier in distress is DIRECT, above" in rule3
+
+
+def test_rule3_watch_band_points_up_to_direct_never_down():
+    """DIRECT has been listed above WATCH since pass 9 of the recalibration,
+    but WATCH's carve-outs still said "DIRECT, below" — a pointer to a band
+    that is not there. Every carve-out now points the right way, and WATCH's
+    own lists no longer restate DIRECT's members (price change, force
+    majeure, a supplier's bankruptcy) for the model to match first."""
+    rule3 = _rule3()
+    watch = rule3[rule3.index("6 — WATCH"):rule3.index("5 — DEMAND PRINT")]
+    # (Band 2's own "it is DIRECT, below" is right: band 2 is listed above DIRECT.)
+    assert "DIRECT, below" not in watch
+    assert watch.count("DIRECT, above") >= 3
+    assert "a price change, force majeure" not in watch
+    assert "financial distress at a customer or competitor" in watch
+    assert "a SUPPLIER's bankruptcy, force majeure, or exit is DIRECT, above" in watch
 
 
 def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():

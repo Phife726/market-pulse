@@ -304,7 +304,9 @@ higher. Each floor band is a closed list: put the article in the band whose list
 The event bands are read in this order: DIRECT (7–8) first, then WATCH (6), then 5 — an
 article that fits DIRECT is DIRECT even if it could also be called generic.
 
-7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
+7–8 — DIRECT (the default for an event that names an input price, a supplier's distress, or
+     a deal target in Americhem's supply chain or channel): the event is on an input Americhem
+     buys or a company it trades through. An event in this list is 7 or 8, never 6:
      - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
        monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
        swing as buyers regain leverage", "prices could go up again in August" — with or
@@ -322,17 +324,18 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        masterbatch / compounding competitor head-to-head with a stated quantity, date, or
        plant
 
-6 — WATCH (the default for an actor's event): a VALUE-CHAIN ACTOR does something
+6 — WATCH (the default for every other actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
-     - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
-       pigment, additive, or feedstock (with a named input or a figure it is DIRECT, below)
+     - an allocation, outage, or shortage on a polymer, resin, pigment, additive, or feedstock
+       with no price move stated (a price change, or a supplier's force majeure, is DIRECT, above)
      - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
        capability build — in any RULE 4 end-market (a supplier's EV battery-materials lab
        counts)
      - a JV, distribution-agreement change, or a deal whose counterparty is not named, in
-       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, below)
-     - financial distress — bankruptcy, restructuring, going-concern warning, guidance
-       cut — or a head-to-head competitor's earnings beat and guidance raise
+       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, above)
+     - financial distress at a customer or competitor — restructuring, going-concern warning,
+       guidance cut — or a head-to-head competitor's earnings beat and guidance raise (a
+       SUPPLIER's bankruptcy, force majeure, or exit is DIRECT, above)
      - a launch, new grade, certification, volume milestone, partnership, or development /
        qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
        adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
@@ -344,14 +347,15 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
      - quarterly results — a supplier's, customer's, or competitor's — that report a price,
        volume, or capacity change for an input or a RULE 4 end-market (an input PRICE
-       change reported in results is DIRECT, below); a head-to-head competitor's (Avient,
+       change reported in results is DIRECT, above); a head-to-head competitor's (Avient,
        Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet) beat-and-raise
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
        US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
        effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),
        even when reported through an explainer. NOT a guide, roundup, or explainer that
        sets no new obligation, and NOT a settlement or consent decree (band 3).
-     A named counterparty, plant, grade, input, figure, or effective date confirms 6.
+     A named counterparty, plant, grade, or effective date confirms 6 over 5; a named INPUT
+     PRICE, deal target, or supplier in distress is DIRECT, above.
 
 5 — DEMAND PRINT, or a generic event that fits neither band above. (a) The two macro prints that matter to a compounder:
      the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
