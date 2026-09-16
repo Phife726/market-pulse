@@ -126,6 +126,107 @@ def test_assemble_report_total_articles_cap():
     assert model.surfaced_count == 10
 
 
+
+# Issue #109: every card scores 6, so the per-segment cap used to pick by
+# storage order (`fetch_since` sorts by score only — ties come back in
+# targets.yaml position). The cap now breaks a tie by recency desc, the
+# ordering the appendix and Watch List already use.
+
+_TIED_HEADLINES = [
+    "Hospital network merger squeezes specialty polymer volumes",
+    "FDA clears new implantable-grade compound for cardiac devices",
+    "Aging population drives record demand for medical-grade resins",
+    "Generic drug expansion pressures premium plastics pricing",
+    "Supply disruption at key resin plant delays surgical kit output",
+    "Pigment supplier lifts TiO2 prices for coatings customers",
+    "Distributor buys regional additives channel in the Midwest",
+    "Automaker idles trim line as resin allocation tightens",
+]
+
+
+def _tied_rows(segment: str, hashes_and_dates: list, *, offset: int = 0) -> list[dict]:
+    """Rows in one segment all scored 6, differing only in publish date.
+    `offset` picks distinct headlines per segment so the exact-duplicate rule
+    never fires across segments."""
+    return [
+        stub_row(h, 6, commercial_segment=segment, headline=_TIED_HEADLINES[offset + i],
+                 published_at=date, created_at="2026-09-16T10:00:00+00:00")
+        for i, (h, date) in enumerate(hashes_and_dates)
+    ]
+
+
+_TIE_CAP_CFG = {"reporting": {"visible_impact_threshold": 6,
+                               "max_visible_articles_per_segment": 2}}
+
+
+def test_per_segment_cap_breaks_a_score_tie_by_recency_desc():
+    """Two segments' worth of rows tied at 6: each segment keeps its two
+    newest rows (published_at, else created_at), not the first two stored."""
+    healthcare = _tied_rows("Healthcare", [
+        ("h_old", "2026-09-10T08:00:00+00:00"),
+        ("h_mid", "2026-09-14T08:00:00+00:00"),
+        ("h_new", "2026-09-16T08:00:00+00:00"),
+    ])
+    packaging = _tied_rows("Packaging", [
+        ("p_mid", "2026-09-13T08:00:00+00:00"),
+        ("p_old", "2026-09-09T08:00:00+00:00"),
+        ("p_new", "2026-09-15T08:00:00+00:00"),
+    ], offset=4)
+    model = assemble_report(healthcare + packaging, config=_TIE_CAP_CFG)
+
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["h_new", "h_mid"]
+    assert [a["url_hash"] for a in model.groups["Packaging"]] == ["p_new", "p_mid"]
+    assert appendix_hashes(model) == ["h_old", "p_old"]
+
+
+def test_per_segment_cap_tie_break_is_stable_across_input_order():
+    """The choice must not depend on the order the repository returned the
+    rows: the reversed input yields the same cards in the same order."""
+    rows = _tied_rows("Healthcare", [
+        ("h_old", "2026-09-10T08:00:00+00:00"),
+        ("h_new", "2026-09-16T08:00:00+00:00"),
+        ("h_mid", "2026-09-14T08:00:00+00:00"),
+    ])
+    forward = assemble_report(rows, config=_TIE_CAP_CFG)
+    backward = assemble_report(list(reversed(rows)), config=_TIE_CAP_CFG)
+
+    assert [a["url_hash"] for a in forward.groups["Healthcare"]] == ["h_new", "h_mid"]
+    assert [a["url_hash"] for a in backward.groups["Healthcare"]] == ["h_new", "h_mid"]
+
+
+def test_per_segment_cap_still_ranks_materiality_before_recency():
+    """Recency is the tie-break only: an older 8 outranks a newer 6."""
+    rows = [
+        stub_row("old_8", 8, commercial_segment="Healthcare", headline=_TIED_HEADLINES[0],
+                 published_at="2026-09-01T08:00:00+00:00"),
+        stub_row("new_6", 6, commercial_segment="Healthcare", headline=_TIED_HEADLINES[1],
+                 published_at="2026-09-16T08:00:00+00:00"),
+        stub_row("mid_6", 6, commercial_segment="Healthcare", headline=_TIED_HEADLINES[2],
+                 published_at="2026-09-10T08:00:00+00:00"),
+    ]
+    model = assemble_report(rows, config=_TIE_CAP_CFG)
+
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["old_8", "new_6"]
+
+
+def test_total_cap_breaks_a_score_tie_by_recency_desc():
+    """`max_total_visible_articles` drops the lowest-impact cards first; among
+    equals it drops the oldest first, whatever segment they sit in."""
+    rows = (
+        _tied_rows("Healthcare", [("h_old", "2026-09-10T08:00:00+00:00"),
+                                  ("h_new", "2026-09-16T08:00:00+00:00")])
+        + _tied_rows("Packaging", [("p_old", "2026-09-09T08:00:00+00:00"),
+                                   ("p_new", "2026-09-15T08:00:00+00:00")], offset=4)
+    )
+    config = {"reporting": {"visible_impact_threshold": 6,
+                            "max_total_visible_articles": 3}}
+    model = assemble_report(rows, config=config)
+
+    kept = {a["url_hash"] for arts in model.groups.values() for a in arts}
+    assert kept == {"h_new", "h_old", "p_new"}
+    assert appendix_hashes(model) == ["p_old"]
+
+
 # ===========================================================================
 # Additional Articles appendix — model field and cap config
 # ===========================================================================

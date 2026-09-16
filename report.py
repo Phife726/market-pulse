@@ -597,25 +597,38 @@ def _partition_appendix_exclusions(
     return eligible, excluded
 
 
-def _rank_optional_rows(pool: list[dict]) -> list[dict]:
-    """The one ordering for the optional sections (Watch List, appendix).
-
-    Deterministic (applied as stable sorts, least-significant first):
-    url_hash asc -> normalized headline asc -> recency desc -> effective impact
-    desc -> non-template before template. So cap overflow (score 6+) precedes
-    every score-5, which precedes every score-4; ties break by recency then
-    headline then hash — and every RULE 6 low-exposure template row
-    (`_is_low_exposure_template`) ranks after every non-template row whatever
-    its score, so template rows fill a section only when there is room and
-    are the first its cap pushes out. Production data (2026-08-27) showed the
-    appendix cap binds daily and is decided within the score-4 tier by
-    recency, where macro-group template rows — stored last, so newest — would
-    otherwise displace segment-specific rows. Returns a new list."""
-    ranked = list(pool)
+def _rank_by_materiality(rows: list[dict]) -> list[dict]:
+    """The one materiality ordering every capped section shares: effective
+    impact desc, then recency desc (`published_at`, else `created_at`), then
+    normalized headline asc, then url_hash asc — applied as stable sorts,
+    least-significant first. Deterministic in the input order: two rows never
+    compare equal unless they share a hash, so the cards a cap keeps do not
+    depend on the order the repository returned the rows (issue #109: with
+    every card scored 6, `fetch_since`'s score-only sort returned ties in
+    storage order — targets.yaml position — and that decided the cap).
+    Returns a new list."""
+    ranked = list(rows)
     ranked.sort(key=lambda r: ((r.get("headline") or "").strip().casefold(),
                                r.get("url_hash") or ""))
     ranked.sort(key=_appendix_recency_token, reverse=True)
     ranked.sort(key=lambda r: _effective_impact(r), reverse=True)
+    return ranked
+
+
+def _rank_optional_rows(pool: list[dict]) -> list[dict]:
+    """The one ordering for the optional sections (Watch List, appendix):
+    `_rank_by_materiality`, then non-template before template.
+
+    So cap overflow (score 6+) precedes every score-5, which precedes every
+    score-4; ties break by recency then headline then hash — and every RULE 6
+    low-exposure template row (`_is_low_exposure_template`) ranks after every
+    non-template row whatever its score, so template rows fill a section only
+    when there is room and are the first its cap pushes out. Production data
+    (2026-08-27) showed the appendix cap binds daily and is decided within the
+    score-4 tier by recency, where macro-group template rows — stored last, so
+    newest — would otherwise displace segment-specific rows. Returns a new
+    list."""
+    ranked = _rank_by_materiality(pool)
     ranked.sort(key=_is_low_exposure_template)
     return ranked
 
@@ -818,21 +831,22 @@ def assemble_report(
         _group_by_commercial_segment(visible_pool), display_map
     )
 
-    # 4. Per-segment cap (highest-impact articles first within each group).
-    #    Sort even when uncapped so within-segment order stays materiality-desc.
+    # 4. Per-segment cap (highest-impact articles first within each group; a
+    #    score tie goes to the newer row — `_rank_by_materiality`, the ordering
+    #    the Watch List and appendix share). Rank even when uncapped so
+    #    within-segment order stays materiality-desc.
     groups = {
-        seg: sorted(arts, key=lambda x: _effective_impact(x), reverse=True)[:max_per_segment]
+        seg: _rank_by_materiality(arts)[:max_per_segment]
         for seg, arts in groups_full.items()
     }
 
-    # 5. Total visible cap across all groups (drop lowest-impact until count <= cap).
+    # 5. Total visible cap across all groups (drop lowest-impact — among
+    #    equals, oldest — until count <= cap).
     if max_total_visible is not None and _visible_card_count(groups) > max_total_visible:
-        all_visible = sorted(
-            [(seg, a) for seg, arts in groups.items() for a in arts],
-            key=lambda kv: _effective_impact(kv[1]),
-            reverse=True,
+        all_visible = _rank_by_materiality(
+            [a for arts in groups.values() for a in arts]
         )[:max_total_visible]
-        selected_hashes = {a.get("url_hash") for _, a in all_visible}
+        selected_hashes = {a.get("url_hash") for a in all_visible}
         groups = {seg: [a for a in arts if a.get("url_hash") in selected_hashes]
                   for seg, arts in groups.items()}
         groups = {seg: arts for seg, arts in groups.items() if arts}
