@@ -46,6 +46,14 @@ Two YAML files control the pipeline; no Python changes are required to retune ei
 
 - **`market_pulse_config.yaml`** — how to report. Controls report tuning (`visible_impact_threshold`, per-segment cap, total-article cap) and the strategic-segment taxonomy that the LLM uses to classify articles. Raise `visible_impact_threshold` if the report feels noisy; lower it if too sparse.
 
+  **Security block.** The same file carries `security.blocked_domains`, the domains Americhem IT has flagged as compromised. A link to one anywhere in the digest can get the whole email quarantined at the recipient mail gateway (this happened on 2026-09-16). Adding a domain here is a config edit with no deploy and no database work: new articles from it are never fetched, and articles already stored are kept out of every part of the email from the next delivery. Bare domains only (`example.com`, which also covers its subdomains), one per line with a dated comment; a mis-shaped entry deliberately fails the next run at startup rather than silently unblocking.
+
+  ```yaml
+  security:
+    blocked_domains:
+      - chargedevs.com      # 2026-09-16: malicious injection code (IT sandbox analysis)
+  ```
+
 ---
 
 ## 🔐 Environment Variables (The Constraints)
@@ -63,6 +71,7 @@ To execute this pipeline, the following secrets must be injected into the enviro
 | `SENDER_EMAIL` | Verified sending address (e.g., `alerts@ami-pulse.com`) |
 | `RECIPIENT_EMAILS` | Comma-separated list of production inboxes |
 | `TEST_RECIPIENT_EMAILS` | Comma-separated QA inboxes; used only by the test workflow |
+| `SAFE_BROWSING_API_KEY` | **Optional.** Google Safe Browsing Lookup API key. When set, every candidate URL is checked before it is scraped and every URL the email could render is checked before the email is built; a flagged page is dropped. Absent = the check is off; any failure degrades to "no check" with a warning and never fails a run. |
 | `ZOOMINFO_CLIENT_ID` | ZoomInfo OAuth client id (**preferred** auth — Client Credentials) |
 | `ZOOMINFO_CLIENT_SECRET` | ZoomInfo OAuth client secret (**preferred** auth — Client Credentials) |
 | `ZOOMINFO_BEARER_TOKEN` | ZoomInfo static bearer token — **fallback** for local/dev when no OAuth client is configured |
@@ -93,6 +102,12 @@ These are GitHub **repository variables** (Settings → Secrets and variables �
 
 ---
 
+## 🚑 When the run is green but nobody got the email
+
+`docs/runbooks/no-email-but-green-run.md` is the on-call path: which log lines to read, what the Resend dashboard can and cannot tell you, why "Delivered" is only acceptance at the recipient's mail gateway, what to ask Americhem IT for, how to re-send the day without re-running ingestion, and how to block a domain.
+
+---
+
 ## ⏱️ Automation Schedule
 
 The pipeline is orchestrated by `.github/workflows/market_pulse.yml`.
@@ -100,7 +115,11 @@ The pipeline is orchestrated by `.github/workflows/market_pulse.yml`.
 - **Execution Time:** Monday through Friday at 10:00 UTC (6:00 AM EDT).
 - **Hard Limits:** The ingestion engine runs under a run budget (`run_budget.py`): `MAX_DAILY_SCRAPES = 180` (sized to paid-tier Serper/Firecrawl/OpenAI subscriptions) and a `PIPELINE_DEADLINE_SECONDS = 1800` wall-clock cutoff so the run completes inside the 40-minute GitHub Actions ceiling, with a tail reserve that stops starting entity targets once the remaining budget falls to what the concept/macro groups still ahead need.
 
-To manually trigger a run, navigate to the **Actions** tab in GitHub, select the workflow, and click **Run workflow**.
+To manually trigger a run, navigate to the **Actions** tab in GitHub, select the workflow, and click **Run workflow**. The production workflow's `run_ingestion` input, set to `false`, re-sends the day's report from the rows already stored without discovering, scraping or scoring anything again — the delivery-only re-send:
+
+```bash
+gh workflow run market_pulse.yml --ref main -f run_ingestion=false
+```
 
 A second workflow — `.github/workflows/market_pulse_test.yml` — runs the pipeline in **test mode**: it sets `MARKET_PULSE_RUN_MODE=test`, routes mail to `TEST_RECIPIENT_EMAILS` instead of the production list, and marks both the subject (`[TEST]`) and HTML body (amber "TEST RUN" banner). Inputs let you skip ingestion or skip the email send, so you can re-render the existing day's rows without re-billing the APIs.
 
