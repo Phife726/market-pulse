@@ -6,6 +6,15 @@ on:
     # as a high-load window where scheduled events may be delayed or dropped entirely.
     - cron: '17 10 * * 1-5'
   workflow_dispatch:
+    inputs:
+      run_ingestion:
+        description: "Run ingestion before delivery? Set false to re-send the day's report from the rows already stored (no discovery/scrape/LLM spend; the executive summary ingestion wrote is kept)."
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -43,6 +52,10 @@ jobs:
         run: pytest tests/
 
       - name: Run ingestion_engine.py
+        # Skipped only by a manual dispatch with run_ingestion=false — a
+        # delivery-only re-send. A skipped step does not fail `success()`, so
+        # delivery still runs; a *failed* ingestion still skips it (see below).
+        if: ${{ github.event.inputs.run_ingestion != 'false' }}
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
