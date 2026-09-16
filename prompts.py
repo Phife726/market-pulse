@@ -293,9 +293,9 @@ higher. Each floor band is a closed list: put the article in the band whose list
      never one company's settlement.
 
 4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; a bare earnings beat or
-     miss — results that report NO price, volume, or capacity change (results that DO
-     report one are band 6, or DIRECT when it is an input price: Dow's "PE price up 20%"
-     is 7, never 4); results from a prior fiscal year; an end product that merely USES a
+     miss — results that report NO price, volume, capacity, or guidance change (results
+     that DO report one are band 6, or DIRECT when it is an input price: Dow's "PE price
+     up 20%" is 7, never 4); results from a prior fiscal year; an end product that merely USES a
      named polymer, however it is cleared or certified (an FDA-cleared tray made of Ultem,
      a sponge, an analyzer); a corporate spin-off or IT project; RULE 7's
      uncertain-relevance exit. Never a WATCH event that merely lacks a stated Americhem
@@ -309,8 +309,9 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
      buys or a company it trades through. An event in this list is 7 or 8, never 6:
      - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
        monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
-       swing as buyers regain leverage", "prices could go up again in August" — with or
-       without a figure: these are input prices, never macro statistics
+       swing as buyers regain leverage", "prices could go up again in August", "recyclate
+       prices pressured by cheaper virgin material" — with or without a figure: these are
+       input prices, never macro statistics
      - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
        caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
        PE price +20%; Chemours: TiO2 +2%)
@@ -322,14 +323,18 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        product line (Univar acquires Interpur; Univar acquires H.M. Royal), a pigment or
        additive maker buying a plant (Sudarshan buys Clariant's dyes plant), a buyer taking a
        supplier's business (Mutares buys SABIC's ETP business), a customer buying out a JV
-       partner: "distribution expansion via acquisition", "channel consolidation", and a
-       plant's "supply ownership change" are DIRECT effects, 7 or 8
+       partner: a "distributor acquisition", "channel expansion via acquisition",
+       "distribution expansion via acquisition", "channel consolidation", and a "plant
+       divestiture" that changes supply ownership are DIRECT events, score 8 whichever
+       region the deal is in — Americhem buys and sells in North America, EMEA, and Asia,
+       so an EMEA distributor deal or a Swiss plant sale is as DIRECT as a US one
      - a material maker's or distributor's financial distress — a Chapter 11 or other
        bankruptcy filing, administration, a court's mediation order or ruling in the case,
        restructuring, force majeure, allocation, or exit (Trinseo files Chapter 11; Trinseo's
        results amid restructuring and force majeure): "supplier distress" is DIRECT, 7 or 8
-     - a named customer program; a masterbatch / compounding competitor head-to-head with a
-       stated quantity, date, or plant
+     - a customer's program award or material qualification that names the material; a
+       masterbatch / compounding competitor head-to-head with a stated quantity, date, or
+       plant
 
 6 — WATCH (the default for every other actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:

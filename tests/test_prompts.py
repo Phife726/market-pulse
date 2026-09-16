@@ -596,6 +596,24 @@ def test_rule3_watch_band_points_up_to_direct_never_down():
         assert own_word in direct, own_word
 
 
+def test_rule3_named_target_deals_carry_their_own_score_and_region():
+    """Pass 3 (2026-09-16): with the deal class named in DIRECT in the
+    model's words, the same story still split 2/2 across near-identical rows
+    and every EMEA deal stayed at 6 — the class sat on the 6/7 line. The
+    margin lever from `docs/prompt-engineering.md`: the bullet states its own
+    score, two notches above the line, and says the region does not lower it.
+    And a competitor's guidance raise is not a 'bare' result (band 4), so a
+    beat-and-raise cannot be floored before WATCH reads it."""
+    rule3 = _rule3()
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    assert "score 8 whichever region the deal is in" in direct
+    for own_word in ("distributor acquisition", "channel expansion via acquisition", "plant divestiture",
+                     "recyclate prices pressured by cheaper virgin material"):
+        assert own_word in direct, own_word
+    floor4 = rule3[rule3.index("4 — THIN"):rule3.index("The event bands are read")]
+    assert "results that report NO price, volume, capacity, or guidance change" in floor4
+
+
 def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():
     """The other half of the floor: RULE 6 offered the template as the honest
     exit for any article that did not spell out an Americhem effect. It now
