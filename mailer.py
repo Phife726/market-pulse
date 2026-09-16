@@ -97,10 +97,22 @@ class ResendMailer:
                 resp.raise_for_status()
 
             logger.info(
-                "Email sent — subject: '%s' | recipients: %d",
-                message.subject, len(message.recipients),
+                "Email sent — subject: '%s' | recipients: %d | id: %s",
+                message.subject, len(message.recipients), _message_id(resp),
             )
             return
+
+
+def _message_id(resp: "requests.Response") -> str:
+    """The Resend message id from a 2xx body (`{"id": "..."}`), or "?" —
+    the dashboard handle the next no-email investigation opens first
+    (2026-09-16: it started from a subject line). A 2xx is a sent email
+    whatever the body says, so an unreadable body is never an error here."""
+    try:
+        value = resp.json().get("id")
+    except (ValueError, AttributeError):
+        return "?"
+    return value if isinstance(value, str) and value else "?"
 
 
 class FakeMailer:

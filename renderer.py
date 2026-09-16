@@ -44,8 +44,79 @@ _BRAND_NAVY       = "#1B3A6B"
 _BRAND_NAVY_DARK  = "#152E56"
 _BRAND_GREEN      = "#7FB069"
 _BRAND_AMBER      = "#D97706"
-_LOGO_URL = (
-    "https://www.americhem.com/wp-content/uploads/2025/07/logo-header.webp"
+# The logo travels inside the email as a data URI, never loaded from
+# www.americhem.com: Resend's Insights read a brand-domain image on a
+# non-brand sender as an impersonation signal (2026-09-16). A 280 px,
+# 64-colour palette PNG — 5.6 KB as base64, shipped twice per email; PNG
+# because Outlook renders no WebP. Regenerate with scripts/embed_logo.py
+# from assets/americhem-logo-280.png. A module-level constant keeps the
+# renderer pure (no file read at render time).
+_LOGO_DATA_URI = (
+    "data:image/png;base64,"
+    "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"
+    "fkVZ+nQ/Fv0vpM+h4zXDJ3gAAAAASUVORK5CYII="
 )
 
 # ---------------------------------------------------------------------------
@@ -844,7 +915,7 @@ def render_report(
                 <table width="100%" cellpadding="0" cellspacing="0" border="0">
                   <tr>
                     <td style="width:1%;white-space:nowrap;padding-right:16px;">
-                      <img src="{_LOGO_URL}" alt="Americhem" width="140"
+                      <img src="{_LOGO_DATA_URI}" alt="Americhem" width="140"
                            style="display:block;height:auto;max-height:40px;background-color:#ffffff;padding:3px 8px;border-radius:3px;">
                     </td>
                     <td style="width:1%;white-space:nowrap;padding-right:16px;">
@@ -890,7 +961,7 @@ def render_report(
                       Generated by <strong style="color:{_BRAND_NAVY};">Americhem Market-Pulse</strong> &nbsp;&middot;&nbsp; Powered by OpenAI &amp; Supabase
                     </td>
                     <td align="right">
-                      <img src="{_LOGO_URL}" alt="Americhem" width="80" style="display:block;height:auto;opacity:0.4;">
+                      <img src="{_LOGO_DATA_URI}" alt="Americhem" width="80" style="display:block;height:auto;opacity:0.4;">
                     </td>
                   </tr>
                 </table>

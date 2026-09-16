@@ -27,7 +27,8 @@ production + in-memory adapters (tests inject the fake at the consumer):
   digest, transport-agnostic. Adapters: `ResendMailer` (owns the Resend API
   key `SMTP_PASS` — legacy name —, the endpoint, the retry policy: transient
   HTTP codes retry with exponential backoff, everything else propagates at
-  once) and `FakeMailer` (records every message; `fail_with` raises). The
+  once; its "Email sent" line logs the Resend message id) and `FakeMailer`
+  (records every message; `fail_with` raises). The
   consumer, `delivery_engine.send_email(html, *, run)`, keeps the
   *addressing* — it reads `SENDER_EMAIL` / `RECIPIENT_EMAILS` (the only source
   of the `to:` list) and composes the subject from the **run instant** — then
