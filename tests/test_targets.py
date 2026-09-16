@@ -796,6 +796,20 @@ def test_config_has_commercial_segments_and_signal_types():
     assert "masterbatch" in sup["plastics_relevance_terms"]
 
 
+def test_config_blocks_the_domain_that_quarantined_the_2026_09_16_digest():
+    """The security block is config, not code (blocked_domains.py reads
+    `security.blocked_domains`): the shipped file must carry chargedevs.com —
+    the compromised domain whose linked card got the whole 2026-09-16 digest
+    quarantined as malware at Americhem's Proofpoint gateway — and every
+    entry must load through the one reader without a shape error."""
+    from blocked_domains import from_config
+
+    cfg = _real_config_yaml()
+    blocked = from_config(cfg)
+    assert "chargedevs.com" in blocked
+    assert blocked == frozenset(d.lower() for d in cfg["security"]["blocked_domains"])
+
+
 def test_config_pins_the_appendix_levers_and_the_prompt_band():
     """The production YAML is the only lever for appendix breadth (PR #62) and
     the RULE 6 template band is derived from it (issue #65): pin both so a

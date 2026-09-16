@@ -1716,3 +1716,143 @@ def test_generic_market_report_publisher_check_honours_the_rule_switch():
     cfg = {**VISIBLE_6_CFG, "delivery_suppression": {"enable_generic_market_report": False}}
     model = assemble_report([row], config=cfg)
     assert [a["url_hash"] for a in model.groups["Packaging"]] == ["dom"]
+
+
+# ===========================================================================
+# Rule 9 (2026-09-16): the security block on a STORED row — the
+# delivery-side half of blocked_domains.py. A row stored before IT reported
+# its domain must never render (card, Watch row, appendix row) or be cited;
+# the list is config-driven (security.blocked_domains), so blocking the
+# next domain is an edit, not a deploy plus hand surgery on Supabase.
+# ===========================================================================
+
+from blocked_domains import BlockedDomainsError
+from report import CitationSet, _apply_delivery_suppression
+
+_BLOCK_CFG = {
+    "reporting": {
+        "visible_impact_threshold": 6,
+        "supporting_impact_threshold": 3,
+        "watch_impact_threshold": 5,
+    },
+    "security": {"blocked_domains": ["chargedevs.com"]},
+}
+
+
+def _everywhere(model) -> set:
+    """Every url_hash the model would render anywhere."""
+    return ({a["url_hash"] for arts in model.groups.values() for a in arts}
+            | {w["url_hash"] for w in model.watch_items}
+            | {a["url_hash"] for a in model.additional_articles})
+
+
+@pytest.mark.parametrize("score", [8, 5, 3], ids=["card-band", "watch-band", "appendix-band"])
+def test_blocked_domain_row_renders_nowhere_whatever_it_scored(score):
+    row = stub_row("bad", score, commercial_segment="Packaging", headline="LANXESS opens battery lab",
+                   source_url="https://chargedevs.com/newswire/lanxess-battery-lab/")
+    keep = stub_row("ok", score, commercial_segment="Packaging", headline="Dow lifts PE prices",
+                    source_url="https://www.plasticsnews.com/x")
+    model = assemble_report([row, keep], config=_BLOCK_CFG)
+    assert "bad" not in _everywhere(model)
+    assert "ok" in _everywhere(model)
+    assert model.ledger.breakdown.get("blocked_domain_stored") == 1
+    assert [s.url for s in model.ledger.samples] == ["https://chargedevs.com/newswire/lanxess-battery-lab/"]
+
+
+def test_blocked_domain_rule_matches_subdomains_and_terminal_dots():
+    rows = [
+        stub_row("sub", 8, commercial_segment="Packaging", headline="A",
+                 source_url="https://www.chargedevs.com/story"),
+        stub_row("dot", 8, commercial_segment="Packaging", headline="B",
+                 source_url="https://CHARGEDEVS.com./story"),
+        stub_row("look", 8, commercial_segment="Packaging", headline="C",
+                 source_url="https://notchargedevs.com/story"),
+    ]
+    model = assemble_report(rows, config=_BLOCK_CFG)
+    assert _everywhere(model) == {"look"}
+    assert model.ledger.breakdown.get("blocked_domain_stored") == 2
+
+
+def test_blocked_domain_rule_is_config_driven():
+    """No security.blocked_domains → nothing is blocked (the rule has no
+    built-in list; the config is the one definition)."""
+    row = stub_row("bad", 8, commercial_segment="Packaging", headline="A",
+                   source_url="https://chargedevs.com/story")
+    model = assemble_report([row], config=VISIBLE_6_CFG)
+    assert _everywhere(model) == {"bad"}
+    assert "blocked_domain_stored" not in model.ledger.breakdown
+
+
+def test_blocked_domain_rule_is_last_so_every_other_reason_wins_first_match():
+    """Rule 9 is last: a blocked row that is also a product listing is
+    counted once, as a product listing — the row is dropped either way."""
+    row = _row("both", 8, headline="Some product",
+               source_url="https://chargedevs.com/product/thing")
+    cfg = {**_supp_config(), **_BLOCK_CFG}
+    kept, ledger = _apply_delivery_suppression([row], cfg)
+    assert kept == []
+    assert dict(ledger.breakdown) == {"product_listing": 1}
+
+
+def test_apply_delivery_suppression_reads_the_block_list_from_config():
+    row = _row("bad", 8, headline="LANXESS opens battery lab",
+               source_url="https://chargedevs.com/newswire/x/")
+    cfg = {**_supp_config(), **_BLOCK_CFG}
+    kept, ledger = _apply_delivery_suppression([row], cfg)
+    assert kept == []
+    assert dict(ledger.breakdown) == {"blocked_domain_stored": 1}
+
+
+def test_a_mis_shaped_block_list_fails_report_assembly_loudly():
+    """The failure direction is inverted from the report levers: a bad
+    security list must not warn-and-unblock. Delivery goes red with no email
+    rather than sending one that links a compromised domain."""
+    row = stub_row("x", 8, commercial_segment="Packaging")
+    cfg = {**VISIBLE_6_CFG, "security": {"blocked_domains": "chargedevs.com"}}
+    with pytest.raises(BlockedDomainsError):
+        assemble_report([row], config=cfg)
+
+
+# --- executive_sources: a blocked source loses its citation, and the
+# --- numbering closes over the gap so the footer never lists it.
+
+
+def _summary_citing(*ids: int, sources: list):
+    return stub_summary({
+        "dominant_condition": "Supply Volatility",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": list(ids)},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": sources,
+    })
+
+
+def test_citation_set_drops_a_blocked_source_and_renumbers():
+    summary = _summary_citing(5, 8, sources=[
+        stub_source(5, url="https://chargedevs.com/newswire/x/"),
+        stub_source(8, url="https://www.plasticsnews.com/y"),
+    ])
+    citations = CitationSet.from_summary(summary, blocked_domains=frozenset({"chargedevs.com"}))
+    assert citations.display_map == {8: 1}          # 8 takes number 1: no gap
+    assert citations.display_number(5) is None       # the marker is omitted
+    assert citations.source(5) == {}                 # nothing can link to it
+    assert [s["id"] for _, s in citations.ordered()] == [8]
+
+
+def test_citation_set_with_nothing_blocked_is_unchanged():
+    summary = _summary_citing(5, 8, sources=[stub_source(5), stub_source(8)])
+    assert (CitationSet.from_summary(summary, blocked_domains=frozenset())
+            == CitationSet.from_summary(summary))
+
+
+def test_assemble_report_applies_the_block_list_to_the_citation_set():
+    summary = _summary_citing(5, 8, sources=[
+        stub_source(5, url="https://sub.chargedevs.com/x/"),
+        stub_source(8, url="https://www.plasticsnews.com/y"),
+    ])
+    row = stub_row("ok", 8, commercial_segment="Packaging")
+    model = assemble_report([row], summary, config=_BLOCK_CFG)
+    assert model.citations.display_map == {8: 1}
+    assert all("chargedevs" not in s.get("url", "") for _, s in model.citations.ordered())

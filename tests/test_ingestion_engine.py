@@ -27,7 +27,6 @@ from tests.conftest import (
 from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
-    _is_blocked_domain,
     _scrape_fallback,
     compute_url_hash,
     execute_pipeline,
@@ -1264,23 +1263,11 @@ def test_execute_pipeline_skips_unscrapable_domain_before_scraping(run_ingestion
 # ===========================================================================
 
 
-@pytest.mark.parametrize("url,expected", [
-    ("https://chargedevs.com/newswire/lanxess-opens-a-battery-laboratory/", True),
-    ("https://www.chargedevs.com/some-story", True),          # subdomains too
-    ("https://CHARGEDEVS.com/x", True),                        # host is case-folded
-    ("https://chargedevs.com./newswire/x", True),              # trailing-dot FQDN resolves the same
-    ("https://www.chargedevs.com../x", True),                  # any number of terminal dots
-    ("https://notchargedevs.com/article", False),              # suffix must be dot-anchored
-    ("https://www.reuters.com/markets/some-article/", False),
-    ("not a url", False),                                      # malformed → let the scraper decide
-])
-def test_is_blocked_domain(url, expected):
-    assert _is_blocked_domain(url) is expected
-
-
 def test_execute_pipeline_skips_blocked_domain_before_scraping(run_ingestion_pipeline):
     """A blocked-domain candidate must be suppressed pre-scrape: no Firecrawl
-    attempt, no DB lookup needed, and the ledger records blocked_domain."""
+    attempt, no DB lookup needed, and the ledger records blocked_domain. The
+    list comes from market_pulse_config.yaml (security.blocked_domains), read
+    once by execute_pipeline and threaded onto the RunContext."""
     run = run_ingestion_pipeline(
         targets=[stub_target("Lanxess", category="suppliers")],
         candidates=[{
@@ -1289,6 +1276,7 @@ def test_execute_pipeline_skips_blocked_domain_before_scraping(run_ingestion_pip
         }],
         scrape=lambda *a, **k: pytest.fail(
             "scrape_article must not be called for a blocked domain"),
+        mp_cfg={"security": {"blocked_domains": ["chargedevs.com"]}},
     )
 
     summary_kwargs = run.macro.call_args.kwargs
@@ -1298,6 +1286,35 @@ def test_execute_pipeline_skips_blocked_domain_before_scraping(run_ingestion_pip
         "url": "https://chargedevs.com/newswire/lanxess-battery-lab/",
         "title": "LANXESS opens battery lab",
     }]
+
+
+def test_execute_pipeline_blocks_nothing_when_the_config_lists_nothing(run_ingestion_pipeline):
+    """No built-in list: with security.blocked_domains absent, a chargedevs.com
+    candidate is scraped and stored like any other (the config is the one
+    definition — blocking a domain is a config edit, not a deploy)."""
+    run = run_ingestion_pipeline(
+        targets=[stub_target("Lanxess", category="suppliers")],
+        candidates=[{
+            "url": "https://chargedevs.com/newswire/lanxess-battery-lab/",
+            "title": "LANXESS opens battery lab", "provider": "serper",
+        }],
+    )
+    assert len(run.stored) == 1
+    assert run.macro.call_args.kwargs["suppression_breakdown"] == {}
+
+
+def test_execute_pipeline_fails_fast_on_a_mis_shaped_block_list(run_ingestion_pipeline):
+    """A scalar where the list belongs would silently unblock every domain;
+    the run must crash before any candidate is touched (a red job at t=0,
+    like a malformed targets.yaml)."""
+    from blocked_domains import BlockedDomainsError
+
+    with pytest.raises(BlockedDomainsError):
+        run_ingestion_pipeline(
+            targets=[stub_target("Lanxess", category="suppliers")],
+            candidates=lambda target: pytest.fail("discovery must not run"),
+            mp_cfg={"security": {"blocked_domains": "chargedevs.com"}},
+        )
 
 
 # ===========================================================================

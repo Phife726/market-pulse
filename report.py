@@ -27,6 +27,7 @@ from insight import (
 from scoring import Scoring
 from prompts import LOW_EXPOSURE_TEMPLATE_PREFIXES
 import market_reports
+from blocked_domains import from_config as _blocked_domains_from_config, is_blocked as _is_blocked_domain
 from macro_summary import MacroSummary
 from suppression_ledger import SuppressionLedger
 
@@ -107,7 +108,8 @@ class CitationSet:
 
     @classmethod
     def from_summary(cls, macro_summary: Optional[MacroSummary],
-                     macro_outlook: Optional[dict] = None) -> "CitationSet":
+                     macro_outlook: Optional[dict] = None,
+                     *, blocked_domains: frozenset[str] = frozenset()) -> "CitationSet":
         """The one numbering rule, applied to a stored daily_summaries row.
 
         `macro_outlook` is the *renderable* outlook — pass the report model's
@@ -118,13 +120,30 @@ class CitationSet:
         numbering, so both spellings yield the same numbers — and a row with no
         renderable outlook is None either way, so passing an extracted None is
         indistinguishable from omitting the argument.
+
+        `blocked_domains` (the security block, `blocked_domains.py`) removes a
+        source whose URL host is blocked BEFORE numbering: its id then resolves
+        to no source, so its inline marker is omitted, the numbers close over
+        the gap, and the footer never lists it — the bullet or signal keeps its
+        prose (it was gated on a valid citation at ingestion; only the link is
+        withdrawn). A stored `executive_sources` entry is the one way a blocked
+        link could otherwise reach the email without passing rule 9.
         """
         summary = macro_summary or MacroSummary()
         if macro_outlook is None:
             macro_outlook = summary.outlook
         signals = (macro_outlook or {}).get("signals") or []
-        return cls(summary.sources,
-                   _citation_display_map(summary.bullets, summary.sources, signals))
+        sources = summary.sources
+        if blocked_domains:
+            dropped = [s for s in sources
+                       if isinstance(s, dict) and _is_blocked_domain(s.get("url"), blocked_domains)]
+            for s in dropped:
+                logger.warning(
+                    "BLOCKED_DOMAIN — citation withdrawn from executive_sources (id %s): %s",
+                    s.get("id"), s.get("url"),
+                )
+            sources = tuple(s for s in sources if s not in dropped)
+        return cls(sources, _citation_display_map(summary.bullets, list(sources), signals))
 
 
 EMPTY_CITATIONS = CitationSet()
@@ -320,14 +339,17 @@ def _apply_delivery_suppression(
     config: dict,
     scorer: Optional[Scoring] = None,
     prior_surfaced: Sequence[Optional[dict]] = (),
+    blocked: Optional[frozenset[str]] = None,
 ) -> tuple[list[dict], SuppressionLedger]:
-    """Run the deterministic eight-rule guardrail over fetched rows.
+    """Run the deterministic nine-rule guardrail over fetched rows.
 
     Returns (kept_rows, ledger). First matching rule wins; each suppressed
     row is counted once and contributes at most one sample (deduped).
     `scorer` supplies the visible threshold rule 1's template exemption reads;
     None resolves it from config. `prior_surfaced` is what earlier emails
     showed (rows with `trigger_entity` + `headline`) — rule 8's comparison set.
+    `blocked` is the security block (`security.blocked_domains`) rule 9 drops
+    by; None resolves it from config (raising on a mis-shaped list).
 
     Rules 6/7 keep the first row seen of a duplicate pair. Rows arrive
     impact-desc, so a score-4 RULE 6 template row would precede — and
@@ -339,6 +361,8 @@ def _apply_delivery_suppression(
     """
     sup_cfg = config.get("delivery_suppression") or {}
     scorer = scorer or Scoring.from_config(config)
+    if blocked is None:
+        blocked = _blocked_domains_from_config(config)
     exempt_templates = bool(sup_cfg.get("enable_low_exposure_template_exemption", True))
     ledger = SuppressionLedger.for_delivery()
     kept_indexed: list[tuple[int, dict]] = []
@@ -445,7 +469,7 @@ def _apply_delivery_suppression(
         # that entity (cards and Watch rows within the lookback the caller
         # read): a reworded repeat of a story the reader already saw. Rules
         # 6/7 only see the current run, at 90; this is strictly greater than
-        # its own threshold. Last, so every other reason wins first-match.
+        # its own threshold. Every earlier reason wins first-match.
         if prior_by_entity and headline:
             candidates = prior_by_entity.get(_entity_key(row.get("trigger_entity")), ())
             if candidates:
@@ -453,6 +477,19 @@ def _apply_delivery_suppression(
                 if max(_token_sort_ratio(hl_lower, h) for h in candidates) > prior_threshold:
                     ledger = ledger.record("prior_surfaced_duplicate", url=url, title=headline)
                     continue
+
+        # Rule 9: security-blocked domain (2026-09-16) — the delivery-side
+        # half of blocked_domains.py, for the rows stored BEFORE IT reported
+        # the domain (ingestion's first gate stops new ones). A link to a
+        # compromised domain anywhere in the digest scores the whole email as
+        # malware at the recipient gateway, so the row renders nowhere: not a
+        # card, not a Watch row, not an appendix row, whatever it scored. No
+        # rule switch — the list itself is the switch (empty = nothing
+        # blocked). Last, so every other reason wins first-match; the row is
+        # dropped either way, and never joins kept_headlines.
+        if blocked and _is_blocked_domain(url, blocked):
+            ledger = ledger.record("blocked_domain_stored", url=url, title=headline)
+            continue
 
         kept_indexed.append((index, row))
         if headline:
@@ -698,6 +735,10 @@ def assemble_report(
     renderer's defensive reads did.
     """
     config = config or {}
+    # The security block, read once for rule 9 and the citation set. Read
+    # before the no-news short-circuit so a mis-shaped list fails a quiet day
+    # too — never a silent unblock.
+    blocked = _blocked_domains_from_config(config)
 
     if not rows:
         return ReportModel(
@@ -716,7 +757,7 @@ def assemble_report(
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced)
+    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced, blocked)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if scorer.is_visible(r)]
@@ -812,7 +853,7 @@ def assemble_report(
     #    same numbers instead of deriving its own.
     macro_outlook = _display_mapped_outlook(
         macro_summary.outlook if macro_summary else None, display_map)
-    citations = CitationSet.from_summary(macro_summary, macro_outlook)
+    citations = CitationSet.from_summary(macro_summary, macro_outlook, blocked_domains=blocked)
 
     return ReportModel(
         variant="daily",

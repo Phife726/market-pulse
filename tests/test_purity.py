@@ -51,6 +51,7 @@ PURE_MODULES = {
     "run_budget": Purity(),
     "suppression_ledger": Purity(),
     "market_reports": Purity(),
+    "blocked_domains": Purity(),
     "target_enricher": Purity(),
     # The two file-backed parsers (targets.yaml, target_metadata.yaml): one read each.
     "targets": Purity(reads_files=1),
