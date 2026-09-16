@@ -48,7 +48,7 @@ def _no_sleep(monkeypatch):
 
 
 def test_duplicate_url_suppresses_and_bumps(monkeypatch):
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: True)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: True)
     ctx = make_ctx()
     out = process_candidate(make_candidate(), TARGET, ctx)
     assert out == Suppressed("duplicate_url")
@@ -58,7 +58,7 @@ def test_duplicate_url_suppresses_and_bumps(monkeypatch):
 
 
 def test_semantic_duplicate_suppresses_and_bumps(monkeypatch):
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate",
         lambda title, seen: (True, "Seen Headline", 92),
@@ -71,7 +71,7 @@ def test_semantic_duplicate_suppresses_and_bumps(monkeypatch):
 
 
 def test_unscrapable_domain_suppresses_pre_scrape(monkeypatch):
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     scraper = MagicMock()
@@ -91,7 +91,7 @@ def test_blocked_domain_suppresses_before_any_lookup(monkeypatch):
     blocked_domain even when the URL was stored on an earlier run."""
     monkeypatch.setattr(
         ingestion_engine, "url_already_processed",
-        lambda h: pytest.fail("no DB lookup for a blocked domain"))
+        lambda h, modes: pytest.fail("no DB lookup for a blocked domain"))
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     scraper = MagicMock()
@@ -112,7 +112,7 @@ def test_unsafe_url_suppresses_before_any_lookup_or_scrape(monkeypatch):
     unsafe_url even when an earlier run stored it."""
     monkeypatch.setattr(
         ingestion_engine, "url_already_processed",
-        lambda h: pytest.fail("no DB lookup for an unsafe URL"))
+        lambda h, modes: pytest.fail("no DB lookup for an unsafe URL"))
     scraper = MagicMock()
     monkeypatch.setattr(ingestion_engine, "scrape_article", scraper)
     url = "https://compromised.example/story"
@@ -137,7 +137,7 @@ def test_security_block_wins_over_the_link_reputation_verdict(monkeypatch):
 def test_link_reputation_gate_reads_the_run_context_not_the_seam(monkeypatch):
     """The gauntlet never calls the seam itself (the loop batches per target):
     with nothing on ctx.unsafe_urls a candidate flows on to the duplicate lookup."""
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: True)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: True)
     monkeypatch.setattr(
         ingestion_engine, "_link_reputation",
         lambda: pytest.fail("process_candidate must not consult the seam"))
@@ -150,7 +150,7 @@ def test_blocked_domain_gate_reads_the_run_context_not_a_built_in_list(monkeypat
     """The list is config-driven (security.blocked_domains, threaded onto the
     RunContext by execute_pipeline): with nothing blocked, a chargedevs.com
     candidate flows on to the duplicate lookup like any other."""
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: True)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: True)
     ctx = make_ctx(blocked_domains=frozenset())
     out = process_candidate(
         make_candidate(url="https://chargedevs.com/newswire/lanxess-battery-lab/"), TARGET, ctx)
@@ -161,7 +161,7 @@ def test_blocked_domain_gate_reads_the_run_context_not_a_built_in_list(monkeypat
 def test_provider_gate_drop_suppresses_with_gate_reason(monkeypatch):
     from relevance_gate import GateDecision
 
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     scraper = MagicMock()
@@ -185,7 +185,7 @@ def test_provider_gate_drop_suppresses_with_gate_reason(monkeypatch):
 def test_unknown_provider_never_gates(monkeypatch):
     """A candidate whose provider is absent from providers_by_name skips the
     gate (gate_decision None) and proceeds to the scrape step."""
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: None)
@@ -195,7 +195,7 @@ def test_unknown_provider_never_gates(monkeypatch):
 
 
 def test_scrape_failed_counts_the_attempt(monkeypatch):
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: None)
@@ -213,7 +213,7 @@ def test_synthesis_failure_is_a_suppression_not_a_silent_error(monkeypatch):
     """The LLM-None fix: a failed synthesis records to the ledger and bumps the
     provider yield, mirroring scrape_failed — stats['errors'] is NOT touched
     (it now means store-failures only)."""
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "text " * 200)
@@ -231,7 +231,7 @@ def test_synthesis_failure_is_a_suppression_not_a_silent_error(monkeypatch):
 
 
 def _happy_path_until_synthesis(monkeypatch):
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(
         ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
     monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "text " * 200)
@@ -260,7 +260,7 @@ def test_stored_persists_and_updates_run_state(monkeypatch):
     )
     stored_payloads: list[dict] = []
     monkeypatch.setattr(
-        ingestion_engine, "store_insight", lambda p: stored_payloads.append(p))
+        ingestion_engine, "store_insight", lambda p, run_mode: (stored_payloads.append(p), True)[1])
     ctx = make_ctx()
     out = process_candidate(make_candidate(), TARGET, ctx)
     assert out == Stored()
@@ -288,7 +288,7 @@ def test_store_failure_is_an_error_not_a_suppression(monkeypatch):
             entities_mentioned=["TestCorp"]),
     )
 
-    def _boom(payload):
+    def _boom(payload, run_mode):
         raise RuntimeError("supabase down")
 
     monkeypatch.setattr(ingestion_engine, "store_insight", _boom)
@@ -338,7 +338,7 @@ def test_yield_table_covers_every_ingestion_reason():
 # ---------------------------------------------------------------------------
 
 def _past_dedup(monkeypatch) -> MagicMock:
-    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
     monkeypatch.setattr(ingestion_engine, "is_semantic_duplicate", lambda t, s: (False, "", 0))
     scrape = MagicMock(return_value=None)
     monkeypatch.setattr(ingestion_engine, "scrape_article", scrape)
@@ -377,3 +377,77 @@ def test_ordinary_wire_headline_reaches_the_scrape(monkeypatch):
     assert out == Suppressed("scrape_failed")       # the stub scrape returns None
     scrape.assert_called_once()
     assert "market_report_publisher" not in ctx.ledger.breakdown
+
+
+# ---------------------------------------------------------------------------
+# Run mode (issue #100, ADR 0001): the gauntlet's dedup reads the modes the
+# run may see, and the store writes as the run's mode. Real InMemory repo —
+# the point is the seam's semantics, not a stubbed answer.
+# ---------------------------------------------------------------------------
+from datetime import datetime
+
+from daily_intelligence_repo import InMemoryIntelligenceRepo
+
+_URL_HASH = ingestion_engine.compute_url_hash("https://example.com/article")
+
+
+def _real_repo_happy_path(monkeypatch) -> InMemoryIntelligenceRepo:
+    fake = InMemoryIntelligenceRepo(now=lambda: datetime(2026, 9, 16, 10, 30))
+    monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
+    monkeypatch.setattr(ingestion_engine, "scrape_article", lambda url, m: "x" * 600)
+    monkeypatch.setattr(
+        ingestion_engine, "synthesize_insight",
+        lambda text, url, entity, cat: stub_insight(url, headline="Fresh headline"),
+    )
+    return fake
+
+
+def test_run_context_visible_modes_follows_its_run_mode():
+    assert make_ctx().run_mode == "production"
+    assert make_ctx().visible_modes == frozenset({"production"})
+    ctx = RunContext(providers_by_name={}, run_mode="test")
+    assert ctx.visible_modes == frozenset({"production", "test"})
+
+
+def test_production_run_stores_over_a_test_row(monkeypatch):
+    """A test row is disposable: production does not see it as a duplicate,
+    scrapes and scores the URL, and its write replaces the row as production."""
+    fake = _real_repo_happy_path(monkeypatch)
+    fake.upsert_insight({"url_hash": _URL_HASH, "headline": "QA scored"}, run_mode="test")
+    ctx = make_ctx()
+    out = process_candidate(make_candidate(), TARGET, ctx)
+    assert out == Stored()
+    (row,) = fake.fetch_since(datetime(2000, 1, 1), modes=frozenset({"production", "test"}))
+    assert (row["run_mode"], row["headline"]) == ("production", "Fresh headline")
+    assert ctx.stats["insights_stored"] == 1
+
+
+def test_test_run_treats_a_production_row_as_a_duplicate(monkeypatch):
+    fake = _real_repo_happy_path(monkeypatch)
+    fake.upsert_insight({"url_hash": _URL_HASH, "headline": "Prod scored"}, run_mode="production")
+    ctx = RunContext(providers_by_name={}, run_mode="test")
+    out = process_candidate(make_candidate(), TARGET, ctx)
+    assert out == Suppressed("duplicate_url")
+    assert ctx.scrapes_attempted == 0
+    (row,) = fake.fetch_since(datetime(2000, 1, 1), modes=frozenset({"production", "test"}))
+    assert (row["run_mode"], row["headline"]) == ("production", "Prod scored")
+
+
+def test_ignored_test_write_is_a_duplicate_not_a_store(monkeypatch, caplog):
+    """The overlap race: both runs saw the URL as new; production wrote first.
+    The test write is ON CONFLICT DO NOTHING — ledgered duplicate_url, one
+    WARNING, and never counted as stored."""
+    fake = _real_repo_happy_path(monkeypatch)
+    fake.upsert_insight({"url_hash": _URL_HASH, "headline": "Prod scored"}, run_mode="production")
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
+    ctx = RunContext(providers_by_name={}, run_mode="test")
+    with caplog.at_level("WARNING"):
+        out = process_candidate(make_candidate(), TARGET, ctx)
+    assert out == Suppressed("duplicate_url")
+    assert ctx.ledger.breakdown == {"duplicate_url": 1}
+    assert ctx.stats["insights_stored"] == 0
+    assert ctx.stored_articles_buffer == []
+    assert ctx.provider_yield["serper"]["duplicates"] == 1
+    assert any("not stored" in r.message and r.levelname == "WARNING" for r in caplog.records)
+    (row,) = fake.fetch_since(datetime(2000, 1, 1), modes=frozenset({"production", "test"}))
+    assert row["headline"] == "Prod scored"

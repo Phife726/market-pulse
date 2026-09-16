@@ -13,7 +13,7 @@ from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
 from link_reputation import _link_reputation
-from run_instant import RunInstant
+from run_instant import PRODUCTION_MODE, RunInstant, visible_modes
 from run_budget import RunBudget, SkipEntity, Stop
 from targets import load_targets
 import insight
@@ -188,8 +188,9 @@ def compute_url_hash(normalized_url: str) -> str:
     return hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
 
 
-def url_already_processed(url_hash: str) -> bool:
-    return _repo().exists_by_hash(url_hash)
+def url_already_processed(url_hash: str, modes: frozenset[str]) -> bool:
+    """Whether a row in one of the visible `modes` already holds `url_hash`."""
+    return _repo().exists_by_hash(url_hash, modes=modes)
 
 
 def scrape_article(url: str, min_length: int) -> Optional[str]:
@@ -290,16 +291,19 @@ def is_semantic_duplicate(candidate: str, seen_headlines: set[str]) -> tuple[boo
     return (is_dup, matched_headline, int(score))
 
 
-def _hydrate_seen_headlines() -> set[str]:
-    headlines = _repo().recent_headlines(hours=72)
-    logger.info("Hydrated seen_headlines buffer with %d entries.", len(headlines))
+def _hydrate_seen_headlines(modes: frozenset[str]) -> set[str]:
+    headlines = _repo().recent_headlines(hours=72, modes=modes)
+    logger.info("Hydrated seen_headlines buffer with %d entries (modes: %s).",
+                len(headlines), ", ".join(sorted(modes)))
     return headlines
 
 
-def store_insight(payload: dict) -> None:
-    """Persist an article insight. Raises on Supabase failure — callers in
-    execute_pipeline catch and bump stats['errors'] so the batch continues."""
-    _repo().upsert_insight(payload)
+def store_insight(payload: dict, run_mode: str) -> bool:
+    """Persist an article insight as `run_mode`; True when the row landed.
+    False is the ignored test write (the repo's ON CONFLICT DO NOTHING — a
+    production row already holds the URL). Raises on Supabase failure —
+    the gauntlet catches and bumps stats['errors'] so the batch continues."""
+    return _repo().upsert_insight(payload, run_mode=run_mode)
 
 
 def generate_macro_summary(
@@ -463,6 +467,10 @@ class RunContext:
     by suppress() — callers never thread a new ledger back by hand.
     """
     providers_by_name: dict
+    # The run mode this run writes as, and — derived — the modes its
+    # daily_intelligence reads may see (CONTEXT.md, Run mode; ADR 0001). Set
+    # by execute_pipeline from the run instant, which the gauntlet never reads.
+    run_mode: str = PRODUCTION_MODE
     # The security block (security.blocked_domains), read once by
     # execute_pipeline; the gauntlet's first gate reads it here, never the
     # config. Empty = nothing blocked.
@@ -477,6 +485,10 @@ class RunContext:
     provider_yield: dict = field(default_factory=dict)
     stored_articles_buffer: list = field(default_factory=list)
     ledger: SuppressionLedger = field(default_factory=SuppressionLedger.for_ingestion)
+
+    @property
+    def visible_modes(self) -> frozenset[str]:
+        return visible_modes(self.run_mode)
 
     @property
     def scrapes_attempted(self) -> int:
@@ -520,7 +532,7 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
 
     url_hash = compute_url_hash(normalized)
 
-    if url_already_processed(url_hash):
+    if url_already_processed(url_hash, ctx.visible_modes):
         logger.info("Duplicate — skipping (%s): %s", provider, normalized)
         return ctx.suppress("duplicate_url", provider, url=raw_url, title=candidate_title)
 
@@ -599,11 +611,22 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
             payload.update(_discovery_metadata(candidate))
 
         try:
-            store_insight(payload)
+            landed = store_insight(payload, ctx.run_mode)
         except Exception as exc:
             logger.error("Failed to store insight for %s: %s", normalized, exc)
             ctx.stats["errors"] += 1
             return Error()
+
+        if not landed:
+            # The overlap race (ADR 0001): a production run wrote this URL
+            # between our duplicate check and our write, and a test write
+            # never replaces a production row. The scrape and the LLM call
+            # are spent; the row that stands is production's.
+            logger.warning(
+                "Test-mode write not stored — a production row now holds the URL (%s): %s",
+                provider, normalized,
+            )
+            return ctx.suppress("duplicate_url", provider, url=raw_url, title=candidate_title)
 
         logger.info(
             "Stored [provider=%s, impact=%d, sentiment=%s] %s",
@@ -710,8 +733,9 @@ def execute_pipeline(run: RunInstant, *, budget: Optional[RunBudget] = None) -> 
     providers = _discovery_providers()
     ctx = RunContext(
         providers_by_name={p.name: p for p in providers},
+        run_mode=run.run_mode,
         blocked_domains=blocked,
-        seen_headlines=_hydrate_seen_headlines(),
+        seen_headlines=_hydrate_seen_headlines(run.visible_modes),
     )
 
     def elapsed() -> float:

@@ -21,6 +21,10 @@ from daily_intelligence_repo import (
 )
 
 
+PROD = frozenset({"production"})
+BOTH = frozenset({"production", "test"})
+
+
 @pytest.fixture(autouse=True)
 def _reset_repo_singleton():
     """Ensure each test sees a clean repo singleton — prevents state from
@@ -35,22 +39,22 @@ def _reset_repo_singleton():
 
 def test_exists_by_hash_false_when_empty():
     repo = InMemoryIntelligenceRepo()
-    assert repo.exists_by_hash("nonexistent") is False
+    assert repo.exists_by_hash("nonexistent", modes=PROD) is False
 
 
 def test_exists_by_hash_true_after_upsert():
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"})
-    assert repo.exists_by_hash("abc123") is True
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"}, run_mode="production")
+    assert repo.exists_by_hash("abc123", modes=PROD) is True
 
 
 def test_upsert_insight_enforces_url_hash_uniqueness():
     """Second upsert with the same url_hash overwrites the first (matches
     Supabase on_conflict=url_hash semantics)."""
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_insight({"url_hash": "abc123", "headline": "First"})
-    repo.upsert_insight({"url_hash": "abc123", "headline": "Second"})
-    rows = repo.fetch_since(datetime(2000, 1, 1))  # any past cutoff
+    repo.upsert_insight({"url_hash": "abc123", "headline": "First"}, run_mode="production")
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Second"}, run_mode="production")
+    rows = repo.fetch_since(datetime(2000, 1, 1), modes=PROD)  # any past cutoff
     assert len(rows) == 1
     assert rows[0]["headline"] == "Second"
 
@@ -60,8 +64,8 @@ def test_upsert_insight_sets_created_at_when_missing():
     can filter on it deterministically."""
     fixed_now = datetime(2026, 5, 26, 12, 0, 0)
     repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
-    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"})
-    rows = repo.fetch_since(fixed_now - timedelta(hours=24))
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"}, run_mode="production")
+    rows = repo.fetch_since(fixed_now - timedelta(hours=24), modes=PROD)
     assert rows[0]["created_at"] == fixed_now.isoformat()
 
 
@@ -69,8 +73,8 @@ def test_upsert_insight_preserves_explicit_created_at():
     """If payload includes created_at, the fake keeps it verbatim."""
     repo = InMemoryIntelligenceRepo()
     explicit = "2026-05-20T10:30:00"
-    repo.upsert_insight({"url_hash": "abc123", "headline": "Test", "created_at": explicit})
-    rows = repo.fetch_since(datetime(2000, 1, 1))  # very wide window
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Test", "created_at": explicit}, run_mode="production")
+    rows = repo.fetch_since(datetime(2000, 1, 1), modes=PROD)  # very wide window
     assert rows[0]["created_at"] == explicit
 
 
@@ -84,29 +88,29 @@ def test_fetch_since_filters_by_created_at():
         "url_hash": "old",
         "headline": "Old article",
         "created_at": (fixed_now - timedelta(hours=50)).isoformat(),
-    })
+    }, run_mode="production")
     # 5 hours ago — inside both windows
     repo.upsert_insight({
         "url_hash": "fresh",
         "headline": "Fresh article",
         "created_at": (fixed_now - timedelta(hours=5)).isoformat(),
-    })
+    }, run_mode="production")
 
-    rows_24 = repo.fetch_since(fixed_now - timedelta(hours=24))
+    rows_24 = repo.fetch_since(fixed_now - timedelta(hours=24), modes=PROD)
     assert {r["url_hash"] for r in rows_24} == {"fresh"}
 
-    rows_72 = repo.fetch_since(fixed_now - timedelta(hours=72))
+    rows_72 = repo.fetch_since(fixed_now - timedelta(hours=72), modes=PROD)
     assert {r["url_hash"] for r in rows_72} == {"old", "fresh"}
 
 
 def test_fetch_since_returns_independent_copies():
     """Mutating a returned row must not affect repo state."""
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_insight({"url_hash": "abc", "headline": "Original"})
+    repo.upsert_insight({"url_hash": "abc", "headline": "Original"}, run_mode="production")
     cutoff = datetime(2000, 1, 1)  # any past cutoff
-    rows = repo.fetch_since(cutoff)
+    rows = repo.fetch_since(cutoff, modes=PROD)
     rows[0]["headline"] = "Mutated"
-    again = repo.fetch_since(cutoff)
+    again = repo.fetch_since(cutoff, modes=PROD)
     assert again[0]["headline"] == "Original"
 
 
@@ -122,10 +126,9 @@ def test_in_memory_fetch_since_accepts_timezone_aware_created_at_strings():
             "url_hash": "aware-recent",
             "headline": "Aware recent",
             "created_at": "2026-05-26T10:00:00+00:00",
-        }
-    )
+        }, run_mode="production")
 
-    rows = repo.fetch_since(now - timedelta(hours=3))
+    rows = repo.fetch_since(now - timedelta(hours=3), modes=PROD)
 
     assert [row["url_hash"] for row in rows] == ["aware-recent"]
 
@@ -141,18 +144,17 @@ def test_in_memory_fetch_since_excludes_old_timezone_aware_created_at_strings():
             "url_hash": "aware-old",
             "headline": "Aware old",
             "created_at": "2026-05-26T08:00:00+00:00",
-        }
-    )
+        }, run_mode="production")
 
-    assert repo.fetch_since(now - timedelta(hours=3)) == []
+    assert repo.fetch_since(now - timedelta(hours=3), modes=PROD) == []
 
 
 def test_recent_headlines_returns_set_of_headlines():
     fixed_now = datetime(2026, 5, 26, 12, 0, 0)
     repo = InMemoryIntelligenceRepo(now=lambda: fixed_now)
-    repo.upsert_insight({"url_hash": "a", "headline": "Alpha"})
-    repo.upsert_insight({"url_hash": "b", "headline": "Beta"})
-    assert repo.recent_headlines(hours=24) == {"Alpha", "Beta"}
+    repo.upsert_insight({"url_hash": "a", "headline": "Alpha"}, run_mode="production")
+    repo.upsert_insight({"url_hash": "b", "headline": "Beta"}, run_mode="production")
+    assert repo.recent_headlines(hours=24, modes=PROD) == {"Alpha", "Beta"}
 
 
 def test_recent_headlines_honors_time_window():
@@ -162,14 +164,14 @@ def test_recent_headlines_honors_time_window():
         "url_hash": "old",
         "headline": "Old",
         "created_at": (fixed_now - timedelta(hours=100)).isoformat(),
-    })
-    repo.upsert_insight({"url_hash": "fresh", "headline": "Fresh"})
-    assert repo.recent_headlines(hours=24) == {"Fresh"}
+    }, run_mode="production")
+    repo.upsert_insight({"url_hash": "fresh", "headline": "Fresh"}, run_mode="production")
+    assert repo.recent_headlines(hours=24, modes=PROD) == {"Fresh"}
 
 
 def test_recent_headlines_empty_when_no_rows():
     repo = InMemoryIntelligenceRepo()
-    assert repo.recent_headlines(hours=72) == set()
+    assert repo.recent_headlines(hours=72, modes=PROD) == set()
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +348,10 @@ def supabase_repo(monkeypatch):
 
 def test_supabase_exists_by_hash_queries_daily_intelligence(supabase_repo):
     repo, mock_client = supabase_repo
-    mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+    mock_client.table.return_value.select.return_value.eq.return_value.in_.return_value.limit.return_value.execute.return_value.data = [
         {"url_hash": "abc123"}
     ]
-    assert repo.exists_by_hash("abc123") is True
+    assert repo.exists_by_hash("abc123", modes=PROD) is True
     mock_client.table.assert_called_with("daily_intelligence")
     mock_client.table.return_value.select.assert_called_with("url_hash")
     mock_client.table.return_value.select.return_value.eq.assert_called_with("url_hash", "abc123")
@@ -358,24 +360,23 @@ def test_supabase_exists_by_hash_queries_daily_intelligence(supabase_repo):
 def test_supabase_exists_by_hash_returns_false_when_empty(supabase_repo):
     repo, mock_client = supabase_repo
     mock_client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
-    assert repo.exists_by_hash("absent") is False
+    assert repo.exists_by_hash("absent", modes=PROD) is False
 
 
 def test_supabase_exists_by_hash_swallows_errors(supabase_repo):
     """Reads must NOT raise — they swallow and return the empty sentinel."""
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("network down")
-    assert repo.exists_by_hash("abc123") is False
+    assert repo.exists_by_hash("abc123", modes=PROD) is False
 
 
 def test_supabase_upsert_insight_targets_daily_intelligence_with_on_conflict(supabase_repo):
     repo, mock_client = supabase_repo
-    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"})
+    repo.upsert_insight({"url_hash": "abc123", "headline": "Test"}, run_mode="production")
     mock_client.table.assert_called_with("daily_intelligence")
-    mock_client.table.return_value.upsert.assert_called_with(
-        {"url_hash": "abc123", "headline": "Test"},
-        on_conflict="url_hash",
-    )
+    (payload,), kwargs = mock_client.table.return_value.upsert.call_args
+    assert payload["url_hash"] == "abc123" and payload["headline"] == "Test"
+    assert kwargs == {"on_conflict": "url_hash"}
 
 
 def test_supabase_upsert_insight_raises_on_error(supabase_repo):
@@ -383,15 +384,15 @@ def test_supabase_upsert_insight_raises_on_error(supabase_repo):
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("write conflict")
     with pytest.raises(Exception, match="write conflict"):
-        repo.upsert_insight({"url_hash": "abc", "headline": "x"})
+        repo.upsert_insight({"url_hash": "abc", "headline": "x"}, run_mode="production")
 
 
 def test_supabase_recent_headlines_filters_by_created_at(supabase_repo):
     repo, mock_client = supabase_repo
-    mock_client.table.return_value.select.return_value.gte.return_value.execute.return_value.data = [
+    mock_client.table.return_value.select.return_value.gte.return_value.in_.return_value.execute.return_value.data = [
         {"headline": "Alpha"}, {"headline": "Beta"},
     ]
-    assert repo.recent_headlines(hours=72) == {"Alpha", "Beta"}
+    assert repo.recent_headlines(hours=72, modes=PROD) == {"Alpha", "Beta"}
     mock_client.table.assert_called_with("daily_intelligence")
     mock_client.table.return_value.select.assert_called_with("headline")
     # The .gte filter is "created_at" >= some-ISO-string; we don't pin the timestamp.
@@ -402,22 +403,22 @@ def test_supabase_recent_headlines_filters_by_created_at(supabase_repo):
 def test_supabase_recent_headlines_swallows_errors(supabase_repo):
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
-    assert repo.recent_headlines(hours=72) == set()
+    assert repo.recent_headlines(hours=72, modes=PROD) == set()
 
 
 def test_supabase_fetch_since_filters_strictly_after_cutoff_and_orders_by_impact(supabase_repo):
     repo, mock_client = supabase_repo
     select = mock_client.table.return_value.select
-    select.return_value.gt.return_value.order.return_value.execute.return_value.data = [
+    select.return_value.gt.return_value.in_.return_value.order.return_value.execute.return_value.data = [
         {"url_hash": "a", "headline": "x"},
     ]
-    rows = repo.fetch_since(datetime(2026, 8, 26, 10, 44, 12))
+    rows = repo.fetch_since(datetime(2026, 8, 26, 10, 44, 12), modes=PROD)
     assert rows == [{"url_hash": "a", "headline": "x"}]
     mock_client.table.assert_called_with("daily_intelligence")
     select.assert_called_with("*")
     # Strictly after the cutoff (rows AT the last delivery were in that email).
     select.return_value.gt.assert_called_with("created_at", "2026-08-26T10:44:12")
-    select.return_value.gt.return_value.order.assert_called_with(
+    select.return_value.gt.return_value.in_.return_value.order.assert_called_with(
         "americhem_impact_score", desc=True,
     )
 
@@ -429,7 +430,7 @@ def test_supabase_fetch_since_is_a_strict_read(supabase_repo):
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
     with pytest.raises(Exception, match="read failed"):
-        repo.fetch_since(datetime(2026, 8, 26))
+        repo.fetch_since(datetime(2026, 8, 26), modes=PROD)
 
 
 def test_supabase_upsert_summary_uses_compound_on_conflict(supabase_repo):
@@ -699,10 +700,10 @@ def test_in_memory_fetch_since_is_strict():
     from — it must not be fetched again."""
     cutoff = datetime(2026, 8, 26, 10, 44, 12)
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_insight({"url_hash": "at", "created_at": cutoff.isoformat()})
+    repo.upsert_insight({"url_hash": "at", "created_at": cutoff.isoformat()}, run_mode="production")
     repo.upsert_insight({"url_hash": "after",
-                         "created_at": (cutoff + timedelta(seconds=1)).isoformat()})
-    assert [r["url_hash"] for r in repo.fetch_since(cutoff)] == ["after"]
+                         "created_at": (cutoff + timedelta(seconds=1)).isoformat()}, run_mode="production")
+    assert [r["url_hash"] for r in repo.fetch_since(cutoff, modes=PROD)] == ["after"]
 
 
 def test_in_memory_record_delivery_patches_only_delivered_at():
@@ -853,24 +854,24 @@ def test_fetch_between_in_memory_is_start_exclusive_end_inclusive():
     for h, ts in (("before", start - timedelta(hours=1)), ("at_start", start),
                   ("inside", now - timedelta(days=2)), ("at_end", end),
                   ("after", now - timedelta(hours=1))):
-        repo.upsert_insight({"url_hash": h, "headline": h, "created_at": ts.isoformat()})
-    assert {r["url_hash"] for r in repo.fetch_between(start, end)} == {"inside", "at_end"}
+        repo.upsert_insight({"url_hash": h, "headline": h, "created_at": ts.isoformat()}, run_mode="production")
+    assert {r["url_hash"] for r in repo.fetch_between(start, end, modes=PROD)} == {"inside", "at_end"}
 
 
 def test_fetch_between_returns_independent_copies():
     repo = InMemoryIntelligenceRepo()
-    repo.upsert_insight({"url_hash": "abc", "headline": "Original"})
-    rows = repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1))
+    repo.upsert_insight({"url_hash": "abc", "headline": "Original"}, run_mode="production")
+    rows = repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1), modes=PROD)
     rows[0]["headline"] = "Mutated"
-    assert repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1))[0]["headline"] == "Original"
+    assert repo.fetch_between(datetime(2000, 1, 1), datetime(2100, 1, 1), modes=PROD)[0]["headline"] == "Original"
 
 
 def test_supabase_fetch_between_filters_created_at_and_selects_the_dedup_columns(supabase_repo):
     repo, mock_client = supabase_repo
     select = mock_client.table.return_value.select
-    chain = select.return_value.gt.return_value.lte.return_value.execute
+    chain = select.return_value.gt.return_value.lte.return_value.in_.return_value.execute
     chain.return_value.data = [{"url_hash": "a", "headline": "x", "trigger_entity": "E"}]
-    rows = repo.fetch_between(datetime(2026, 8, 23, 10, 44, 12), datetime(2026, 8, 26, 10, 44, 12))
+    rows = repo.fetch_between(datetime(2026, 8, 23, 10, 44, 12), datetime(2026, 8, 26, 10, 44, 12), modes=PROD)
     assert rows == [{"url_hash": "a", "headline": "x", "trigger_entity": "E"}]
     mock_client.table.assert_called_with("daily_intelligence")
     columns = select.call_args.args[0]
@@ -885,4 +886,140 @@ def test_supabase_fetch_between_swallows_errors(supabase_repo):
     produce a wrong email, so it must not turn the job red."""
     repo, mock_client = supabase_repo
     mock_client.table.side_effect = Exception("read failed")
-    assert repo.fetch_between(datetime(2026, 8, 23), datetime(2026, 8, 26)) == []
+    assert repo.fetch_between(datetime(2026, 8, 23), datetime(2026, 8, 26), modes=PROD) == []
+
+
+# ---------------------------------------------------------------------------
+# Run mode on daily_intelligence (issue #100, ADR 0001): every read takes the
+# visible modes; the write stamps the mode and is production-wins atomic.
+# ---------------------------------------------------------------------------
+
+def _repo_with_one_row_per_mode(now=None):
+    repo = InMemoryIntelligenceRepo(now=now or (lambda: datetime(2026, 9, 16, 10, 30)))
+    assert repo.upsert_insight({"url_hash": "p", "headline": "Prod headline"}, run_mode="production")
+    assert repo.upsert_insight({"url_hash": "t", "headline": "Test headline"}, run_mode="test")
+    return repo
+
+
+def test_in_memory_exists_by_hash_hides_a_test_row_from_production():
+    repo = _repo_with_one_row_per_mode()
+    assert repo.exists_by_hash("t", modes=PROD) is False
+    assert repo.exists_by_hash("t", modes=BOTH) is True
+    assert repo.exists_by_hash("p", modes=PROD) is True
+
+
+def test_in_memory_recent_headlines_hides_test_headlines_from_production():
+    repo = _repo_with_one_row_per_mode()
+    assert repo.recent_headlines(hours=72, modes=PROD) == {"Prod headline"}
+    assert repo.recent_headlines(hours=72, modes=BOTH) == {"Prod headline", "Test headline"}
+
+
+def test_in_memory_fetch_since_hides_test_rows_from_production():
+    repo = _repo_with_one_row_per_mode()
+    cutoff = datetime(2026, 9, 15, 10, 41)
+    assert [r["url_hash"] for r in repo.fetch_since(cutoff, modes=PROD)] == ["p"]
+    assert sorted(r["url_hash"] for r in repo.fetch_since(cutoff, modes=BOTH)) == ["p", "t"]
+
+
+def test_in_memory_fetch_between_hides_test_rows_from_production():
+    repo = _repo_with_one_row_per_mode()
+    start, end = datetime(2026, 9, 13, 10, 41), datetime(2026, 9, 16, 10, 41)
+    assert [r["url_hash"] for r in repo.fetch_between(start, end, modes=PROD)] == ["p"]
+    assert sorted(r["url_hash"] for r in repo.fetch_between(start, end, modes=BOTH)) == ["p", "t"]
+
+
+def test_in_memory_upsert_stamps_the_run_mode_from_the_write_not_the_payload():
+    """The column and the write policy cannot disagree: the repo sets run_mode."""
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_insight({"url_hash": "x", "headline": "H", "run_mode": "production"}, run_mode="test")
+    (row,) = repo.fetch_since(datetime(2000, 1, 1), modes=BOTH)
+    assert row["run_mode"] == "test"
+
+
+def test_in_memory_production_write_replaces_a_test_row_and_refreshes_created_at():
+    """A test row is disposable: production re-tags it and the row lands in
+    the delivery window of the run that produced its content."""
+    clock = [datetime(2026, 9, 14, 8, 0)]
+    repo = InMemoryIntelligenceRepo(now=lambda: clock[0])
+    assert repo.upsert_insight({"url_hash": "x", "headline": "QA scored"}, run_mode="test") is True
+    clock[0] = datetime(2026, 9, 16, 10, 30)
+    assert repo.upsert_insight({"url_hash": "x", "headline": "Prod scored"}, run_mode="production") is True
+    (row,) = repo.fetch_since(datetime(2000, 1, 1), modes=BOTH)
+    assert (row["run_mode"], row["headline"], row["created_at"]) == (
+        "production", "Prod scored", "2026-09-16T10:30:00")
+
+
+def test_in_memory_test_write_onto_an_existing_row_is_ignored():
+    """ON CONFLICT DO NOTHING for a test write: whichever order two
+    overlapping runs write in, the production row stands."""
+    repo = InMemoryIntelligenceRepo(now=lambda: datetime(2026, 9, 16, 10, 30))
+    repo.upsert_insight({"url_hash": "x", "headline": "Prod scored"}, run_mode="production")
+    assert repo.upsert_insight({"url_hash": "x", "headline": "QA scored"}, run_mode="test") is False
+    (row,) = repo.fetch_since(datetime(2000, 1, 1), modes=BOTH)
+    assert (row["run_mode"], row["headline"]) == ("production", "Prod scored")
+
+
+def test_in_memory_test_write_onto_a_test_row_is_ignored_too():
+    repo = InMemoryIntelligenceRepo()
+    repo.upsert_insight({"url_hash": "x", "headline": "First QA"}, run_mode="test")
+    assert repo.upsert_insight({"url_hash": "x", "headline": "Second QA"}, run_mode="test") is False
+    (row,) = repo.fetch_since(datetime(2000, 1, 1), modes=BOTH)
+    assert row["headline"] == "First QA"
+
+
+def test_supabase_exists_by_hash_filters_by_visible_modes(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = mock_client.table.return_value.select.return_value.eq.return_value
+    chain.in_.return_value.limit.return_value.execute.return_value.data = []
+    repo.exists_by_hash("abc", modes=BOTH)
+    chain.in_.assert_called_with("run_mode", ["production", "test"])
+
+
+def test_supabase_recent_headlines_filters_by_visible_modes(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = mock_client.table.return_value.select.return_value.gte.return_value
+    chain.in_.return_value.execute.return_value.data = []
+    repo.recent_headlines(hours=72, modes=PROD)
+    chain.in_.assert_called_with("run_mode", ["production"])
+
+
+def test_supabase_fetch_since_filters_by_visible_modes(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = mock_client.table.return_value.select.return_value.gt.return_value
+    chain.in_.return_value.order.return_value.execute.return_value.data = []
+    repo.fetch_since(datetime(2026, 9, 15, 10, 41), modes=PROD)
+    chain.in_.assert_called_with("run_mode", ["production"])
+    chain.in_.return_value.order.assert_called_with("americhem_impact_score", desc=True)
+
+
+def test_supabase_fetch_between_filters_by_visible_modes(supabase_repo):
+    repo, mock_client = supabase_repo
+    chain = mock_client.table.return_value.select.return_value.gt.return_value.lte.return_value
+    chain.in_.return_value.execute.return_value.data = []
+    repo.fetch_between(datetime(2026, 9, 13, 10, 41), datetime(2026, 9, 16, 10, 41), modes=BOTH)
+    chain.in_.assert_called_with("run_mode", ["production", "test"])
+
+
+def test_supabase_production_write_updates_on_conflict_and_stamps_the_mode(supabase_repo):
+    repo, mock_client = supabase_repo
+    upsert = mock_client.table.return_value.upsert
+    upsert.return_value.execute.return_value.data = [{"url_hash": "abc"}]
+    landed = repo.upsert_insight({"url_hash": "abc", "headline": "H"}, run_mode="production")
+    assert landed is True
+    (payload,), kwargs = upsert.call_args
+    assert payload["run_mode"] == "production"
+    assert "created_at" in payload
+    assert kwargs == {"on_conflict": "url_hash"}
+
+
+def test_supabase_test_write_is_insert_or_ignore(supabase_repo):
+    """resolution=ignore-duplicates — ON CONFLICT DO NOTHING — so a test
+    write can never replace a production row; an ignored write returns False."""
+    repo, mock_client = supabase_repo
+    upsert = mock_client.table.return_value.upsert
+    upsert.return_value.execute.return_value.data = []
+    landed = repo.upsert_insight({"url_hash": "abc", "headline": "H"}, run_mode="test")
+    assert landed is False
+    (payload,), kwargs = upsert.call_args
+    assert payload["run_mode"] == "test"
+    assert kwargs == {"on_conflict": "url_hash", "ignore_duplicates": True}

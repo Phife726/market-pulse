@@ -706,7 +706,7 @@ def test_execute_pipeline_deadline_calls_log_stats_and_macro_summary(monkeypatch
     mock_macro = MagicMock(return_value=True)
     monkeypatch.setattr(ingestion_engine, "_log_stats", mock_log_stats)
     monkeypatch.setattr(ingestion_engine, "generate_macro_summary", mock_macro)
-    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
+    monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda modes: set())
 
     # Run from the tmp targets file
     monkeypatch.chdir(tmp_path)
@@ -1136,34 +1136,43 @@ def test_generate_macro_summary_ships_prompts_module_text_across_seam():
 # ===========================================================================
 
 
+PROD = frozenset({"production"})
+BOTH = frozenset({"production", "test"})
+
+
 def test_url_already_processed_routes_through_repo(monkeypatch):
-    """url_already_processed returns True iff the InMemory fake reports a hit."""
+    """url_already_processed returns True iff the InMemory fake reports a hit
+    in the visible modes."""
     from ingestion_engine import url_already_processed
     fake = InMemoryIntelligenceRepo()
-    fake.upsert_insight({"url_hash": "abc123", "headline": "Test"})
+    fake.upsert_insight({"url_hash": "abc123", "headline": "Test"}, run_mode="production")
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
-    assert url_already_processed("abc123") is True
-    assert url_already_processed("never_seen") is False
+    assert url_already_processed("abc123", PROD) is True
+    assert url_already_processed("never_seen", PROD) is False
 
 
 def test_hydrate_seen_headlines_routes_through_repo(monkeypatch):
-    """_hydrate_seen_headlines returns the fake's recent headlines."""
+    """_hydrate_seen_headlines returns the fake's recent headlines in the
+    visible modes — production never dedups against a test row's headline."""
     from ingestion_engine import _hydrate_seen_headlines
     fake = InMemoryIntelligenceRepo()
-    fake.upsert_insight({"url_hash": "a", "headline": "Alpha"})
-    fake.upsert_insight({"url_hash": "b", "headline": "Beta"})
+    fake.upsert_insight({"url_hash": "a", "headline": "Alpha"}, run_mode="production")
+    fake.upsert_insight({"url_hash": "b", "headline": "Beta"}, run_mode="test")
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
-    assert _hydrate_seen_headlines() == {"Alpha", "Beta"}
+    assert _hydrate_seen_headlines(PROD) == {"Alpha"}
+    assert _hydrate_seen_headlines(BOTH) == {"Alpha", "Beta"}
 
 
 def test_store_insight_routes_through_repo(monkeypatch):
-    """store_insight upserts via the repo and returns the fake's stored row."""
+    """store_insight upserts via the repo as the given mode and reports
+    whether the row landed."""
     from ingestion_engine import store_insight
     fake = InMemoryIntelligenceRepo()
     monkeypatch.setattr("ingestion_engine._repo", lambda: fake)
-    store_insight({"url_hash": "abc", "headline": "Stored"})
-    rows = fake.fetch_since(datetime(2000, 1, 1))  # any past cutoff
-    assert rows[0]["headline"] == "Stored"
+    assert store_insight({"url_hash": "abc", "headline": "Stored"}, "test") is True
+    rows = fake.fetch_since(datetime(2000, 1, 1), modes=BOTH)  # any past cutoff
+    assert (rows[0]["headline"], rows[0]["run_mode"]) == ("Stored", "test")
+    assert store_insight({"url_hash": "abc", "headline": "Again"}, "test") is False
 
 
 def test_store_insight_raises_on_repo_write_failure(monkeypatch):
@@ -1173,7 +1182,21 @@ def test_store_insight_raises_on_repo_write_failure(monkeypatch):
     failing.upsert_insight.side_effect = RuntimeError("write blew up")
     monkeypatch.setattr("ingestion_engine._repo", lambda: failing)
     with pytest.raises(RuntimeError, match="write blew up"):
-        store_insight({"url_hash": "abc", "headline": "x"})
+        store_insight({"url_hash": "abc", "headline": "x"}, "production")
+
+
+def test_execute_pipeline_writes_as_the_run_instant_mode(run_ingestion_pipeline):
+    """The run mode reaches the store through the RunContext — the gauntlet
+    never reads the run instant. A test run writes test rows; production
+    writes production rows."""
+    from tests.conftest import TEST_RUN_INSTANT, RUN_INSTANT
+    target = stub_target("TestCorp")
+    qa = run_ingestion_pipeline(targets=[target], run=TEST_RUN_INSTANT,
+                                candidates=[{"url": "https://news.example/a", "title": "A", "provider": "serper"}])
+    assert qa.write_modes == ["test"]
+    prod = run_ingestion_pipeline(targets=[target], run=RUN_INSTANT,
+                                  candidates=[{"url": "https://news.example/b", "title": "B", "provider": "serper"}])
+    assert prod.write_modes == ["production"]
 
 
 def test_generate_macro_summary_routes_through_repo(monkeypatch):

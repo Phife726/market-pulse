@@ -25,7 +25,11 @@ create table if not exists daily_intelligence (
     include_in_report boolean default true,
     -- Commercial intelligence brief fields (migration 002)
     commercial_segment text,
-    signal_type text
+    signal_type text,
+    -- Run-mode isolation (migration 008, issue #100 / ADR 0001): the mode that
+    -- wrote the row. Production reads only production rows; url_hash stays
+    -- unique across modes and a production write replaces a test row.
+    run_mode text not null default 'production'
 );
 
 -- Unique index to prevent duplicate entries for normalized article URLs.
@@ -37,6 +41,9 @@ create index if not exists idx_daily_intelligence_created_at
 
 create index if not exists idx_daily_intelligence_category
     on daily_intelligence (category);
+
+create index if not exists idx_daily_intelligence_run_mode_created_at
+    on daily_intelligence (run_mode, created_at);
 
 create index if not exists idx_daily_intelligence_sentiment_score
     on daily_intelligence (sentiment_score);
@@ -87,6 +94,7 @@ create or replace view todays_intelligence as
 select
     id,
     created_at,
+    run_mode,
     headline,
     article_summary,
     americhem_impact,

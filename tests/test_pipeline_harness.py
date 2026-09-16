@@ -93,6 +93,7 @@ DELIVERY = Harness(
         "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
         "EmailMessage", "SuppressionLedger.from_row", "_as_candidate",
         "SummaryKey", "_run_day", "Scoring.from_config", "timedelta",
+        "_modes_label",
     }),
 )
 
