@@ -21,6 +21,8 @@ from tests.conftest import (
     VALID_MACRO_OUTLOOK,
     VISIBLE_6_CFG,
     stub_row,
+    stub_source,
+    stub_summary,
     stub_summary_row,
 )
 from delivery_engine import (
@@ -1105,3 +1107,77 @@ def test_delivery_execute_pipeline_suppresses_a_prior_surfaced_near_duplicate(ru
     stored = fake.get_delivery_state(run_date=_RUN.run_date, run_mode="production")
     assert stored["surfaced_count"] == 1
     assert stored["suppression_breakdown"].get("prior_surfaced_duplicate") == 1
+
+
+# ===========================================================================
+# Link-reputation check (Safe Browsing) at delivery: every URL the report
+# could render — row source_urls and executive_sources — is looked up in one
+# batch before assembly; a flagged row or citation is dropped through the
+# same mechanics as the security block (rule 10 / the citation set).
+# ===========================================================================
+
+
+def test_prepare_report_asks_the_seam_about_every_row_and_source_url(monkeypatch):
+    from link_reputation import FakeLinkReputation
+
+    bad = "https://compromised.example/story"
+    rows = [
+        _row("bad", 8, commercial_segment="Healthcare", headline="Injected page",
+             americhem_impact="Effect.", source_url=bad),
+        _row("ok", 8, commercial_segment="Healthcare", headline="Fine story",
+             americhem_impact="Effect.", source_url="https://x/ok"),
+    ]
+    summary = stub_summary({
+        "dominant_condition": "Supply Volatility",
+        "executive_bullets": [
+            {"label": "Market pressure", "body": "A.", "citation_source_ids": [5, 8]},
+            {"label": "Supply chain watch", "body": "B.", "citation_source_ids": []},
+            {"label": "Commercial action", "body": "C.", "citation_source_ids": []},
+        ],
+        "executive_sources": [stub_source(5, url="https://x/src-bad"), stub_source(8, url="https://x/src-ok")],
+    })
+    seam = FakeLinkReputation({bad, "https://x/src-bad"})
+    monkeypatch.setattr("delivery_engine._link_reputation", lambda: seam)
+    fake = InMemoryIntelligenceRepo()
+    fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date))
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
+        model = prepare_report(rows, summary, key=_RUN.summary_key, report_config=VISIBLE_6_CFG)
+
+    assert seam.calls == [[bad, "https://x/ok", "https://x/src-bad", "https://x/src-ok"]]
+    assert [a["url_hash"] for a in model.groups["Healthcare"]] == ["ok"]
+    assert model.ledger.breakdown.get("unsafe_url_stored") == 1
+    assert model.citations.display_map == {8: 1}
+    stored = fake.get_delivery_state(run_date=_RUN.run_date, run_mode="production")
+    assert stored["suppression_breakdown"].get("unsafe_url_stored") == 1
+
+
+def test_prepare_report_no_news_never_consults_the_seam(monkeypatch):
+    monkeypatch.setattr(
+        "delivery_engine._link_reputation",
+        lambda: pytest.fail("no rows, nothing to check"))
+    with patch("delivery_engine._llm", return_value=FakeLLM()):
+        model = prepare_report([], None, key=_RUN.summary_key, report_config={})
+    assert model.variant == "no_news"
+
+
+def test_delivery_execute_pipeline_drops_a_flagged_row_end_to_end(run_delivery_pipeline):
+    bad = "https://compromised.example/story"
+    fake = InMemoryIntelligenceRepo(now=lambda: _RUN.now)
+    fake.upsert_insight(_row("bad", 8, commercial_segment="Packaging", headline="Injected page headline",
+                             source_url=bad, created_at=(_RUN.now - timedelta(hours=2)).isoformat()))
+    fake.upsert_insight(_row("ok", 8, commercial_segment="Packaging", headline="Chemours lifts TiO2 price",
+                             source_url="https://x/ok", created_at=(_RUN.now - timedelta(hours=1)).isoformat()))
+    fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date))
+
+    result = run_delivery_pipeline(fake, unsafe_urls={bad})
+
+    html = result.sent[-1].html
+    assert "Chemours lifts TiO2 price" in html
+    assert "Injected page headline" not in html
+    assert bad not in html
+    assert result.link_reputation.calls and bad in result.link_reputation.calls[0]
+    stored = fake.get_delivery_state(run_date=_RUN.run_date, run_mode="production")
+    assert stored["surfaced_count"] == 1
+    assert stored["suppression_breakdown"].get("unsafe_url_stored") == 1

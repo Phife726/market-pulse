@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
+from link_reputation import _link_reputation
 from run_instant import RunInstant
 from run_budget import RunBudget, SkipEntity, Stop
 from targets import load_targets
@@ -112,10 +113,10 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
             "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d blocked=%d "
-            "duplicates=%d synthesis_failed=%d market_reports=%d",
+            "unsafe=%d duplicates=%d synthesis_failed=%d market_reports=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
             y["discards"], y["relevance_dropped"], y["scrape_failed"],
-            y["unscrapable"], y["blocked"], y["duplicates"], y["synthesis_failed"],
+            y["unscrapable"], y["blocked"], y["unsafe"], y["duplicates"], y["synthesis_failed"],
             y["market_reports"],
         )
 
@@ -435,6 +436,7 @@ _YIELD_KEY_FOR_REASON: dict[str, str] = {
     "semantic_duplicate": "duplicates",
     "unscrapable_domain": "unscrapable",
     "blocked_domain": "blocked",
+    "unsafe_url": "unsafe",
     "market_report_publisher": "market_reports",
     "zoominfo_company_mismatch": "relevance_dropped",
     "scrape_failed": "scrape_failed",
@@ -465,6 +467,11 @@ class RunContext:
     # execute_pipeline; the gauntlet's first gate reads it here, never the
     # config. Empty = nothing blocked.
     blocked_domains: frozenset = frozenset()
+    # The link-reputation verdicts (Safe Browsing), filled by the loop one
+    # batch per target BEFORE the gauntlet runs; the gate reads it here and
+    # never consults the seam per candidate. Empty = nothing flagged (the
+    # check is off without SAFE_BROWSING_API_KEY, or degraded on a failure).
+    unsafe_urls: set = field(default_factory=set)
     seen_headlines: set = field(default_factory=set)
     stats: dict = field(default_factory=_new_run_stats)
     provider_yield: dict = field(default_factory=dict)
@@ -502,6 +509,14 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
     if blocked_domains.is_blocked(raw_url, ctx.blocked_domains):
         logger.warning("BLOCKED_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
         return ctx.suppress("blocked_domain", provider, url=raw_url, title=candidate_title)
+
+    # The link-reputation verdict (Safe Browsing, batched per target by the
+    # loop) is the second gate: a flagged page is never scraped, stored or
+    # linked, and — like the security block — is ledgered even when an
+    # earlier run stored it (delivery rule 10 hides those rows).
+    if raw_url in ctx.unsafe_urls:
+        logger.warning("UNSAFE_URL — skipped pre-scrape (%s): %s", provider, normalized)
+        return ctx.suppress("unsafe_url", provider, url=raw_url, title=candidate_title)
 
     url_hash = compute_url_hash(normalized)
 
@@ -652,6 +667,12 @@ def _run_target(
     ctx.stats["urls_discovered"] += len(candidates)
     for candidate in candidates:
         ctx.bump(candidate.get("provider", "unknown"), "discovered")
+
+    # One link-reputation lookup per target — the whole batch in one request,
+    # before the gauntlet — so the per-candidate gate is a set lookup. The
+    # seam answers "nothing flagged" when the check is off or has failed.
+    if candidates:
+        ctx.unsafe_urls |= _link_reputation().unsafe(c.get("url") for c in candidates)
 
     for candidate in candidates:
         verdict = budget.before_candidate(

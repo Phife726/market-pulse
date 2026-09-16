@@ -1856,3 +1856,88 @@ def test_assemble_report_applies_the_block_list_to_the_citation_set():
     model = assemble_report([row], summary, config=_BLOCK_CFG)
     assert model.citations.display_map == {8: 1}
     assert all("chargedevs" not in s.get("url", "") for _, s in model.citations.ordered())
+
+
+# ===========================================================================
+# Rule 10 (link reputation): a stored row Safe Browsing flagged renders
+# nowhere, and a flagged executive_sources entry loses its citation — the
+# same drop mechanics as rule 9, fed by the seam's verdict instead of the
+# config list. `report_urls` is what delivery asks the seam about.
+# ===========================================================================
+
+from report import report_urls
+
+_BAD = "https://compromised.example/story"
+
+
+@pytest.mark.parametrize("score", [8, 5, 3], ids=["card-band", "watch-band", "appendix-band"])
+def test_unsafe_url_row_renders_nowhere_whatever_it_scored(score):
+    row = stub_row("bad", score, commercial_segment="Packaging", headline="Injected page",
+                   source_url=_BAD)
+    keep = stub_row("ok", score, commercial_segment="Packaging", headline="Dow lifts PE prices",
+                    source_url="https://www.plasticsnews.com/x")
+    model = assemble_report([row, keep], config=_BLOCK_CFG, unsafe_urls=frozenset({_BAD}))
+    assert "bad" not in _everywhere(model)
+    assert "ok" in _everywhere(model)
+    assert model.ledger.breakdown.get("unsafe_url_stored") == 1
+    assert [s.url for s in model.ledger.samples] == [_BAD]
+
+
+def test_unsafe_url_rule_matches_the_exact_stored_url_only():
+    row = stub_row("near", 8, commercial_segment="Packaging", headline="A",
+                   source_url="https://compromised.example/story?x=1")
+    model = assemble_report([row], config=VISIBLE_6_CFG, unsafe_urls=frozenset({_BAD}))
+    assert _everywhere(model) == {"near"}
+
+
+def test_nothing_flagged_is_the_identity():
+    row = stub_row("ok", 8, commercial_segment="Packaging", source_url=_BAD)
+    assert (assemble_report([row], config=VISIBLE_6_CFG)
+            == assemble_report([row], config=VISIBLE_6_CFG, unsafe_urls=frozenset()))
+    assert _everywhere(assemble_report([row], config=VISIBLE_6_CFG)) == {"ok"}
+
+
+def test_security_block_wins_over_the_link_reputation_verdict_first_match():
+    row = _row("both", 8, headline="A", source_url="https://chargedevs.com/x")
+    cfg = {**_supp_config(), **_BLOCK_CFG}
+    kept, ledger = _apply_delivery_suppression([row], cfg, unsafe_urls=frozenset({"https://chargedevs.com/x"}))
+    assert kept == []
+    assert dict(ledger.breakdown) == {"blocked_domain_stored": 1}
+
+
+def test_citation_set_drops_a_flagged_source_and_renumbers():
+    summary = _summary_citing(5, 8, sources=[
+        stub_source(5, url=_BAD),
+        stub_source(8, url="https://www.plasticsnews.com/y"),
+    ])
+    citations = CitationSet.from_summary(summary, unsafe_urls=frozenset({_BAD}))
+    assert citations.display_map == {8: 1}
+    assert citations.source(5) == {}
+
+
+def test_assemble_report_applies_the_verdict_to_the_citation_set():
+    summary = _summary_citing(5, 8, sources=[
+        stub_source(5, url=_BAD),
+        stub_source(8, url="https://www.plasticsnews.com/y"),
+    ])
+    row = stub_row("ok", 8, commercial_segment="Packaging")
+    model = assemble_report([row], summary, config=VISIBLE_6_CFG, unsafe_urls=frozenset({_BAD}))
+    assert model.citations.display_map == {8: 1}
+
+
+def test_report_urls_is_every_url_the_report_could_render_once_each():
+    """Row source_urls then executive_sources urls, order-preserving,
+    deduped, blanks and non-strings dropped — the batch delivery hands the
+    link-reputation seam before assembly."""
+    rows = [
+        stub_row("a", 8, source_url="https://x/a"),
+        stub_row("b", 8, source_url="https://x/b"),
+        stub_row("c", 8, source_url=""),
+        stub_row("d", 8, source_url=None),
+        stub_row("e", 8, source_url="https://x/a"),
+    ]
+    summary = _summary_citing(5, sources=[stub_source(5, url="https://x/src"),
+                                          stub_source(6, url="https://x/b"),
+                                          {"id": 7}])
+    assert report_urls(rows, summary) == ["https://x/a", "https://x/b", "https://x/src"]
+    assert report_urls([], None) == []

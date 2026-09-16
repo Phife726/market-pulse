@@ -26,8 +26,9 @@ from tests.conftest import (
 )
 import insight
 import renderer
-from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, SAMPLES_CAP, label_for
+from suppression_ledger import DELIVERY_CODES, INGESTION_CODES, SAMPLES_CAP, UNSAFE_URL_CODES, label_for
 from renderer import (
+    _defang_url,
     _link,
     _render_card,
     _section,
@@ -1874,3 +1875,48 @@ def test_watch_section_escapes_untrusted_and_guards_href():
     assert "<script>alert" not in html and "<b>bold</b>" not in html
     assert "&lt;script&gt;" in html and "&lt;b&gt;bold" in html
     assert 'href="javascript:' not in html
+
+
+# ---------------------------------------------------------------------------
+# The QA block never carries a known-bad link in linkable form (Codex P1 on
+# PR #104): a blocked or Safe-Browsing-flagged sample URL is defanged —
+# hxxps://host[.]tld/… — so a mail client cannot auto-link it and a gateway
+# has nothing to scan. Ordinary samples keep their plain URL.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("url,defanged", [
+    ("https://chargedevs.com/newswire/x/", "hxxps://chargedevs[.]com/newswire/x/"),
+    ("http://www.evil.example/a.b?c=d.e", "hxxp://www[.]evil[.]example/a.b?c=d.e"),
+    ("https://CHARGEDEVS.com./x", "hxxps://CHARGEDEVS[.]com[.]/x"),
+    ("not a url with.dots", "not a url with[.]dots"),
+    ("", ""),
+])
+def test_defang_url_neutralizes_the_scheme_and_the_host_dots(url, defanged):
+    assert _defang_url(url) == defanged
+
+
+@pytest.mark.parametrize("code", sorted(UNSAFE_URL_CODES))
+def test_qa_debug_section_defangs_every_known_bad_link_sample(code):
+    bad = "https://chargedevs.com/newswire/lanxess-battery-lab/"
+    macro = {
+        "screened_count": 40, "surfaced_count": 5,
+        "suppression_breakdown": {code: 1},
+        "suppression_samples": [{"reason": code, "url": bad, "title": "LANXESS opens battery lab"}],
+    }
+    out = _render_qa_debug_section(stub_summary(macro))
+    assert bad not in out
+    assert "chargedevs.com" not in out
+    assert "hxxps://chargedevs[.]com/newswire/lanxess-battery-lab/" in out
+
+
+def test_qa_debug_section_keeps_an_ordinary_sample_url_intact():
+    url = "https://www.linkedin.com/posts/acme-update"
+    macro = {
+        "screened_count": 40, "surfaced_count": 5,
+        "suppression_breakdown": {"unscrapable_domain": 1},
+        "suppression_samples": [{"reason": "unscrapable_domain", "url": url, "title": "Acme update"}],
+    }
+    out = _render_qa_debug_section(stub_summary(macro))
+    assert url in out
+    assert "hxxps" not in out

@@ -36,8 +36,10 @@ def make_candidate(**overrides) -> dict:
 
 
 def make_ctx(providers_by_name: dict | None = None, *,
-             blocked_domains: frozenset[str] = frozenset()) -> RunContext:
-    return RunContext(providers_by_name=providers_by_name or {}, blocked_domains=blocked_domains)
+             blocked_domains: frozenset[str] = frozenset(),
+             unsafe_urls: set[str] | None = None) -> RunContext:
+    return RunContext(providers_by_name=providers_by_name or {}, blocked_domains=blocked_domains,
+                      unsafe_urls=set(unsafe_urls or ()))
 
 
 @pytest.fixture(autouse=True)
@@ -101,6 +103,47 @@ def test_blocked_domain_suppresses_before_any_lookup(monkeypatch):
     assert ctx.ledger.breakdown == {"blocked_domain": 1}
     assert ctx.provider_yield["serper"]["blocked"] == 1
     scraper.assert_not_called()
+
+
+def test_unsafe_url_suppresses_before_any_lookup_or_scrape(monkeypatch):
+    """The link-reputation gate sits right after the security block: a URL
+    Safe Browsing flagged (the loop batches the lookup per target onto
+    ctx.unsafe_urls) costs no DB read, no scrape, and is ledgered
+    unsafe_url even when an earlier run stored it."""
+    monkeypatch.setattr(
+        ingestion_engine, "url_already_processed",
+        lambda h: pytest.fail("no DB lookup for an unsafe URL"))
+    scraper = MagicMock()
+    monkeypatch.setattr(ingestion_engine, "scrape_article", scraper)
+    url = "https://compromised.example/story"
+    ctx = make_ctx(unsafe_urls={url})
+    out = process_candidate(make_candidate(url=url), TARGET, ctx)
+    assert out == Suppressed("unsafe_url")
+    assert ctx.ledger.breakdown == {"unsafe_url": 1}
+    assert ctx.provider_yield["serper"]["unsafe"] == 1
+    scraper.assert_not_called()
+
+
+def test_security_block_wins_over_the_link_reputation_verdict(monkeypatch):
+    """A URL that is both on a blocked domain and flagged unsafe is ledgered
+    once, as blocked_domain — the security block is the first gate."""
+    url = "https://chargedevs.com/newswire/x/"
+    ctx = make_ctx(blocked_domains=frozenset({"chargedevs.com"}), unsafe_urls={url})
+    out = process_candidate(make_candidate(url=url), TARGET, ctx)
+    assert out == Suppressed("blocked_domain")
+    assert ctx.ledger.breakdown == {"blocked_domain": 1}
+
+
+def test_link_reputation_gate_reads_the_run_context_not_the_seam(monkeypatch):
+    """The gauntlet never calls the seam itself (the loop batches per target):
+    with nothing on ctx.unsafe_urls a candidate flows on to the duplicate lookup."""
+    monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: True)
+    monkeypatch.setattr(
+        ingestion_engine, "_link_reputation",
+        lambda: pytest.fail("process_candidate must not consult the seam"))
+    ctx = make_ctx()
+    out = process_candidate(make_candidate(url="https://compromised.example/story"), TARGET, ctx)
+    assert out == Suppressed("duplicate_url")
 
 
 def test_blocked_domain_gate_reads_the_run_context_not_a_built_in_list(monkeypatch):

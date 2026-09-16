@@ -18,6 +18,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
     ("synthesis_failed",         "LLM synthesis failed"),
     ("unscrapable_domain",       "unscrapable domain"),
     ("blocked_domain",           "security-blocked domain (IT-flagged)"),
+    ("unsafe_url",               "unsafe URL (Safe Browsing match)"),
     ("market_report_publisher",  "market-research report (publisher or headline)"),
     ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
@@ -34,10 +35,18 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("appendix_excluded_category",          "appendix-excluded category (macro group)"),
     ("prior_surfaced_duplicate",            "near-duplicate of a headline shown in a prior email (same entity)"),
     ("blocked_domain_stored",               "security-blocked domain (stored row, IT-flagged)"),
+    ("unsafe_url_stored",                   "unsafe URL (stored row, Safe Browsing match)"),
 )
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)
 DELIVERY_CODES:  frozenset[str] = frozenset(c for c, _ in _DELIVERY_REASONS)
+# The codes whose sample URL is a known-bad link — the security block and the
+# link-reputation verdict, on either side. A renderer must never emit such a
+# URL in a form a mail client could auto-link or a gateway could scan (the QA
+# block defangs it); owned here so no renderer keeps its own copy of the set.
+UNSAFE_URL_CODES: frozenset[str] = frozenset({
+    "blocked_domain", "unsafe_url", "blocked_domain_stored", "unsafe_url_stored",
+})
 # Every code in stable reading order: ingestion-side first, then delivery-side,
 # each in taxonomy order. The one ordered view of the taxonomy — anything that
 # enumerates reasons for display (the QA breakdown strip) iterates this instead

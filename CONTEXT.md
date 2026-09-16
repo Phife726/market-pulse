@@ -35,6 +35,26 @@ production + in-memory adapters (tests inject the fake at the consumer):
   Retry policy and request shape are asserted once, at the adapter
   (`tests/test_mailer.py`); consumer tests inject `FakeMailer` and assert on
   the message that crossed the seam.
+- **Link-reputation seam** (`link_reputation.py`, `LinkReputation`) — the one
+  outbound URL-safety check, the proactive twin of the **security block**
+  (that stops a domain IT has already reported; this catches a compromised
+  page before IT does). Interface: `unsafe(urls) -> frozenset[str]`, the
+  subset the service flags. Adapters: `SafeBrowsingLinkReputation` (Google
+  Safe Browsing Lookup API v4; key `SAFE_BROWSING_API_KEY`, read at call time;
+  500-URL batches; verdicts cached for the run) and `FakeLinkReputation`
+  (scripted unsafe set, records every batch). **Off without the key**, and
+  **tolerant by design**: every failure — missing key, HTTP error, quota,
+  timeout, unreadable body — is "nothing flagged" plus a WARNING, and the
+  first failure switches the adapter off for the rest of the run, so it can
+  never make the cron red or eat the pipeline deadline. Consumers:
+  `ingestion_engine._run_target` looks up each target's candidates in one
+  batch onto `RunContext.unsafe_urls` for the gauntlet's second gate
+  (`unsafe_url`); `delivery_engine.prepare_report` looks up
+  `report.report_urls` (rows + `executive_sources`) and hands the verdict to
+  `assemble_report(..., unsafe_urls=)` — rule 10 (`unsafe_url_stored`) and
+  the **citation set** drop by it exactly as they drop by the security block.
+  *Avoid*: malware scan, virus check (it is a reputation lookup of a URL, not
+  an inspection of a page).
 - **Discovery seam** (`discovery.py`, `DiscoveryProvider`) — how the ingestion
   engine consumes article-discovery providers. Interface: `name`,
   `eligible(target) -> bool`, `discover(target) -> list[dict]` (provider-neutral
@@ -291,7 +311,8 @@ zero-I/O purity is untouched.
   **candidate gauntlet**'s first gate drops a matching candidate before any
   scrape (`blocked_domain`), and delivery **rule 9** drops an already-stored
   row on such a domain (`blocked_domain_stored`) while the **citation set**
-  withdraws a blocked `executive_sources` link before numbering. Suffix match
+  withdraws a blocked `executive_sources` link before numbering (rule 10 and
+  the same withdrawal do the like for the **link-reputation seam**'s verdict). Suffix match
   on the host, case-folded, terminal dots stripped (`host_of`, the one host
   spelling every domain gate uses). Blocking the next domain is a config
   edit: no deploy, no database access. A mis-shaped list fails both engines
@@ -401,7 +422,9 @@ zero-I/O purity is untouched.
   *Avoid*: template, view, email builder.
 - **Candidate gauntlet** — the ordered per-candidate decision sequence
   ingestion runs on every discovered candidate: **security block** (a
-  config-driven blocked domain, read off the `RunContext`) → duplicate URL → semantic duplicate → unscrapable domain →
+  config-driven blocked domain, read off the `RunContext`) → **link
+  reputation** (a URL the **link-reputation seam** flagged, looked up one
+  batch per target onto the `RunContext` before the gauntlet) → duplicate URL → semantic duplicate → unscrapable domain →
   provider relevance gate → scrape →
   synthesis → store. Lives in `ingestion_engine.process_candidate(candidate,
   target, ctx)`; every drop is a recorded suppression (record + provider-yield

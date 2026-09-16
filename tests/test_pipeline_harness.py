@@ -89,7 +89,7 @@ DELIVERY = Harness(
     deliberately_real=frozenset({
         # Pure: the window rule, report assembly and rendering, the summary
         # preference, scoring, prompt assembly, the message value
-        "delivery_window", "assemble_report", "render_report",
+        "delivery_window", "assemble_report", "report_urls", "render_report",
         "_prefer_production_summary", "_alert_tier", "prompts.thematic_prompt",
         "EmailMessage", "SuppressionLedger.from_row", "_as_candidate",
         "SummaryKey", "_run_day", "Scoring.from_config", "timedelta",

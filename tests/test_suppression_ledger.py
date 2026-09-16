@@ -1,6 +1,7 @@
 # tests/test_suppression_ledger.py
 from suppression_ledger import (
     SAMPLES_CAP,
+    UNSAFE_URL_CODES,
     INGESTION_CODES,
     DELIVERY_CODES,
     ALL_CODES,
@@ -16,8 +17,8 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 9
-    assert len(DELIVERY_CODES) == 12
+    assert len(INGESTION_CODES) == 10
+    assert len(DELIVERY_CODES) == 13
 
 
 def test_samples_cap_is_ten():
@@ -60,6 +61,19 @@ def test_blocked_domain_stored_is_a_delivery_code_with_a_label():
     assert "blocked_domain_stored" in DELIVERY_CODES
     assert side_of("blocked_domain_stored") == "delivery"
     assert label_for("blocked_domain_stored") != "blocked_domain_stored"
+
+
+def test_unsafe_url_is_an_ingestion_code_and_unsafe_url_stored_a_delivery_code():
+    """The link-reputation check (Safe Browsing): a URL the service flags is
+    dropped before the scrape (ingestion owns `unsafe_url`) and, for a row
+    stored before it was flagged, before the report is assembled (delivery
+    owns `unsafe_url_stored`) — the proactive twin of the security block."""
+    assert "unsafe_url" in INGESTION_CODES
+    assert side_of("unsafe_url") == "ingestion"
+    assert label_for("unsafe_url") != "unsafe_url"
+    assert "unsafe_url_stored" in DELIVERY_CODES
+    assert side_of("unsafe_url_stored") == "delivery"
+    assert label_for("unsafe_url_stored") != "unsafe_url_stored"
 
 
 def test_prior_surfaced_duplicate_is_a_delivery_code_with_a_label():
@@ -485,3 +499,14 @@ def test_accounting_from_row_survives_a_wrong_container_in_either_column():
     assert SuppressionAccounting.from_row(
         {"suppression_breakdown": [["duplicate_url", 3]]}
     ).breakdown == {"duplicate_url": 3}
+
+
+def test_unsafe_url_codes_are_the_four_security_codes_and_nothing_else():
+    """The codes whose sample URL is a known-bad link — what the QA block must
+    never render in a form a mail client could auto-link or a gateway could
+    scan. Owned here so the renderer copies no list: a new security code
+    joins this set, or the QA email leaks its URL."""
+    assert UNSAFE_URL_CODES == frozenset({
+        "blocked_domain", "unsafe_url", "blocked_domain_stored", "unsafe_url_stored",
+    })
+    assert UNSAFE_URL_CODES <= INGESTION_CODES | DELIVERY_CODES
