@@ -94,7 +94,6 @@ create or replace view todays_intelligence as
 select
     id,
     created_at,
-    run_mode,
     headline,
     article_summary,
     americhem_impact,
@@ -116,7 +115,9 @@ select
         when sentiment_score between 1 and 3 then 'CRITICAL'
         when sentiment_score between 8 and 10 then 'STRATEGIC'
         else 'ROUTINE'
-    end as alert_tier
+    end as alert_tier,
+    -- appended last: CREATE OR REPLACE VIEW may only add columns at the end
+    run_mode
 from daily_intelligence
 where created_at >= now() - interval '24 hours'
 order by coalesce(americhem_impact_score, sentiment_score) desc;

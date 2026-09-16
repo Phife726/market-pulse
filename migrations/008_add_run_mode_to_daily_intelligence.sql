@@ -33,11 +33,12 @@ create index if not exists idx_daily_intelligence_run_mode_created_at
     on daily_intelligence (run_mode, created_at);
 
 -- Expose the column on the ad-hoc view (no filter: the view is for humans).
+-- Appended as the LAST column: CREATE OR REPLACE VIEW can only add columns at
+-- the end of the list (inserting one mid-list fails with 42P16).
 create or replace view todays_intelligence as
 select
     id,
     created_at,
-    run_mode,
     headline,
     article_summary,
     americhem_impact,
@@ -59,7 +60,9 @@ select
         when sentiment_score between 1 and 3 then 'CRITICAL'
         when sentiment_score between 8 and 10 then 'STRATEGIC'
         else 'ROUTINE'
-    end as alert_tier
+    end as alert_tier,
+    -- appended last: CREATE OR REPLACE VIEW may only add columns at the end
+    run_mode
 from daily_intelligence
 where created_at >= now() - interval '24 hours'
 order by coalesce(americhem_impact_score, sentiment_score) desc;

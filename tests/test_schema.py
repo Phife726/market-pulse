@@ -32,9 +32,14 @@ def test_schema_keeps_url_hash_unique_across_run_modes():
     assert "(url_hash, run_mode)" not in SCHEMA
 
 
-def test_the_ad_hoc_view_exposes_run_mode():
+def test_the_ad_hoc_view_exposes_run_mode_as_its_last_column():
+    """Last, because CREATE OR REPLACE VIEW may only append columns; a column
+    inserted mid-list fails on an existing database (42P16), which is what
+    happened the first time migration 008 was run."""
     view = SCHEMA[SCHEMA.index("create or replace view todays_intelligence"):]
-    assert re.search(r"^\s+run_mode,$", view, re.M)
+    assert re.search(r"end as alert_tier,\s*(--[^\n]*\n\s*)?run_mode\s*\nfrom daily_intelligence", view)
+    migration_view = MIGRATION_008.read_text(encoding="utf-8")
+    assert re.search(r"end as alert_tier,\s*(--[^\n]*\n\s*)?run_mode\s*\nfrom daily_intelligence", migration_view)
 
 
 def test_migration_008_adds_run_mode_idempotently():
