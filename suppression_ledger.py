@@ -18,6 +18,7 @@ _INGESTION_REASONS: tuple[tuple[str, str], ...] = (
     ("synthesis_failed",         "LLM synthesis failed"),
     ("unscrapable_domain",       "unscrapable domain"),
     ("blocked_domain",           "security-blocked domain (IT-flagged)"),
+    ("unsafe_url",               "unsafe URL (Safe Browsing match)"),
     ("market_report_publisher",  "market-research report (publisher or headline)"),
     ("zoominfo_company_mismatch", "ZoomInfo company mismatch"),
 )
@@ -34,6 +35,7 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
     ("appendix_excluded_category",          "appendix-excluded category (macro group)"),
     ("prior_surfaced_duplicate",            "near-duplicate of a headline shown in a prior email (same entity)"),
     ("blocked_domain_stored",               "security-blocked domain (stored row, IT-flagged)"),
+    ("unsafe_url_stored",                   "unsafe URL (stored row, Safe Browsing match)"),
 )
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)

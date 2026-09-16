@@ -8,6 +8,7 @@ from typing import Optional
 from suppression_ledger import SuppressionLedger
 from daily_intelligence_repo import _repo
 from llm import _llm
+from link_reputation import _link_reputation
 from mailer import EmailMessage, _mailer
 from run_instant import RunInstant, SummaryKey
 import prompts
@@ -17,7 +18,7 @@ from scoring import Scoring, tier as _alert_tier
 # rendering in renderer.py (the pure email renderer); tests exercise their
 # internals via those modules directly.
 from macro_summary import MacroSummary
-from report import ReportModel, assemble_report
+from report import ReportModel, assemble_report, report_urls
 from renderer import TEST_MARKER, render_report
 
 logging.basicConfig(
@@ -362,9 +363,16 @@ def prepare_report(
     names — the one resolve_summary_row read. report_config=None loads
     market_pulse_config.yaml; tests pass a dict. `prior_surfaced` is what
     earlier emails showed (`fetch_prior_shown`), rule 8's comparison set.
+    Before assembly, every URL the report could render (`report_urls`: the
+    rows' source_urls and the executive_sources) is handed to the
+    link-reputation seam in one batch; a flagged row or citation is dropped
+    by assembly (rule 10 / the citation set). The seam answers "nothing
+    flagged" when the check is off or failed, so this never blocks the email.
     The returned model is ready for render_report."""
     cfg = report_config if report_config is not None else config.mp_config()
-    model = assemble_report(rows, macro_summary, cfg, prior_surfaced=prior_surfaced)
+    unsafe = _link_reputation().unsafe(report_urls(rows, macro_summary)) if rows else frozenset()
+    model = assemble_report(rows, macro_summary, cfg, prior_surfaced=prior_surfaced,
+                            unsafe_urls=unsafe)
     if model.variant == "daily":
         _update_delivery_summary_counts(
             key=key,

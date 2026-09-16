@@ -3,7 +3,7 @@ import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Iterable, Optional, Union
 from unittest.mock import MagicMock
 
 # Make scripts/ importable as top-level modules in tests (e.g. `enrich_targets`).
@@ -15,6 +15,7 @@ import requests  # noqa: E402
 
 import discovery  # noqa: E402
 from mailer import FakeMailer  # noqa: E402
+from link_reputation import FakeLinkReputation  # noqa: E402
 
 if TYPE_CHECKING:  # annotations only — keep openai/report off narrow runs
     from llm import FakeLLM
@@ -30,6 +31,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: one that exercises the parser writes its own file under tmp_path.
 TARGETS_PATH = REPO_ROOT / "targets.yaml"
 CONFIG_PATH = REPO_ROOT / "market_pulse_config.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _inert_link_reputation(monkeypatch) -> FakeLinkReputation:
+    """Install a FakeLinkReputation (nothing flagged) as the process-wide
+    link-reputation adapter for EVERY test, so no test can reach the Safe
+    Browsing API by omission — the production workflow's pytest step runs
+    with the live secrets in its environment. Tests that script verdicts
+    build their own fake and inject it at the consumer (the harnesses'
+    `unsafe_urls=` knob)."""
+    fake = FakeLinkReputation()
+    monkeypatch.setattr("link_reputation._link_reputation_singleton", fake)
+    return fake
 
 
 @pytest.fixture(autouse=True)
@@ -105,6 +119,8 @@ class PipelineRun:
     stored: list
     #: The `generate_macro_summary` mock, for asserting the run's accounting.
     macro: MagicMock
+    #: The FakeLinkReputation the run consulted (`calls` = the URL batches).
+    link_reputation: FakeLinkReputation
 
 
 @pytest.fixture
@@ -134,6 +150,8 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
       * `mp_cfg`     — the parsed market_pulse_config.yaml dict the engine's
         `config.mp_config()` read returns (the security block lives there).
         Default `{}`: nothing blocked.
+      * `unsafe_urls` — what the injected FakeLinkReputation flags (default:
+        nothing). The fake is returned as `PipelineRun.link_reputation`.
     """
 
     def _run(
@@ -146,11 +164,14 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         run: RunInstant = RUN_INSTANT,
         limits: Optional[dict] = None,
         mp_cfg: Optional[dict] = None,
+        unsafe_urls: Iterable[str] = (),
     ) -> PipelineRun:
         import ingestion_engine  # local: keeps supabase/openai imports off narrow runs
 
         cfg = {} if mp_cfg is None else mp_cfg
         monkeypatch.setattr(ingestion_engine.config, "mp_config", lambda: cfg)
+        link_reputation = FakeLinkReputation(unsafe_urls)
+        monkeypatch.setattr(ingestion_engine, "_link_reputation", lambda: link_reputation)
 
         if (targets is None) == (targets_yaml is None):
             raise TypeError("pass exactly one of targets= / targets_yaml=")
@@ -193,7 +214,7 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
 
         ingestion_engine.execute_pipeline(run, budget=budget)
-        return PipelineRun(stored=stored, macro=macro)
+        return PipelineRun(stored=stored, macro=macro, link_reputation=link_reputation)
 
     return _run
 
@@ -235,6 +256,9 @@ def run_delivery_pipeline(monkeypatch, fake_mailer):
       * `llm_returns`   — what the FakeLLM answers (None = unusable response,
         i.e. bullets-only synthesis).
       * `report_config` — the mp_config dict (default: visible threshold 6).
+      * `unsafe_urls`   — what the injected FakeLinkReputation flags (default:
+        nothing); the fake is exposed as `link_reputation` on the returned
+        mailer for asserting on the batch delivery asked about.
     Returns the `fake_mailer` fixture's FakeMailer (`sent` = what went out).
     """
 
@@ -244,11 +268,15 @@ def run_delivery_pipeline(monkeypatch, fake_mailer):
         run: RunInstant = RUN_INSTANT,
         llm_returns=None,
         report_config: Optional[dict] = None,
+        unsafe_urls: Iterable[str] = (),
     ) -> FakeMailer:
         import delivery_engine
         from llm import FakeLLM
 
         cfg = report_config if report_config is not None else VISIBLE_6_CFG
+        link_reputation = FakeLinkReputation(unsafe_urls)
+        monkeypatch.setattr("delivery_engine._link_reputation", lambda: link_reputation)
+        fake_mailer.link_reputation = link_reputation
         monkeypatch.setattr("delivery_engine._repo", lambda: fake_repo)
         monkeypatch.setattr("delivery_engine._llm", lambda: FakeLLM(returns=llm_returns))
         # The same fake the autouse _inert_mailer installs at the seam module —

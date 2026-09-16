@@ -97,6 +97,7 @@ jobs:
           ZOOMINFO_NEWS_PER_COMPANY: ${{ vars.ZOOMINFO_NEWS_PER_COMPANY }}
           STORE_DISCOVERY_METADATA: ${{ vars.STORE_DISCOVERY_METADATA }}
           MARKET_PULSE_RUN_MODE: test
+          SAFE_BROWSING_API_KEY: ${{ secrets.SAFE_BROWSING_API_KEY }}
         run: python ingestion_engine.py
 
       # An `if:` without a status-check function implies success(), so this step
@@ -114,4 +115,5 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           RECIPIENT_EMAILS: ${{ secrets.TEST_RECIPIENT_EMAILS }}
           MARKET_PULSE_RUN_MODE: test
+          SAFE_BROWSING_API_KEY: ${{ secrets.SAFE_BROWSING_API_KEY }}
         run: python delivery_engine.py

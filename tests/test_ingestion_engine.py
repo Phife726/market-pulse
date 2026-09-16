@@ -1303,6 +1303,54 @@ def test_execute_pipeline_blocks_nothing_when_the_config_lists_nothing(run_inges
     assert run.macro.call_args.kwargs["suppression_breakdown"] == {}
 
 
+# ===========================================================================
+# Link-reputation check (Safe Browsing): batched per target, gated pre-scrape
+# ===========================================================================
+
+
+def test_execute_pipeline_looks_up_each_targets_candidates_in_one_batch(run_ingestion_pipeline):
+    """The loop asks the seam once per target with every candidate URL of
+    that target, before the gauntlet runs — one request per batch, not one
+    per candidate."""
+    run = run_ingestion_pipeline(
+        targets=[stub_target("Lanxess", category="suppliers"),
+                 stub_target("Dow", category="suppliers")],
+        candidates=lambda target: [
+            {"url": f"https://news.example/{target['name']}/1", "title": "One", "provider": "serper"},
+            {"url": f"https://news.example/{target['name']}/2", "title": "Two", "provider": "serper"},
+        ],
+    )
+    assert run.link_reputation.calls == [
+        ["https://news.example/Lanxess/1", "https://news.example/Lanxess/2"],
+        ["https://news.example/Dow/1", "https://news.example/Dow/2"],
+    ]
+    assert len(run.stored) == 4
+
+
+def test_execute_pipeline_skips_an_unsafe_url_before_scraping(run_ingestion_pipeline):
+    """A candidate Safe Browsing flags is suppressed pre-scrape (no Firecrawl
+    spend), ledgered unsafe_url with a sample, and the yield line counts it;
+    the other candidate of the same target is unaffected."""
+    bad = "https://compromised.example/story"
+    run = run_ingestion_pipeline(
+        targets=[stub_target("Lanxess", category="suppliers")],
+        candidates=[
+            {"url": bad, "title": "Injected page", "provider": "serper"},
+            {"url": "https://news.example/ok", "title": "Fine", "provider": "serper"},
+        ],
+        scrape=lambda url, min_length: (
+            pytest.fail("scrape_article must not be called for an unsafe URL")
+            if url == bad else "text " * 200),
+        unsafe_urls={bad},
+    )
+    assert [r["source_url"] for r in run.stored] == ["https://news.example/ok"]
+    summary_kwargs = run.macro.call_args.kwargs
+    assert summary_kwargs["suppression_breakdown"] == {"unsafe_url": 1}
+    assert summary_kwargs["suppression_samples"] == [{
+        "reason": "unsafe_url", "url": bad, "title": "Injected page",
+    }]
+
+
 def test_execute_pipeline_fails_fast_on_a_mis_shaped_block_list(run_ingestion_pipeline):
     """A scalar where the list belongs would silently unblock every domain;
     the run must crash before any candidate is touched (a red job at t=0,

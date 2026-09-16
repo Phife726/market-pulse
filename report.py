@@ -109,7 +109,8 @@ class CitationSet:
     @classmethod
     def from_summary(cls, macro_summary: Optional[MacroSummary],
                      macro_outlook: Optional[dict] = None,
-                     *, blocked_domains: frozenset[str] = frozenset()) -> "CitationSet":
+                     *, blocked_domains: frozenset[str] = frozenset(),
+                     unsafe_urls: frozenset[str] = frozenset()) -> "CitationSet":
         """The one numbering rule, applied to a stored daily_summaries row.
 
         `macro_outlook` is the *renderable* outlook — pass the report model's
@@ -128,25 +129,52 @@ class CitationSet:
         prose (it was gated on a valid citation at ingestion; only the link is
         withdrawn). A stored `executive_sources` entry is the one way a blocked
         link could otherwise reach the email without passing rule 9.
+        `unsafe_urls` (the link-reputation seam's verdict, `link_reputation.py`)
+        withdraws a source the same way — exact-URL match, rule 10's twin.
         """
         summary = macro_summary or MacroSummary()
         if macro_outlook is None:
             macro_outlook = summary.outlook
         signals = (macro_outlook or {}).get("signals") or []
         sources = summary.sources
-        if blocked_domains:
-            dropped = [s for s in sources
-                       if isinstance(s, dict) and _is_blocked_domain(s.get("url"), blocked_domains)]
-            for s in dropped:
+        if blocked_domains or unsafe_urls:
+            kept = []
+            for src in sources:
+                url = src.get("url") if isinstance(src, dict) else None
+                if blocked_domains and _is_blocked_domain(url, blocked_domains):
+                    reason = "BLOCKED_DOMAIN"
+                elif url in unsafe_urls:
+                    reason = "UNSAFE_URL"
+                else:
+                    kept.append(src)
+                    continue
                 logger.warning(
-                    "BLOCKED_DOMAIN — citation withdrawn from executive_sources (id %s): %s",
-                    s.get("id"), s.get("url"),
+                    "%s — citation withdrawn from executive_sources (id %s): %s",
+                    reason, src.get("id"), url,
                 )
-            sources = tuple(s for s in sources if s not in dropped)
+            sources = tuple(kept)
         return cls(sources, _citation_display_map(summary.bullets, list(sources), signals))
 
 
 EMPTY_CITATIONS = CitationSet()
+
+
+def report_urls(rows: Sequence[Optional[dict]], macro_summary: Optional[MacroSummary]) -> list[str]:
+    """Every URL the report could render, once each, in first-seen order:
+    each row's `source_url`, then each `executive_sources` entry's `url`.
+    The batch delivery hands the link-reputation seam before assembly, so
+    the verdict covers cards, Watch rows, appendix rows and citations alike.
+    Blank and non-string values are dropped. Pure."""
+    seen: dict[str, None] = {}
+    for row in rows:
+        url = row.get("source_url") if isinstance(row, dict) else None
+        if isinstance(url, str) and url:
+            seen.setdefault(url, None)
+    for src in (macro_summary.sources if macro_summary else ()):
+        url = src.get("url") if isinstance(src, dict) else None
+        if isinstance(url, str) and url:
+            seen.setdefault(url, None)
+    return list(seen)
 
 
 def _visible_card_count(groups: dict[str, list[dict]]) -> int:
@@ -340,8 +368,9 @@ def _apply_delivery_suppression(
     scorer: Optional[Scoring] = None,
     prior_surfaced: Sequence[Optional[dict]] = (),
     blocked: Optional[frozenset[str]] = None,
+    unsafe_urls: frozenset[str] = frozenset(),
 ) -> tuple[list[dict], SuppressionLedger]:
-    """Run the deterministic nine-rule guardrail over fetched rows.
+    """Run the deterministic ten-rule guardrail over fetched rows.
 
     Returns (kept_rows, ledger). First matching rule wins; each suppressed
     row is counted once and contributes at most one sample (deduped).
@@ -350,6 +379,9 @@ def _apply_delivery_suppression(
     showed (rows with `trigger_entity` + `headline`) — rule 8's comparison set.
     `blocked` is the security block (`security.blocked_domains`) rule 9 drops
     by; None resolves it from config (raising on a mis-shaped list).
+    `unsafe_urls` is the link-reputation seam's verdict (the URLs Safe
+    Browsing flagged, exact strings) rule 10 drops by; empty when the check
+    is off, failed, or found nothing.
 
     Rules 6/7 keep the first row seen of a duplicate pair. Rows arrive
     impact-desc, so a score-4 RULE 6 template row would precede — and
@@ -485,10 +517,19 @@ def _apply_delivery_suppression(
         # malware at the recipient gateway, so the row renders nowhere: not a
         # card, not a Watch row, not an appendix row, whatever it scored. No
         # rule switch — the list itself is the switch (empty = nothing
-        # blocked). Last, so every other reason wins first-match; the row is
-        # dropped either way, and never joins kept_headlines.
+        # blocked). Every earlier reason wins first-match; the row is dropped
+        # either way, and never joins kept_headlines.
         if blocked and _is_blocked_domain(url, blocked):
             ledger = ledger.record("blocked_domain_stored", url=url, title=headline)
+            continue
+
+        # Rule 10: link reputation — the same drop, fed by the seam's verdict
+        # (`link_reputation.py`: the URLs Safe Browsing flagged, looked up by
+        # delivery over `report_urls` before assembly) instead of the config
+        # list: a page flagged after it was stored renders nowhere. Exact URL
+        # match — the verdict is per URL, not per domain. Last of the ten.
+        if url in unsafe_urls:
+            ledger = ledger.record("unsafe_url_stored", url=url, title=headline)
             continue
 
         kept_indexed.append((index, row))
@@ -724,6 +765,7 @@ def assemble_report(
     config: Optional[dict] = None,
     *,
     prior_surfaced: Sequence[Optional[dict]] = (),
+    unsafe_urls: frozenset[str] = frozenset(),
 ) -> ReportModel:
     """Run the full decision pipeline over fetched Insight rows.
 
@@ -731,6 +773,9 @@ def assemble_report(
     None means built-in defaults, never a file read. `prior_surfaced` is what
     earlier emails showed — rows carrying `trigger_entity` and `headline`, the
     comparison set for suppression rule 8; empty means no multi-day dedup.
+    `unsafe_urls` is the link-reputation seam's verdict (what the caller asked
+    it about `report_urls`); a flagged row is dropped by rule 10 and a flagged
+    `executive_sources` entry loses its citation. Empty means nothing flagged.
     Never raises on malformed rows — field reads fall back exactly as the
     renderer's defensive reads did.
     """
@@ -757,7 +802,7 @@ def assemble_report(
     scorer = Scoring.from_config(config)
 
     # 1. Final guardrail suppression pass (delivery-side patterns + dedupe).
-    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced, blocked)
+    kept, ledger = _apply_delivery_suppression(rows, config, scorer, prior_surfaced, blocked, unsafe_urls)
 
     # 2. Visibility filter.
     visible_pool = [r for r in kept if scorer.is_visible(r)]
@@ -853,7 +898,8 @@ def assemble_report(
     #    same numbers instead of deriving its own.
     macro_outlook = _display_mapped_outlook(
         macro_summary.outlook if macro_summary else None, display_map)
-    citations = CitationSet.from_summary(macro_summary, macro_outlook, blocked_domains=blocked)
+    citations = CitationSet.from_summary(
+        macro_summary, macro_outlook, blocked_domains=blocked, unsafe_urls=unsafe_urls)
 
     return ReportModel(
         variant="daily",
