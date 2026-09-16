@@ -16,7 +16,7 @@ def test_taxonomy_partitions():
     assert "duplicate_url" in INGESTION_CODES
     assert "below_impact_threshold" in DELIVERY_CODES
     assert INGESTION_CODES.isdisjoint(DELIVERY_CODES)
-    assert len(INGESTION_CODES) == 8
+    assert len(INGESTION_CODES) == 9
     assert len(DELIVERY_CODES) == 11
 
 
@@ -40,6 +40,16 @@ def test_market_report_publisher_is_an_ingestion_code_with_a_label():
     assert "market_report_publisher" in INGESTION_CODES
     assert side_of("market_report_publisher") == "ingestion"
     assert label_for("market_report_publisher") != "market_report_publisher"
+
+
+def test_blocked_domain_is_an_ingestion_code_with_a_label():
+    """The pre-scrape security block (2026-09-16): a domain IT has flagged as
+    compromised is never scraped, so its link can never reach an email. A
+    stored row with such a link scored the whole digest as malware at the
+    recipient gateway (chargedevs.com)."""
+    assert "blocked_domain" in INGESTION_CODES
+    assert side_of("blocked_domain") == "ingestion"
+    assert label_for("blocked_domain") != "blocked_domain"
 
 
 def test_prior_surfaced_duplicate_is_a_delivery_code_with_a_label():

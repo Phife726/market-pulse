@@ -82,6 +82,26 @@ def test_unscrapable_domain_suppresses_pre_scrape(monkeypatch):
     scraper.assert_not_called()
 
 
+def test_blocked_domain_suppresses_before_any_lookup(monkeypatch):
+    """The security block is the first gate: a compromised domain is dropped
+    before the duplicate lookup, so it costs no DB read and is ledgered as
+    blocked_domain even when the URL was stored on an earlier run."""
+    monkeypatch.setattr(
+        ingestion_engine, "url_already_processed",
+        lambda h: pytest.fail("no DB lookup for a blocked domain"))
+    monkeypatch.setattr(
+        ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
+    scraper = MagicMock()
+    monkeypatch.setattr(ingestion_engine, "scrape_article", scraper)
+    ctx = make_ctx()
+    out = process_candidate(
+        make_candidate(url="https://chargedevs.com/newswire/lanxess-battery-lab/"), TARGET, ctx)
+    assert out == Suppressed("blocked_domain")
+    assert ctx.ledger.breakdown == {"blocked_domain": 1}
+    assert ctx.provider_yield["serper"]["blocked"] == 1
+    scraper.assert_not_called()
+
+
 def test_provider_gate_drop_suppresses_with_gate_reason(monkeypatch):
     from relevance_gate import GateDecision
 

@@ -110,11 +110,12 @@ def _log_provider_yield(provider_yield: dict[str, dict]) -> None:
         y = provider_yield[provider]
         logger.info(
             "Provider yield — %s discovered=%d scraped=%d stored=%d "
-            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d duplicates=%d "
-            "synthesis_failed=%d market_reports=%d",
+            "discards=%d relevance_dropped=%d scrape_failed=%d unscrapable=%d blocked=%d "
+            "duplicates=%d synthesis_failed=%d market_reports=%d",
             provider, y["discovered"], y["scraped"], y["stored"],
             y["discards"], y["relevance_dropped"], y["scrape_failed"],
-            y["unscrapable"], y["duplicates"], y["synthesis_failed"], y["market_reports"],
+            y["unscrapable"], y["blocked"], y["duplicates"], y["synthesis_failed"],
+            y["market_reports"],
         )
 
 
@@ -156,6 +157,24 @@ UNSCRAPABLE_HOSTS: frozenset[str] = frozenset({
     "homedepot.com", "www.homedepot.com",
     "lowes.com", "www.lowes.com",
 })
+
+
+BLOCKED_DOMAINS: frozenset[str] = frozenset({
+    # Security block — domains Americhem IT has flagged as compromised. A link
+    # to one in the digest scores the whole email as malware at the recipient
+    # gateway (Proofpoint), which quarantined the 2026-09-16 run for every
+    # recipient. Suffix match, checked first in the gauntlet: never scraped,
+    # never stored, never linked. Add a domain here when IT reports one;
+    # delete its stored rows from daily_intelligence by hand (source_url).
+    "chargedevs.com",   # 2026-09-16: malicious injection code (IT sandbox analysis)
+})
+
+
+def _is_blocked_domain(url: str) -> bool:
+    """True when the URL's host is (a subdomain of) a security-blocked domain.
+    Malformed URLs return False (the later gates decide)."""
+    host = (urlparse(url).hostname or "").lower()
+    return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
 
 
 def _is_unscrapable_domain(url: str) -> bool:
@@ -425,6 +444,7 @@ _YIELD_KEY_FOR_REASON: dict[str, str] = {
     "duplicate_url": "duplicates",
     "semantic_duplicate": "duplicates",
     "unscrapable_domain": "unscrapable",
+    "blocked_domain": "blocked",
     "market_report_publisher": "market_reports",
     "zoominfo_company_mismatch": "relevance_dropped",
     "scrape_failed": "scrape_failed",
@@ -481,6 +501,14 @@ def process_candidate(candidate: dict, target: dict, ctx: RunContext) -> "Stored
     provider = candidate.get("provider", "unknown")
 
     normalized = normalize_url(raw_url)
+
+    # The security block is the first gate: a compromised domain is dropped
+    # before any DB read, scrape or LLM call, and is ledgered as blocked even
+    # when an earlier run stored the URL (those rows are deleted by hand).
+    if _is_blocked_domain(raw_url):
+        logger.warning("BLOCKED_DOMAIN — skipped pre-scrape (%s): %s", provider, normalized)
+        return ctx.suppress("blocked_domain", provider, url=raw_url, title=candidate_title)
+
     url_hash = compute_url_hash(normalized)
 
     if url_already_processed(url_hash):

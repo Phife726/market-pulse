@@ -383,8 +383,9 @@ zero-I/O purity is untouched.
   renderer makes the HTML, `send_email` addresses it, the mailer transports it.
   *Avoid*: template, view, email builder.
 - **Candidate gauntlet** — the ordered per-candidate decision sequence
-  ingestion runs on every discovered candidate: duplicate URL → semantic
-  duplicate → unscrapable domain → provider relevance gate → scrape →
+  ingestion runs on every discovered candidate: security block (blocked
+  domain) → duplicate URL → semantic duplicate → unscrapable domain →
+  provider relevance gate → scrape →
   synthesis → store. Lives in `ingestion_engine.process_candidate(candidate,
   target, ctx)`; every drop is a recorded suppression (record + provider-yield
   bump are one inseparable call). The run-level limits (pipeline deadline,

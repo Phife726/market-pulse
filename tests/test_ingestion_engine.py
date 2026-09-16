@@ -27,6 +27,7 @@ from tests.conftest import (
 from ingestion_engine import (
     _TextExtractor,
     _is_unscrapable_domain,
+    _is_blocked_domain,
     _scrape_fallback,
     compute_url_hash,
     execute_pipeline,
@@ -1255,6 +1256,45 @@ def test_execute_pipeline_skips_unscrapable_domain_before_scraping(run_ingestion
         "reason": "unscrapable_domain",
         "url": "https://www.linkedin.com/posts/acme-update",
         "title": "Acme update",
+    }]
+
+
+# ===========================================================================
+# Pre-scrape blocked-domain filter (security block)
+# ===========================================================================
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://chargedevs.com/newswire/lanxess-opens-a-battery-laboratory/", True),
+    ("https://www.chargedevs.com/some-story", True),          # subdomains too
+    ("https://CHARGEDEVS.com/x", True),                        # host is case-folded
+    ("https://notchargedevs.com/article", False),              # suffix must be dot-anchored
+    ("https://www.reuters.com/markets/some-article/", False),
+    ("not a url", False),                                      # malformed → let the scraper decide
+])
+def test_is_blocked_domain(url, expected):
+    assert _is_blocked_domain(url) is expected
+
+
+def test_execute_pipeline_skips_blocked_domain_before_scraping(run_ingestion_pipeline):
+    """A blocked-domain candidate must be suppressed pre-scrape: no Firecrawl
+    attempt, no DB lookup needed, and the ledger records blocked_domain."""
+    run = run_ingestion_pipeline(
+        targets=[stub_target("Lanxess", category="suppliers")],
+        candidates=[{
+            "url": "https://chargedevs.com/newswire/lanxess-battery-lab/",
+            "title": "LANXESS opens battery lab", "provider": "serper",
+        }],
+        scrape=lambda *a, **k: pytest.fail(
+            "scrape_article must not be called for a blocked domain"),
+    )
+
+    summary_kwargs = run.macro.call_args.kwargs
+    assert summary_kwargs["suppression_breakdown"] == {"blocked_domain": 1}
+    assert summary_kwargs["suppression_samples"] == [{
+        "reason": "blocked_domain",
+        "url": "https://chargedevs.com/newswire/lanxess-battery-lab/",
+        "title": "LANXESS opens battery lab",
     }]
 
 
