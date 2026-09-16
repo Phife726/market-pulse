@@ -106,3 +106,26 @@ criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
   never moved was framed — by the rubric, by RULE 6's own example So-What
   ("can shift additive channel pricing"), and by every rationale — as
   "channel dynamics".
+- **Pass 4 — the mechanism the model already scores** (`aa6681a868fe`,
+  shipped). The actor paragraph files a distributor (Univar, Brenntag,
+  Nexeo, H.M. Royal) as a SUPPLIER that sets the price and allocation of
+  what Americhem buys through it; the deal bullet scores a distributor's
+  acquisition "like a supplier's price increase, never like a 'channel
+  dynamics' watch item"; RULE 6's example So-What names the input-price and
+  allocation exposure. Result: **17/21 direct (81%), 39/39 precision, 36/37
+  recall, distribution 6:19 / 7:14 / 8:8** — the H.M. Royal rows 4/4, the
+  Interpur rows 2/4, and the rationales now say "allocation and input-cost
+  exposure". The two Sudarshan/Clariant rows (a pigment plant sale) and the
+  recyclate price report are the remaining misses at 6, and Avient's bare
+  beat-and-raise is the recall miss the floor keeps taking (band 4 wins over
+  WATCH by construction). The pass is one row above the 80% line — inside
+  the run-to-run noise — so the production watch in issue #109 (`direct > 0`
+  on every one of the first five crons, `surfaced_count` inside 8–15) is the
+  real acceptance, not this sample.
+
+Corollary, added to the one above: a class the model has already decided is
+a 6 is not moved by naming it in the higher band's list, by writing its
+score into the bullet, or by pointing the carve-outs the right way. It moves
+when the rubric gives it the *mechanism* the model already scores at that
+level — here, an input-cost effect — in the actor definition and in the
+So-What example, not only in the band.
