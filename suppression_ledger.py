@@ -40,6 +40,13 @@ _DELIVERY_REASONS: tuple[tuple[str, str], ...] = (
 
 INGESTION_CODES: frozenset[str] = frozenset(c for c, _ in _INGESTION_REASONS)
 DELIVERY_CODES:  frozenset[str] = frozenset(c for c, _ in _DELIVERY_REASONS)
+# The codes whose sample URL is a known-bad link — the security block and the
+# link-reputation verdict, on either side. A renderer must never emit such a
+# URL in a form a mail client could auto-link or a gateway could scan (the QA
+# block defangs it); owned here so no renderer keeps its own copy of the set.
+UNSAFE_URL_CODES: frozenset[str] = frozenset({
+    "blocked_domain", "unsafe_url", "blocked_domain_stored", "unsafe_url_stored",
+})
 # Every code in stable reading order: ingestion-side first, then delivery-side,
 # each in taxonomy order. The one ordered view of the taxonomy — anything that
 # enumerates reasons for display (the QA breakdown strip) iterates this instead

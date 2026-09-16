@@ -1,6 +1,7 @@
 # tests/test_suppression_ledger.py
 from suppression_ledger import (
     SAMPLES_CAP,
+    UNSAFE_URL_CODES,
     INGESTION_CODES,
     DELIVERY_CODES,
     ALL_CODES,
@@ -498,3 +499,14 @@ def test_accounting_from_row_survives_a_wrong_container_in_either_column():
     assert SuppressionAccounting.from_row(
         {"suppression_breakdown": [["duplicate_url", 3]]}
     ).breakdown == {"duplicate_url": 3}
+
+
+def test_unsafe_url_codes_are_the_four_security_codes_and_nothing_else():
+    """The codes whose sample URL is a known-bad link — what the QA block must
+    never render in a form a mail client could auto-link or a gateway could
+    scan. Owned here so the renderer copies no list: a new security code
+    joins this set, or the QA email leaks its URL."""
+    assert UNSAFE_URL_CODES == frozenset({
+        "blocked_domain", "unsafe_url", "blocked_domain_stored", "unsafe_url_stored",
+    })
+    assert UNSAFE_URL_CODES <= INGESTION_CODES | DELIVERY_CODES

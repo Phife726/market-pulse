@@ -26,7 +26,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 import insight
-from suppression_ledger import ALL_CODES, SAMPLES_CAP, label_for
+from suppression_ledger import ALL_CODES, SAMPLES_CAP, UNSAFE_URL_CODES, label_for
 from macro_summary import MacroSummary
 import scoring
 from report import (
@@ -375,6 +375,25 @@ def _render_additional_articles_section(items: list[dict]) -> str:
 
 
 
+def _defang_url(url: str) -> str:
+    """The security-analyst spelling of a URL that must not be a link:
+    `https://` -> `hxxps://` and every dot in the host bracketed
+    (`chargedevs[.]com`), so no mail client auto-links it and no gateway
+    reads it as a URL. Path and query are left as they are. A string that
+    does not parse as a URL gets every dot bracketed instead."""
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        parsed = None
+    if parsed is None or not parsed.scheme or not parsed.netloc:
+        return url.replace(".", "[.]")
+    scheme = parsed.scheme.replace("http", "hxxp", 1) if parsed.scheme.startswith("http") else parsed.scheme
+    netloc = parsed.netloc.replace(".", "[.]")
+    return parsed._replace(scheme=scheme, netloc=netloc).geturl()
+
+
 def _render_qa_debug_section(macro_summary: Optional[MacroSummary]) -> str:
     """Render the QA suppression summary block. Caller is responsible for gating
     on test mode; this function does not check MARKET_PULSE_RUN_MODE itself.
@@ -424,10 +443,15 @@ def _render_qa_debug_section(macro_summary: Optional[MacroSummary]) -> str:
     samples_html = ""
     for s in samples:
         reason_label = label_for(s.reason)
+        # A known-bad link (the security block, a Safe Browsing match) is the
+        # one thing this email exists to keep out; the QA block shows it
+        # defanged so a mail client cannot auto-link it and a gateway has
+        # nothing to scan. The stored sample keeps the true URL.
+        shown_url = _defang_url(s.url) if s.reason in UNSAFE_URL_CODES else s.url
         samples_html += (
             f'<tr><td style="padding:2px 0;font-size:11px;color:#6B7280;'
             f'font-family:monospace;">'
-            f'[{html.escape(reason_label)}] "{html.escape(s.title)}" — {html.escape(s.url)}'
+            f'[{html.escape(reason_label)}] "{html.escape(s.title)}" — {html.escape(shown_url)}'
             f'</td></tr>'
         )
 
