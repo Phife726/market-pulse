@@ -31,6 +31,10 @@ Two GitHub Actions workflows exist:
 - `.github/workflows/market_pulse.yml` — production schedule, runs ingestion then delivery Monday–Friday at 10:00 UTC; also dispatchable manually.
 - `.github/workflows/market_pulse_test.yml` — manually-dispatched sandbox run. Sets `MARKET_PULSE_RUN_MODE=test`, routes mail to the `TEST_RECIPIENT_EMAILS` secret (Jason-only QA pool), and exposes `run_ingestion` / `send_email` input flags so you can re-render against existing rows without re-billing APIs. With `run_ingestion=false` no same-day test-mode macro-summary row exists (ingestion writes it), so `resolve_summary_row` uses the **production** row read-only whenever it out-ranks the test candidate — content-fullness first (`MacroSummary.has_content`; an accounting-only row from a zero-yield run never shadows a content-full one, in either direction), then strict recency (ties keep the test row — the date-rollover grace) — the QA email keeps the executive summary and citations, and the test write-back stays a no-op on production accounting. The fallback is one-directional: production never reads test rows.
 
+## Runbooks
+
+- `docs/runbooks/no-email-but-green-run.md` — the on-call path for "the run was green, Resend says Delivered, nobody received the digest" (the 2026-09-16 Proofpoint quarantine): the delivery-step log lines to read, the Resend dashboard checks, why "Delivered" is only SMTP acceptance, what to ask Americhem IT for (a Proofpoint Smart Search), the delivery-only re-send (`gh workflow run market_pulse.yml --ref main -f run_ingestion=false`), and how to block a domain (`security.blocked_domains`) and purge its stored rows. Written for IT as well as engineers; `tests/test_runbooks.py` pins every command, key and log fragment it quotes to the real files.
+
 ## Architecture
 
 `CONTEXT.md` is the companion glossary — the shared vocabulary for seams and domain terms (Insight, materiality, relevance thresholds, macro summary, relevance gate). Read it alongside this section when the naming matters.
