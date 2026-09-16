@@ -55,3 +55,33 @@ article that lacks a stated Americhem effect ("a template is for articles that
 matter little", #74) turns nearly every article into a template at the band's
 floor — the score-3 floor (`CONTEXT.md`). The template must be confined to
 articles that are already in a floor band for another reason.
+
+## A band's heading label moves the classes that already read as that band; the rest follow the words in the list
+
+The score-6 ceiling (issue #109, 2026-09-16): six production crons after the
+recalibration put 136 rows at 6 and none at 8+, with the events DIRECT names
+verbatim — Univar/Interpur, Sudarshan/Clariant, AdvanSix caprolactam — all at
+6. Two passes against the labeled set, graded on the majority-of-3 protocol
+(`--runs 3`, the median run stands) with the `expected_band` labels as the
+criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
+
+- **Pass 1 — the heading default** (`9ea7f27943b6`). DIRECT's heading gained
+  its own "default for …" label (only WATCH's had said "default"), WATCH's
+  bullets stopped restating DIRECT's members with carve-outs, and four
+  carve-outs that still said "DIRECT, below" — a pointer to a band that has
+  sat *above* WATCH since pass 9 — were turned round. Result: every priced
+  input moved (Dow PE, Chemours TiO2 ×2, AdvanSix, PET resin, the resin-swing
+  call; 9/21 direct, with 8s appearing for the first time), and **every
+  named-target deal and supplier bankruptcy stayed at 6** — 12/12 misses in
+  those two classes. Their rationales were WATCH's words back: "distribution
+  expansion via acquisition", "channel consolidation", "plant sale changes
+  supply ownership", "restructuring", "supplier distress". The heading label
+  was enough for a class the model already read as an input price; for a
+  class it read through another band's vocabulary, the label did nothing.
+- **Pass 2 — the model's own words** (`588c432b0f15`). Those phrases were
+  moved into DIRECT's list as members ("distribution expansion via
+  acquisition", "channel consolidation", a plant's "supply ownership change",
+  a Chapter 11 filing, a court's mediation order, "supplier distress"), with
+  the labeled rows as examples (Univar acquires H.M. Royal; Trinseo files
+  Chapter 11), and the hooks were removed from WATCH's lists ("or sold",
+  "distribution-agreement change", "financial distress — restructuring").
