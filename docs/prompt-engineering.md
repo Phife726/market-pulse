@@ -85,3 +85,24 @@ criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
   the labeled rows as examples (Univar acquires H.M. Royal; Trinseo files
   Chapter 11), and the hooks were removed from WATCH's lists ("or sold",
   "distribution-agreement change", "financial distress — restructuring").
+  Result: **the distress class moved** (Trinseo's filing and its
+  force-majeure quarter both 8; 12/21 direct), the priced inputs held, and
+  **the named-target acquisitions did not** — the Interpur rows 0/4, the
+  H.M. Royal rows 2/4 on near-identical text, Sudarshan/Clariant 0/2 — with
+  rationales that now quoted DIRECT's new members back ("distributor
+  acquisition", "channel expansion via acquisition") and still scored 6.
+  Precision dipped to 35/39 on three one-notch flips of rows the floor names
+  verbatim (EV sales, a bus-camera trial, a trade-show exhibit): edge noise,
+  not the reword.
+- **Pass 3 — margin and region** (`23e480082652`). The deal bullet stated
+  its own score ("score 8 whichever region the deal is in"), named the
+  newest rationale words, and band 4's "bare" result gained "or guidance
+  change" so a competitor's beat-and-raise is not floored before WATCH reads
+  it. Result: 11/21 — the acquisition rows 0/8 this time, rationales
+  identical in vocabulary to the passing rows' and still at 6; precision
+  back to 37/39. **A stated score inside a bullet did not move a class the
+  model had already decided was a 6.** What the classes that did move share
+  is a cost mechanism (an input price, a supplier's supply); the one that
+  never moved was framed — by the rubric, by RULE 6's own example So-What
+  ("can shift additive channel pricing"), and by every rationale — as
+  "channel dynamics".
