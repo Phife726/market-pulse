@@ -229,6 +229,21 @@ zero-I/O purity is untouched.
   time zones) one delivery run used to make, which spelled the summary-row key
   four different ways.
   *Avoid*: run clock, run context (that is ingestion's mutable gauntlet state).
+- **Run mode** (`RunInstant.run_mode`; `MARKET_PULSE_RUN_MODE`) — which of
+  the two worlds a run belongs to: **production** (the scheduled cron, the
+  stakeholder recipient pool) or **test** (a manually dispatched QA run, the
+  QA recipient pool). Every stored row belongs to exactly one mode, in both
+  tables (`daily_summaries.run_mode`, and `daily_intelligence.run_mode` once
+  migration 008 is applied). Visibility is **one-directional**: production
+  reads only production rows; a test run may read production rows as well as
+  its own. A **test row** is a disposable QA artifact, never a parallel copy —
+  one URL has one row, and a production run that reaches a URL a test row
+  holds re-scrapes and re-scores it and replaces the row as production. Named
+  after issue #100: `daily_intelligence` carried no mode, so a QA ingestion's
+  rows sat in the production delivery window and the next morning's email
+  carried scores from whatever prompt the QA branch was on.
+  *Avoid*: environment (there is one database and one deployment; the mode is
+  a property of the run, not of where it runs), sandbox row.
 - **Summary key** (`run_instant.py`, `SummaryKey`) — the `daily_summaries` row
   key, `(run_date, run_mode)`, as a frozen value; that table's unique index is
   exactly this pair. Ingestion derives its own from the **run instant**
