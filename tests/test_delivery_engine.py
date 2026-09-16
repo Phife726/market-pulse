@@ -603,7 +603,7 @@ def _seed_delivery_repo(run_mode: str) -> "InMemoryIntelligenceRepo":
         fake.upsert_insight(_row(f"wire{i}", 8, headline=headline,
                                  commercial_segment="Healthcare",
                                  americhem_impact="Wiring effect.",
-                                 source_url=f"https://x/wire{i}"))
+                                 source_url=f"https://x/wire{i}"), run_mode="production")
     fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date, run_mode=run_mode))
     return fake
 
@@ -855,7 +855,7 @@ def test_fetch_todays_intelligence_routes_through_repo(monkeypatch):
     fake.upsert_insight({
         "url_hash": "a", "headline": "Alpha",
         "americhem_impact_score": 8, "sentiment_score": 7,
-    })
+    }, run_mode="production")
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
     rows = fetch_todays_intelligence(_RUN, _RUN.summary_key)
     assert len(rows) == 1
@@ -876,7 +876,7 @@ def test_fetch_todays_intelligence_uses_72h_on_monday(monkeypatch):
     fixed_monday = datetime(2026, 5, 25, 9, 0, 0)  # Monday
     monday_run = replace(_RUN, now=fixed_monday)
     delivery_engine.fetch_todays_intelligence(monday_run, monday_run.summary_key)
-    fake.fetch_since.assert_called_once_with(fixed_monday - timedelta(hours=72))
+    fake.fetch_since.assert_called_once_with(fixed_monday - timedelta(hours=72), modes=frozenset({"production"}))
 
 
 def test_resolve_summary_row_routes_through_repo(monkeypatch):
@@ -1033,7 +1033,7 @@ def test_fetch_prior_shown_reads_the_lookback_before_the_anchor_and_keeps_shown_
 
     prior = delivery_engine.fetch_prior_shown(_RUN, _RUN.summary_key, report_config=cfg)
 
-    fake.fetch_between.assert_called_once_with(anchor - timedelta(days=3), anchor)
+    fake.fetch_between.assert_called_once_with(anchor - timedelta(days=3), anchor, modes=frozenset({"production"}))
     assert [p["url_hash"] for p in prior] == ["card", "watch"]
 
 
@@ -1062,7 +1062,7 @@ def test_fetch_prior_shown_uses_the_fallback_cutoff_when_no_anchor(monkeypatch):
     run = replace(_RUN, now=fixed)
     delivery_engine.fetch_prior_shown(run, run.summary_key, report_config=VISIBLE_6_CFG)
     cutoff = fixed - timedelta(hours=24)
-    fake.fetch_between.assert_called_once_with(cutoff - timedelta(days=3), cutoff)
+    fake.fetch_between.assert_called_once_with(cutoff - timedelta(days=3), cutoff, modes=frozenset({"production"}))
 
 
 def test_fetch_prior_shown_returns_nothing_and_reads_nothing_when_rule_disabled(monkeypatch):
@@ -1088,15 +1088,15 @@ def test_delivery_execute_pipeline_suppresses_a_prior_surfaced_near_duplicate(ru
     fake.upsert_insight(_row("prior", 8, trigger_entity="Univar Solutions", commercial_segment="Industrial",
                              headline="Univar Solutions acquires H.M. Royal specialty distributor",
                              source_url="https://x/prior",
-                             created_at=(yesterday - timedelta(hours=2)).isoformat()))
+                             created_at=(yesterday - timedelta(hours=2)).isoformat()), run_mode="production")
     # Today's window.
     fake.upsert_insight(_row("repeat", 8, trigger_entity="Univar Solutions", commercial_segment="Industrial",
                              headline="Univar Solutions acquires H.M. Royal distributor",
                              source_url="https://x/repeat",
-                             created_at=(_RUN.now - timedelta(hours=2)).isoformat()))
+                             created_at=(_RUN.now - timedelta(hours=2)).isoformat()), run_mode="production")
     fake.upsert_insight(_row("fresh", 8, trigger_entity="Chemours", commercial_segment="Packaging",
                              headline="Chemours lifts TiO2 price again", source_url="https://x/fresh",
-                             created_at=(_RUN.now - timedelta(hours=1)).isoformat()))
+                             created_at=(_RUN.now - timedelta(hours=1)).isoformat()), run_mode="production")
     fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date))
 
     result = run_delivery_pipeline(fake)
@@ -1166,9 +1166,9 @@ def test_delivery_execute_pipeline_drops_a_flagged_row_end_to_end(run_delivery_p
     bad = "https://compromised.example/story"
     fake = InMemoryIntelligenceRepo(now=lambda: _RUN.now)
     fake.upsert_insight(_row("bad", 8, commercial_segment="Packaging", headline="Injected page headline",
-                             source_url=bad, created_at=(_RUN.now - timedelta(hours=2)).isoformat()))
+                             source_url=bad, created_at=(_RUN.now - timedelta(hours=2)).isoformat()), run_mode="production")
     fake.upsert_insight(_row("ok", 8, commercial_segment="Packaging", headline="Chemours lifts TiO2 price",
-                             source_url="https://x/ok", created_at=(_RUN.now - timedelta(hours=1)).isoformat()))
+                             source_url="https://x/ok", created_at=(_RUN.now - timedelta(hours=1)).isoformat()), run_mode="production")
     fake.upsert_summary(stub_summary_row(run_date=_RUN.run_date))
 
     result = run_delivery_pipeline(fake, unsafe_urls={bad})
@@ -1181,3 +1181,54 @@ def test_delivery_execute_pipeline_drops_a_flagged_row_end_to_end(run_delivery_p
     stored = fake.get_delivery_state(run_date=_RUN.run_date, run_mode="production")
     assert stored["surfaced_count"] == 1
     assert stored["suppression_breakdown"].get("unsafe_url_stored") == 1
+
+
+# ---------------------------------------------------------------------------
+# Run mode (issue #100, ADR 0001): production's window and prior-shown read
+# only production rows; a test run's reads see both modes.
+# ---------------------------------------------------------------------------
+
+def _repo_with_one_row_per_mode() -> InMemoryIntelligenceRepo:
+    fake = InMemoryIntelligenceRepo(now=lambda: _RUN.now)
+    fake.upsert_insight({"url_hash": "p", "headline": "Prod", "americhem_impact_score": 8,
+                         "trigger_entity": "X"}, run_mode="production")
+    fake.upsert_insight({"url_hash": "t", "headline": "QA", "americhem_impact_score": 8,
+                         "trigger_entity": "X"}, run_mode="test")
+    return fake
+
+
+def test_production_delivery_window_excludes_test_rows(monkeypatch):
+    from delivery_engine import fetch_todays_intelligence
+    from tests.conftest import TEST_RUN_INSTANT
+    fake = _repo_with_one_row_per_mode()
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    assert [r["url_hash"] for r in fetch_todays_intelligence(_RUN, _RUN.summary_key)] == ["p"]
+    qa = fetch_todays_intelligence(TEST_RUN_INSTANT, TEST_RUN_INSTANT.summary_key)
+    assert sorted(r["url_hash"] for r in qa) == ["p", "t"]
+
+
+def test_delivery_window_log_line_names_the_modes_read(monkeypatch, caplog):
+    from delivery_engine import fetch_todays_intelligence
+    fake = _repo_with_one_row_per_mode()
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    with caplog.at_level("INFO"):
+        fetch_todays_intelligence(_RUN, _RUN.summary_key)
+    assert any("modes: production" in r.message for r in caplog.records)
+
+
+def test_prior_shown_reads_only_the_visible_modes(monkeypatch):
+    import delivery_engine
+    from tests.conftest import TEST_RUN_INSTANT
+    fake = MagicMock(spec=InMemoryIntelligenceRepo)
+    anchor = datetime(2026, 8, 26, 10, 44, 12)
+    fake.fetch_last_delivery.return_value = anchor
+    fake.fetch_between.return_value = []
+    monkeypatch.setattr("delivery_engine._repo", lambda: fake)
+    cfg = {"reporting": {"visible_impact_threshold": 6},
+           "delivery_suppression": {"prior_surfaced_lookback_days": 3}}
+    delivery_engine.fetch_prior_shown(_RUN, _RUN.summary_key, report_config=cfg)
+    fake.fetch_between.assert_called_with(anchor - timedelta(days=3), anchor,
+                                          modes=frozenset({"production"}))
+    delivery_engine.fetch_prior_shown(TEST_RUN_INSTANT, TEST_RUN_INSTANT.summary_key, report_config=cfg)
+    fake.fetch_between.assert_called_with(anchor - timedelta(days=3), anchor,
+                                          modes=frozenset({"production", "test"}))

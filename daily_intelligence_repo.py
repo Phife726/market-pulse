@@ -27,18 +27,20 @@ from typing import Callable, Optional, Protocol
 
 from supabase import create_client, Client
 import insight
-from run_instant import naive_utcnow
+from run_instant import PRODUCTION_MODE, naive_utcnow
 
 logger = logging.getLogger(__name__)
 
 
 class IntelligenceRepo(Protocol):
-    # daily_intelligence (articles)
-    def exists_by_hash(self, url_hash: str) -> bool: ...
-    def upsert_insight(self, payload: dict) -> None: ...
-    def recent_headlines(self, hours: int) -> set[str]: ...
-    def fetch_since(self, cutoff: datetime) -> list[dict]: ...
-    def fetch_between(self, start: datetime, end: datetime) -> list[dict]: ...
+    # daily_intelligence (articles). Every read takes `modes` — the run modes
+    # the caller may see (`run_instant.visible_modes`; issue #100) — and the
+    # write takes the mode it writes as (see `upsert_insight`).
+    def exists_by_hash(self, url_hash: str, *, modes: frozenset[str]) -> bool: ...
+    def upsert_insight(self, payload: dict, *, run_mode: str) -> bool: ...
+    def recent_headlines(self, hours: int, *, modes: frozenset[str]) -> set[str]: ...
+    def fetch_since(self, cutoff: datetime, *, modes: frozenset[str]) -> list[dict]: ...
+    def fetch_between(self, start: datetime, end: datetime, *, modes: frozenset[str]) -> list[dict]: ...
     # daily_summaries (one row per (run_date, run_mode))
     def upsert_summary(self, row: dict) -> None: ...
     def fetch_latest_summary(self, run_mode: str, min_date: str) -> Optional[dict]: ...
@@ -56,6 +58,26 @@ class IntelligenceRepo(Protocol):
     ) -> None: ...
 
 
+def _is_production(run_mode: str) -> bool:
+    return run_mode == PRODUCTION_MODE
+
+
+def _mode_list(modes: frozenset[str]) -> list[str]:
+    """The `in_` filter's argument — sorted so the query is deterministic."""
+    return sorted(modes)
+
+
+def _stamped(payload: dict, *, run_mode: str, now: datetime) -> dict:
+    """The row as written: the caller's payload plus the mode it is written
+    as and `created_at` = the write instant (an explicit `created_at` in the
+    payload wins — test fixtures set one). The repo owns both stamps so an
+    overwrite refreshes the timestamp and the column matches the policy."""
+    row = dict(payload)
+    row["run_mode"] = run_mode
+    row.setdefault("created_at", now.isoformat())
+    return row
+
+
 class SupabaseIntelligenceRepo:
     """Live adapter. Lazily constructs one Supabase client per instance."""
 
@@ -69,12 +91,13 @@ class SupabaseIntelligenceRepo:
             self._client = create_client(url, key)
         return self._client
 
-    def exists_by_hash(self, url_hash: str) -> bool:
+    def exists_by_hash(self, url_hash: str, *, modes: frozenset[str]) -> bool:
         try:
             result = (
                 self._supabase().table("daily_intelligence")
                 .select("url_hash")
                 .eq("url_hash", url_hash)
+                .in_("run_mode", _mode_list(modes))
                 .limit(1)
                 .execute()
             )
@@ -83,18 +106,32 @@ class SupabaseIntelligenceRepo:
             logger.error("Supabase exists_by_hash failed for %s: %s", url_hash, exc)
             return False
 
-    def upsert_insight(self, payload: dict) -> None:
-        self._supabase().table("daily_intelligence").upsert(
-            payload, on_conflict="url_hash"
-        ).execute()
+    def upsert_insight(self, payload: dict, *, run_mode: str) -> bool:
+        """Write one row as `run_mode`; True when the row landed.
 
-    def recent_headlines(self, hours: int) -> set[str]:
+        Production-wins, atomic at the database (ADR 0001): a production
+        write updates on `url_hash` conflict (replacing a test row and
+        refreshing `created_at`); a test write is ON CONFLICT DO NOTHING
+        (PostgREST `resolution=ignore-duplicates`), so a test run can never
+        replace a production row whichever order two overlapping runs write
+        in. The repo stamps `run_mode` and `created_at` itself so the column
+        and the policy cannot disagree. Raises on failure (write policy)."""
+        row = _stamped(payload, run_mode=run_mode, now=naive_utcnow())
+        table = self._supabase().table("daily_intelligence")
+        if _is_production(run_mode):
+            result = table.upsert(row, on_conflict="url_hash").execute()
+        else:
+            result = table.upsert(row, on_conflict="url_hash", ignore_duplicates=True).execute()
+        return bool(result.data)
+
+    def recent_headlines(self, hours: int, *, modes: frozenset[str]) -> set[str]:
         try:
             cutoff = (naive_utcnow() - timedelta(hours=hours)).isoformat()
             result = (
                 self._supabase().table("daily_intelligence")
                 .select("headline")
                 .gte("created_at", cutoff)
+                .in_("run_mode", _mode_list(modes))
                 .execute()
             )
             return {str(row["headline"]) for row in (result.data or [])
@@ -103,8 +140,9 @@ class SupabaseIntelligenceRepo:
             logger.error("Supabase recent_headlines failed: %s", exc)
             return set()
 
-    def fetch_since(self, cutoff: datetime) -> list[dict]:
-        """Rows created strictly after `cutoff` (naive datetimes are UTC).
+    def fetch_since(self, cutoff: datetime, *, modes: frozenset[str]) -> list[dict]:
+        """Rows created strictly after `cutoff` (naive datetimes are UTC), in
+        the visible `modes`.
 
         Strict comparison so a row stored at the instant of the last
         delivery — which that email already carried — is not delivered twice.
@@ -118,15 +156,17 @@ class SupabaseIntelligenceRepo:
             self._supabase().table("daily_intelligence")
             .select("*")
             .gt("created_at", cutoff.isoformat())
+            .in_("run_mode", _mode_list(modes))
             .order("americhem_impact_score", desc=True)
             .execute()
         )
         return list(result.data or [])
 
-    def fetch_between(self, start: datetime, end: datetime) -> list[dict]:
-        """Rows created in (start, end] — the prior-shown lookback behind
-        delivery suppression rule 8 (naive datetimes are UTC). Only the
-        columns the entity-keyed dedup and the shown-band filter read.
+    def fetch_between(self, start: datetime, end: datetime, *, modes: frozenset[str]) -> list[dict]:
+        """Rows created in (start, end] in the visible `modes` — the
+        prior-shown lookback behind delivery suppression rule 8 (naive
+        datetimes are UTC). Only the columns the entity-keyed dedup and the
+        shown-band filter read.
 
         Tolerant read: a failure returns []. The worst case is one repeated
         headline in one email — never a wrong email, and nothing downstream
@@ -139,6 +179,7 @@ class SupabaseIntelligenceRepo:
                         "sentiment_score, created_at")
                 .gt("created_at", start.isoformat())
                 .lte("created_at", end.isoformat())
+                .in_("run_mode", _mode_list(modes))
                 .execute()
             )
             return list(result.data or [])
@@ -300,7 +341,9 @@ def _coerce_timestamp(value: object) -> Optional[datetime]:
 
 class InMemoryIntelligenceRepo:
     """Faithful in-memory fake. Honors the same invariants the schema enforces:
-    - url_hash is unique on daily_intelligence (upsert semantics).
+    - url_hash is unique on daily_intelligence (upsert semantics; a test
+      write onto an existing hash is ignored — ON CONFLICT DO NOTHING).
+    - every daily_intelligence row carries run_mode; reads filter by modes.
     - (run_date, run_mode) is unique on daily_summaries.
     - created_at is set automatically on insight upsert if missing.
     """
@@ -310,30 +353,35 @@ class InMemoryIntelligenceRepo:
         self._articles: dict[str, dict] = {}                 # url_hash -> row
         self._summaries: dict[tuple[str, str], dict] = {}    # (run_date, run_mode) -> row
 
-    def exists_by_hash(self, url_hash: str) -> bool:
-        return url_hash in self._articles
+    def _visible(self, modes: frozenset[str]):
+        return (row for row in self._articles.values() if row.get("run_mode") in modes)
 
-    def upsert_insight(self, payload: dict) -> None:
+    def exists_by_hash(self, url_hash: str, *, modes: frozenset[str]) -> bool:
+        row = self._articles.get(url_hash)
+        return row is not None and row.get("run_mode") in modes
+
+    def upsert_insight(self, payload: dict, *, run_mode: str) -> bool:
         url_hash = payload.get("url_hash")
         if not url_hash:
             raise ValueError("payload missing url_hash")
-        row = dict(payload)
-        row.setdefault("created_at", self._now().isoformat())
-        self._articles[url_hash] = row
+        if not _is_production(run_mode) and url_hash in self._articles:
+            return False                      # ON CONFLICT DO NOTHING
+        self._articles[url_hash] = _stamped(payload, run_mode=run_mode, now=self._now())
+        return True
 
-    def recent_headlines(self, hours: int) -> set[str]:
+    def recent_headlines(self, hours: int, *, modes: frozenset[str]) -> set[str]:
         cutoff = self._now() - timedelta(hours=hours)
         return {
-            row["headline"] for row in self._articles.values()
+            row["headline"] for row in self._visible(modes)
             if row.get("headline")
             and (ts := _coerce_timestamp(row.get("created_at"))) is not None
             and ts >= cutoff
         }
 
-    def fetch_since(self, cutoff: datetime) -> list[dict]:
+    def fetch_since(self, cutoff: datetime, *, modes: frozenset[str]) -> list[dict]:
         cutoff = _coerce_timestamp(cutoff)
         rows: list[dict] = []
-        for row in self._articles.values():
+        for row in self._visible(modes):
             ts = _coerce_timestamp(row.get("created_at"))
             if ts is None:
                 continue
@@ -341,10 +389,10 @@ class InMemoryIntelligenceRepo:
                 rows.append(dict(row))
         return rows
 
-    def fetch_between(self, start: datetime, end: datetime) -> list[dict]:
+    def fetch_between(self, start: datetime, end: datetime, *, modes: frozenset[str]) -> list[dict]:
         start, end = _coerce_timestamp(start), _coerce_timestamp(end)
         rows: list[dict] = []
-        for row in self._articles.values():
+        for row in self._visible(modes):
             ts = _coerce_timestamp(row.get("created_at"))
             if ts is None:
                 continue

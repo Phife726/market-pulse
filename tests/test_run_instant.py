@@ -47,6 +47,21 @@ def test_test_mode_follows_run_mode():
     assert RunInstant(now=T, run_mode="production").test_mode is False
 
 
+def test_visible_modes_production_reads_only_production():
+    """The one-directional rule (CONTEXT.md, Run mode): a production run
+    never sees a test row, in any daily_intelligence read."""
+    assert run_instant.visible_modes("production") == frozenset({"production"})
+
+
+def test_visible_modes_test_reads_production_and_its_own():
+    assert run_instant.visible_modes("test") == frozenset({"production", "test"})
+
+
+def test_run_instant_visible_modes_derives_from_its_run_mode():
+    assert RunInstant(now=T, run_mode="test").visible_modes == frozenset({"production", "test"})
+    assert RunInstant(now=T, run_mode="production").visible_modes == frozenset({"production"})
+
+
 def test_summary_key_is_the_run_date_and_run_mode_pair():
     """The `daily_summaries` row this run belongs to by its own clock — the
     key ingestion writes, and delivery's fallback when it finds no row."""

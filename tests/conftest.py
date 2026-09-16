@@ -117,6 +117,9 @@ class PipelineRun:
 
     #: Every payload handed to `store_insight`, in order.
     stored: list
+    #: The run mode each `store_insight` call was made with, in order — the
+    #: mode the engine threads from the run instant onto the RunContext.
+    write_modes: list
     #: The `generate_macro_summary` mock, for asserting the run's accounting.
     macro: MagicMock
     #: The FakeLinkReputation the run consulted (`calls` = the URL batches).
@@ -190,8 +193,8 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
             ingestion_engine, "discover_candidates",
             lambda target, providers: discover(target),
         )
-        monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda: set())
-        monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h: False)
+        monkeypatch.setattr(ingestion_engine, "_hydrate_seen_headlines", lambda modes: set())
+        monkeypatch.setattr(ingestion_engine, "url_already_processed", lambda h, modes: False)
         monkeypatch.setattr(
             ingestion_engine, "is_semantic_duplicate", lambda title, seen: (False, "", 0))
 
@@ -207,14 +210,22 @@ def run_ingestion_pipeline(monkeypatch, tmp_path):
         monkeypatch.setattr(ingestion_engine, "synthesize_insight", synthesize)
 
         stored: list = []
-        monkeypatch.setattr(ingestion_engine, "store_insight", stored.append)
+        write_modes: list = []
+
+        def _store(payload: dict, run_mode: str) -> bool:
+            stored.append(payload)
+            write_modes.append(run_mode)
+            return True
+
+        monkeypatch.setattr(ingestion_engine, "store_insight", _store)
 
         macro = MagicMock(return_value=True)
         monkeypatch.setattr(ingestion_engine, "generate_macro_summary", macro)
         monkeypatch.setattr(ingestion_engine.time, "sleep", lambda s: None)
 
         ingestion_engine.execute_pipeline(run, budget=budget)
-        return PipelineRun(stored=stored, macro=macro, link_reputation=link_reputation)
+        return PipelineRun(stored=stored, write_modes=write_modes, macro=macro,
+                           link_reputation=link_reputation)
 
     return _run
 

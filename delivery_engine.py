@@ -86,23 +86,32 @@ def fetch_todays_intelligence(run: RunInstant, key: SummaryKey) -> list[dict]:
     day its row is keyed on, and would otherwise count that day's own morning
     email as an earlier day's (issue #76). `run` is the run instant — the one
     clock reading this run makes (execute_pipeline stamps `run.now` after a
-    successful send); it is naive UTC to match created_at. Propagates a failed read —
+    successful send); it is naive UTC to match created_at. The read is limited to
+    the run's visible modes (`run.visible_modes`; CONTEXT.md, Run mode):
+    production sees only production rows, a QA run sees both, so a test-mode
+    ingestion's rows can never reach the stakeholder email (#100). Propagates a failed read —
     a no-news email on a database outage would be wrong, and its stamp would
     hide the rows the outage concealed."""
     window = _delivery_cutoff(run, key)
-    rows = _repo().fetch_since(window.cutoff)
+    modes = _modes_label(run)
+    rows = _repo().fetch_since(window.cutoff, modes=run.visible_modes)
     if window.anchored:
         logger.info(
             "Fetched %d intelligence record(s) created after the last production "
-            "delivery at %s.", len(rows), window.cutoff.isoformat(),
+            "delivery at %s (modes: %s).", len(rows), window.cutoff.isoformat(), modes,
         )
     else:
         logger.warning(
             "No prior production delivery recorded — fetched %d intelligence "
-            "record(s) with the wall-clock fallback window (cutoff %s).",
-            len(rows), window.cutoff.isoformat(),
+            "record(s) with the wall-clock fallback window (cutoff %s; modes: %s).",
+            len(rows), window.cutoff.isoformat(), modes,
         )
     return rows
+
+
+def _modes_label(run: RunInstant) -> str:
+    """The visible modes as one log token, e.g. 'production' or 'production, test'."""
+    return ", ".join(sorted(run.visible_modes))
 
 
 #: Rule 8's lookback: how many days before the delivery-window cutoff the
@@ -139,7 +148,8 @@ def fetch_prior_shown(
                        DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS)
         days = DEFAULT_PRIOR_SURFACED_LOOKBACK_DAYS
     window = _delivery_cutoff(run, key)
-    rows = _repo().fetch_between(window.cutoff - timedelta(days=days), window.cutoff)
+    rows = _repo().fetch_between(window.cutoff - timedelta(days=days), window.cutoff,
+                                 modes=run.visible_modes)
     scorer = Scoring.from_config(cfg)
     shown = [r for r in rows if scorer.is_visible(r) or scorer.is_watch(r)]
     logger.info(

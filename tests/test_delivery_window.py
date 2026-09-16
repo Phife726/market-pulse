@@ -96,8 +96,8 @@ def test_late_start_still_delivers_previous_days_rows(monkeypatch):
     T-1h, delivery at T, yesterday's email recorded at T-27h — both sets are
     fetched. Under the old 24 h window the T-25h row was silently dropped."""
     fake = InMemoryIntelligenceRepo(now=lambda: T)
-    fake.upsert_insight(_row("yesterday", T - 25 * _H))
-    fake.upsert_insight(_row("today", T - 1 * _H))
+    fake.upsert_insight(_row("yesterday", T - 25 * _H), run_mode="production")
+    fake.upsert_insight(_row("today", T - 1 * _H), run_mode="production")
     _summary(fake, "2026-08-26")
     fake.record_delivery(run_date="2026-08-26", run_mode="production",
                          delivered_at=T - 27 * _H)
@@ -113,9 +113,9 @@ def test_normal_day_does_not_redeliver_rows_before_last_email(monkeypatch):
     email; the strict cutoff keeps them out of today's."""
     anchor = T - 27 * _H
     fake = InMemoryIntelligenceRepo(now=lambda: T)
-    fake.upsert_insight(_row("already-sent", anchor - timedelta(minutes=1)))
-    fake.upsert_insight(_row("at-anchor", anchor))
-    fake.upsert_insight(_row("after-anchor", anchor + timedelta(minutes=1)))
+    fake.upsert_insight(_row("already-sent", anchor - timedelta(minutes=1)), run_mode="production")
+    fake.upsert_insight(_row("at-anchor", anchor), run_mode="production")
+    fake.upsert_insight(_row("after-anchor", anchor + timedelta(minutes=1)), run_mode="production")
     _summary(fake, "2026-08-26")
     fake.record_delivery(run_date="2026-08-26", run_mode="production", delivered_at=anchor)
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
@@ -128,8 +128,8 @@ def test_normal_day_does_not_redeliver_rows_before_last_email(monkeypatch):
 def test_without_recorded_delivery_falls_back_to_wall_clock(monkeypatch):
     """Pre-migration / first-run behaviour is the legacy 24 h window."""
     fake = InMemoryIntelligenceRepo(now=lambda: T)
-    fake.upsert_insight(_row("yesterday", T - 25 * _H))
-    fake.upsert_insight(_row("today", T - 1 * _H))
+    fake.upsert_insight(_row("yesterday", T - 25 * _H), run_mode="production")
+    fake.upsert_insight(_row("today", T - 1 * _H), run_mode="production")
     _summary(fake, "2026-08-26")   # a summary row with no delivered_at
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
@@ -140,8 +140,8 @@ def test_without_recorded_delivery_falls_back_to_wall_clock(monkeypatch):
 
 def test_fallback_uses_72h_on_monday(monkeypatch):
     fake = InMemoryIntelligenceRepo(now=lambda: MONDAY)
-    fake.upsert_insight(_row("friday", MONDAY - 70 * _H))
-    fake.upsert_insight(_row("last-week", MONDAY - 74 * _H))
+    fake.upsert_insight(_row("friday", MONDAY - 70 * _H), run_mode="production")
+    fake.upsert_insight(_row("last-week", MONDAY - 74 * _H), run_mode="production")
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     rows = fetch_todays_intelligence(MONDAY_RUN, MONDAY_RUN.summary_key)
@@ -154,9 +154,9 @@ def test_todays_delivery_does_not_anchor_a_same_day_retry(monkeypatch):
     rather than only what arrived since this morning's email — the anchor is
     the last delivery on an EARLIER run_date."""
     fake = InMemoryIntelligenceRepo(now=lambda: T)
-    fake.upsert_insight(_row("yesterday-late", T - 25 * _H))
-    fake.upsert_insight(_row("this-morning", T - 3 * _H))
-    fake.upsert_insight(_row("just-now", T - timedelta(minutes=10)))
+    fake.upsert_insight(_row("yesterday-late", T - 25 * _H), run_mode="production")
+    fake.upsert_insight(_row("this-morning", T - 3 * _H), run_mode="production")
+    fake.upsert_insight(_row("just-now", T - timedelta(minutes=10)), run_mode="production")
     _summary(fake, "2026-08-26")
     fake.record_delivery(run_date="2026-08-26", run_mode="production",
                          delivered_at=T - 27 * _H)
@@ -175,8 +175,8 @@ def test_test_mode_reads_the_production_anchor(monkeypatch):
     never anchor anything — a late QA run yesterday would otherwise shrink
     today's window."""
     fake = InMemoryIntelligenceRepo(now=lambda: T)
-    fake.upsert_insight(_row("yesterday", T - 25 * _H))
-    fake.upsert_insight(_row("today", T - 1 * _H))
+    fake.upsert_insight(_row("yesterday", T - 25 * _H), run_mode="production")
+    fake.upsert_insight(_row("today", T - 1 * _H), run_mode="production")
     _summary(fake, "2026-08-26", "production")
     fake.record_delivery(run_date="2026-08-26", run_mode="production",
                          delivered_at=T - 27 * _H)
@@ -201,7 +201,7 @@ def test_fetch_passes_the_window_cutoff_to_the_repo(monkeypatch):
     fake.fetch_last_delivery.assert_called_once_with(
         run_mode="production", before_date=RUN_DATE,
     )
-    fake.fetch_since.assert_called_once_with(T - 24 * _H)
+    fake.fetch_since.assert_called_once_with(T - 24 * _H, modes=frozenset({"production"}))
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ def _seed(run_mode: str = "production") -> InMemoryIntelligenceRepo:
         "sentiment_tag": "Neutral", "signal_type": "Customer",
         "commercial_segment": "Healthcare", "americhem_impact": "Effect.",
         "source_url": "https://x/wire0", "entities_mentioned": ["Acme"],
-    })
+    }, run_mode="production")
     _summary(fake, RUN_DATE, run_mode)
     return fake
 
@@ -311,7 +311,7 @@ def test_fetch_failure_sends_nothing_and_leaves_the_anchor_alone(run_delivery_pi
     is the alarm, and the next successful run reaches back over the gap."""
     fake = _seed()
 
-    def outage(cutoff):
+    def outage(cutoff, *, modes):
         raise RuntimeError("supabase unreachable")
     monkeypatch.setattr(fake, "fetch_since", outage)
 
@@ -332,11 +332,11 @@ def test_stamp_is_the_fetch_instant_so_rows_arriving_mid_run_are_not_lost(run_de
     fake = _seed()
 
     real_fetch = fake.fetch_since
-    def fetch_then_concurrent_write(cutoff):
-        rows = real_fetch(cutoff)
+    def fetch_then_concurrent_write(cutoff, *, modes):
+        rows = real_fetch(cutoff, modes=modes)
         # Simulates the QA/manual ingestion landing a row after the fetch,
         # before Resend returns.
-        fake.upsert_insight(_row("mid-run", T + timedelta(seconds=30)))
+        fake.upsert_insight(_row("mid-run", T + timedelta(seconds=30)), run_mode="production")
         return rows
     monkeypatch.setattr(fake, "fetch_since", fetch_then_concurrent_write)
 
@@ -396,7 +396,7 @@ def test_straddling_run_writes_back_and_stamps_the_row_ingestion_wrote(
         "sentiment_tag": "Neutral", "signal_type": "Customer",
         "commercial_segment": "Healthcare", "americhem_impact": "Effect.",
         "source_url": "https://x/late-news", "entities_mentioned": ["Acme"],
-    })
+    }, run_mode="production")
 
     run_delivery_pipeline(fake, run=STRADDLE_DELIVERY)
 
@@ -414,8 +414,8 @@ def test_straddling_run_resends_the_whole_day_it_belongs_to(monkeypatch):
     clock, D's morning email counts as an earlier day and the retry carries
     only what arrived after it."""
     fake = _straddling_repo(monkeypatch)
-    fake.upsert_insight(_row("before-the-morning-email", datetime(2026, 8, 27, 9, 0, 0)))
-    fake.upsert_insight(_row("after-the-morning-email", datetime(2026, 8, 27, 23, 40, 0)))
+    fake.upsert_insight(_row("before-the-morning-email", datetime(2026, 8, 27, 9, 0, 0)), run_mode="production")
+    fake.upsert_insight(_row("after-the-morning-email", datetime(2026, 8, 27, 23, 40, 0)), run_mode="production")
     monkeypatch.setattr("delivery_engine._repo", lambda: fake)
 
     key, _ = delivery_engine.resolve_summary_row(STRADDLE_DELIVERY)

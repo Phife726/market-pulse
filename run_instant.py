@@ -29,6 +29,19 @@ def naive_utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+#: The run mode every stored row belongs to unless a run says otherwise —
+#: the scheduled cron's mode, and the `run_mode` column default in both tables.
+PRODUCTION_MODE = "production"
+
+
+def visible_modes(run_mode: str) -> frozenset[str]:
+    """The run modes a run in `run_mode` may read from `daily_intelligence` —
+    the one-directional rule (CONTEXT.md, **Run mode**): production rows plus
+    the run's own. Production therefore reads only production; a test run
+    reads production and test. One spelling for both tables' readers."""
+    return frozenset({PRODUCTION_MODE, run_mode})
+
+
 @dataclass(frozen=True)
 class SummaryKey:
     """The `daily_summaries` row key — that table's unique index is
@@ -85,3 +98,9 @@ class RunInstant:
     @property
     def test_mode(self) -> bool:
         return self.run_mode == "test"
+
+    @property
+    def visible_modes(self) -> frozenset[str]:
+        """The `daily_intelligence` run modes this run may read (see
+        `visible_modes`)."""
+        return visible_modes(self.run_mode)
