@@ -341,14 +341,20 @@ delivery_suppression:
   # token_sort_ratio STRICTLY GREATER than prior_surfaced_duplicate_threshold
   # against it is a reworded repeat the reader already saw. Rules 6/7 only see
   # the current run, at 90; production data showed ~12% of surfaced items were
-  # consecutive-day repeats they cannot see. 70 catches the reworded copies of
-  # one story (the Univar / Interpur copies scored 74–85) and sits ~20 points
-  # above two different stories about one entity (36–49); some rewrites still
-  # fall under it (the Univar / H.M. Royal copies: 64–91), so lower it before
-  # widening the lookback. The read behind it is tolerant: a database blip
-  # costs at most one repeated headline, never the email.
+  # consecutive-day repeats they cannot see. Shipped at 70: it catches the
+  # reworded copies of one story (the Univar / Interpur copies scored 74–85)
+  # and sits ~20 points above two different stories about one entity (36–49).
+  # Lowered to 65 on 2026-09-16 after the #101 watch: the Kimberly-Clark /
+  # Kenvue story was a card in three consecutive reports at 62 / 66 / 70
+  # (the H.M. Royal-style 64–70 rewrite band; 70 is not "strictly greater"
+  # than 70). In six runs of production data the only score-5-or-above pair
+  # 65 would newly catch that is NOT one story was Japan vs Slovenia
+  # industrial production at 68, both macro-group rows. Lower this before
+  # widening the lookback; one change per observation window. The read
+  # behind it is tolerant: a database blip costs at most one repeated
+  # headline, never the email.
   enable_prior_surfaced_duplicate: true
-  prior_surfaced_duplicate_threshold: 70
+  prior_surfaced_duplicate_threshold: 65
   prior_surfaced_lookback_days: 3
   url_patterns_product_listing:
     - "/product/"
