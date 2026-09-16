@@ -54,7 +54,7 @@ INGESTION = Harness(
     functions=("execute_pipeline", "_run_target", "process_candidate", "_finalize_run"),
     deliberately_real=frozenset({
         # Pure transforms and predicates
-        "normalize_url", "compute_url_hash", "_is_unscrapable_domain",
+        "normalize_url", "compute_url_hash", "_is_unscrapable_domain", "_is_blocked_domain",
         "market_reports.is_market_report_candidate",
         "RunBudget.for_targets", "_new_provider_yield", "_discovery_metadata",
         "insight.is_discard", "is_synthesis_outage",
