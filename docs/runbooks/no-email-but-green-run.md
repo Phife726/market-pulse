@@ -145,8 +145,11 @@ subject line, and the send time in UTC, and ask for:
 
 The production workflow has a delivery-only mode. It re-reads the rows
 already stored for the day, re-builds the email (with the executive summary
-ingestion wrote), and sends it to the production recipients; no article is
-discovered, scraped, or scored again, so nothing is billed.
+ingestion wrote), and sends it to the production recipients. No article is
+discovered, scraped, or scored again, so the Serper, Firecrawl and
+per-article OpenAI spend of a full run is avoided. It is not free: building
+the email makes one small OpenAI call for the per-segment synthesis
+paragraphs, and (when the key is set) one free Safe Browsing lookup.
 
 ```bash
 gh workflow run market_pulse.yml --ref main -f run_ingestion=false
@@ -162,9 +165,14 @@ Before you re-send:
   before dispatching; the re-send picks up the new list without any
   database work.
 - **Optional dry run to the QA pool.** The `Market Pulse Test Pipeline`
-  workflow with `run_ingestion=false` and `send_email=true` sends the same
-  report, marked `[TEST]`, only to the `TEST_RECIPIENT_EMAILS` pool. Use it
-  to eyeball the email before the production re-send.
+  workflow with `run_ingestion=false` and `send_email=true` sends a report
+  built from the same stored rows, marked `[TEST]`, only to the
+  `TEST_RECIPIENT_EMAILS` pool. Use it to eyeball the email before the
+  production re-send. One caveat: if a *test-mode ingestion* already ran
+  earlier the same day, the QA email carries that run's executive summary
+  and citations instead of production's (the test-mode summary row wins a
+  same-day tie), so the top of the email can differ from what production
+  will send; the article cards, Watch List and appendix are the same.
 - **The whole day goes out again.** The re-send covers every article since
   the previous day's delivery, not only the ones added since the failed
   attempt, so recipients get one complete digest.
