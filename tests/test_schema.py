@@ -42,6 +42,15 @@ def test_the_ad_hoc_view_exposes_run_mode_as_its_last_column():
     assert re.search(r"end as alert_tier,\s*(--[^\n]*\n\s*)?run_mode\s*\nfrom daily_intelligence", migration_view)
 
 
+def test_migration_008_recreates_the_view_rather_than_replacing_it():
+    """The live view's column order predates schema.sql's; CREATE OR REPLACE
+    VIEW fails (42P16) on any existing-column change, as two live attempts
+    showed. DROP IF EXISTS + CREATE is the idempotent form."""
+    sql = MIGRATION_008.read_text(encoding="utf-8")
+    assert re.search(r"drop view if exists todays_intelligence;\s*create view todays_intelligence as", sql)
+    assert "create or replace view" not in sql
+
+
 def test_migration_008_adds_run_mode_idempotently():
     assert MIGRATION_008.exists(), "migrations/008_add_run_mode_to_daily_intelligence.sql missing"
     sql = MIGRATION_008.read_text(encoding="utf-8")

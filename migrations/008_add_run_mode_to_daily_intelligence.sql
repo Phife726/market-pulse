@@ -33,9 +33,13 @@ create index if not exists idx_daily_intelligence_run_mode_created_at
     on daily_intelligence (run_mode, created_at);
 
 -- Expose the column on the ad-hoc view (no filter: the view is for humans).
--- Appended as the LAST column: CREATE OR REPLACE VIEW can only add columns at
--- the end of the list (inserting one mid-list fails with 42P16).
-create or replace view todays_intelligence as
+-- DROP + CREATE, not CREATE OR REPLACE: the live view's column order predates
+-- schema.sql's, and CREATE OR REPLACE VIEW refuses any change to existing
+-- column names or positions (42P16). Nothing depends on the view — it exists
+-- for ad-hoc queries only — so recreating it is safe and idempotent, and the
+-- live definition matches schema.sql afterwards.
+drop view if exists todays_intelligence;
+create view todays_intelligence as
 select
     id,
     created_at,
