@@ -614,6 +614,24 @@ def test_rule3_named_target_deals_carry_their_own_score_and_region():
     assert "results that report NO price, volume, capacity, or guidance change" in floor4
 
 
+def test_rule3_treats_a_distributor_deal_as_an_input_cost_event():
+    """Pass 4 (2026-09-16): three passes in, the classes that moved to 7–8
+    (supplier distress, priced inputs) all carry a cost mechanism, and the
+    one that never moved — a distributor's named acquisition — was framed,
+    in the rubric and in every rationale, as "channel dynamics". The actor
+    paragraph now files a distributor as a SUPPLIER, the deal bullet scores
+    it as the input-cost event it is, and RULE 6's example So-What for such
+    a deal names the cost exposure instead of hedging on "channel pricing"."""
+    rule3 = _rule3()
+    actor = rule3[rule3.index("VALUE-CHAIN ACTOR:"):rule3.index("The floor bands")]
+    assert "A distributor (Univar, Brenntag, Nexeo, H.M. Royal) is a SUPPLIER to Americhem" in actor
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    assert "A distributor's acquisition is an input-cost and allocation event" in direct
+    rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
+    assert "Univar's added distribution reach can shift additive channel pricing" not in rule6
+    assert "raises Americhem's additive input-price and allocation exposure" in rule6
+
+
 def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():
     """The other half of the floor: RULE 6 offered the template as the honest
     exit for any article that did not spell out an Americhem effect. It now

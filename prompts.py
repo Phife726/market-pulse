@@ -250,7 +250,9 @@ relevant article and is NEVER a reason to score it low — you supply the implie
 VALUE-CHAIN ACTOR: the trigger entity, or any other company that makes, sells, or distributes
 polymers, resins, compounds, masterbatch, pigments, inks, additives, adhesives, composites,
 battery or EV materials, or their feedstocks — Americhem's customers, suppliers,
-distributors, and competitors. ABSENT TRIGGER ENTITY: a query on one company often returns
+distributors, and competitors. A distributor (Univar, Brenntag, Nexeo, H.M. Royal) is a
+SUPPLIER to Americhem: it sets the price and allocation of the additives, pigments, and
+resins Americhem buys through it, so its deals are input-cost events. ABSENT TRIGGER ENTITY: a query on one company often returns
 another's news. If the trigger entity is absent or incidental but the article is about
 ANOTHER value-chain actor's event (Siegwerk's ink capacity for a Sun Chemical query;
 Cambium's aerospace adhesive or a composites developer's hydrogen-line program for an
@@ -327,7 +329,10 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        "distribution expansion via acquisition", "channel consolidation", and a "plant
        divestiture" that changes supply ownership are DIRECT events, score 8 whichever
        region the deal is in — Americhem buys and sells in North America, EMEA, and Asia,
-       so an EMEA distributor deal or a Swiss plant sale is as DIRECT as a US one
+       so an EMEA distributor deal or a Swiss plant sale is as DIRECT as a US one. A
+       distributor's acquisition is an input-cost and allocation event for the additives
+       and pigments Americhem buys through it, scored like a supplier's price increase,
+       never like a "channel dynamics" watch item
      - a material maker's or distributor's financial distress — a Chapter 11 or other
        bankruptcy filing, administration, a court's mediation order or ruling in the case,
        restructuring, force majeure, allocation, or exit (Trinseo files Chapter 11; Trinseo's
@@ -389,8 +394,9 @@ Where the article supports a direct effect, identify which business unit or cost
 affected and in what direction. Where the event is a RULE 3 WATCH-or-above event (score 5+),
 the So-What states the mechanism IMPLIED by the actor's value-chain position, framed as an
 inference rather than as a fact the article reports — e.g. "As a TiO2 supplier, Chemours'
-increase raises Americhem's pigment input cost" or "Univar's added distribution reach can
-shift additive channel pricing". That is the required So-What for such articles: a
+increase raises Americhem's pigment input cost" or "Univar's purchase of H.M. Royal
+concentrates additive sourcing in one distributor and raises Americhem's additive
+input-price and allocation exposure". That is the required So-What for such articles: a
 low-exposure template on a WATCH event understates it and is wrong. Where the article
 supports no direct effect and the event is FLOOR or 4-band (RULE 3), take one of the exits
 below instead of naming a business unit speculatively.
