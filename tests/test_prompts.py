@@ -508,13 +508,13 @@ def test_rule3_watch_band_names_the_implied_mechanism_event_classes():
     """The event classes a named customer / supplier / competitor can score
     5–6 on without literal Americhem linkage — the recalibration's core."""
     rule3 = _rule3()
-    for event in ("price change, force majeure", "capacity opened, closed, expanded",
-                  "M&A, divestiture, or plant sale with a NAMED target", "financial distress", "launch, new grade",
+    for event in ("allocation, outage, or shortage", "capacity opened, closed, expanded",
+                  "acquisition, divestiture, plant sale, or JV buy-out with a NAMED target", "financial distress", "launch, new grade",
                   "quarterly results — a supplier's, customer's, or competitor's — that report a price",
                   "(EPR, PFAS, recycled content, food contact)",
                   "ISM Manufacturing PMI"):
         assert event in rule3, event
-    assert "A named counterparty, plant, grade, input, figure, or effective date confirms 6" in rule3
+    assert "A named counterparty, plant, grade, or effective date confirms 6 over 5" in rule3
     assert "5 — DEMAND PRINT, or a generic event" in rule3
     assert "These two only; every other statistic is band 2" in rule3 and "ISM Manufacturing PMI" in rule3
 
@@ -547,9 +547,90 @@ def test_rule3_watch_band_sits_above_the_template_band_under_production_threshol
     row and a WATCH row can never share a score — with the production
     thresholds (3 / 6) the template band is 3–4."""
     system = _insight_spec(_PROD_STYLE_CFG).system
-    assert "6 — WATCH (the default for an actor's event)" in system and "5 — DEMAND PRINT" in system
+    assert "6 — WATCH (the default for every other actor's event)" in system and "5 — DEMAND PRINT" in system
     _, template_high = prompts.low_exposure_score_band(Scoring.from_config(_PROD_STYLE_CFG))
     assert template_high < 5
+
+
+def test_rule3_direct_band_is_the_labeled_default_for_its_own_classes():
+    """Issue #109: six production crons after PR #99 put 136 rows at 6 and
+    none at 8+, with named-target M&A and priced input moves — events the
+    DIRECT list names verbatim — all at 6. `docs/prompt-engineering.md`:
+    this model applies a heading's label more strongly than the bullets
+    under it, and only WATCH's heading said "default". DIRECT's heading now
+    labels the default for its own classes, WATCH's covers the rest, and the
+    sentence that closed WATCH no longer tells the model a named input or
+    figure "confirms 6"."""
+    rule3 = _rule3()
+    assert ("7–8 — DIRECT (the default for an event that names an input price, a supplier's "
+            "distress, or a deal target in Americhem's supply chain or channel)") in rule3
+    assert "An event in this list is 7 or 8 — 9 or 10 when it also meets STRATEGIC, below — never 6" in rule3
+    assert "STRATEGIC (9–10) lifts a DIRECT event that meets its bar" in rule3
+    assert "6 — WATCH (the default for every other actor's event)" in rule3
+    assert "a named INPUT PRICE, deal target, or supplier in distress is DIRECT, above" in rule3
+
+
+def test_rule3_watch_band_points_up_to_direct_never_down():
+    """DIRECT has been listed above WATCH since pass 9 of the recalibration,
+    but WATCH's carve-outs still said "DIRECT, below" — a pointer to a band
+    that is not there. Every carve-out now points the right way, and WATCH's
+    own lists no longer restate DIRECT's members (price change, force
+    majeure, a supplier's bankruptcy) for the model to match first."""
+    rule3 = _rule3()
+    watch = rule3[rule3.index("6 — WATCH"):rule3.index("5 — DEMAND PRINT")]
+    # (Band 2's own "it is DIRECT, below" is right: band 2 is listed above DIRECT.)
+    assert "DIRECT, below" not in watch
+    assert watch.count("DIRECT, above") >= 3
+    assert "a price change, force majeure" not in watch
+    # Pass 2 (2026-09-16): the first reword moved every priced input to
+    # DIRECT and left every named-target deal and supplier bankruptcy at 6 —
+    # the model's rationales ("distribution expansion via acquisition",
+    # "plant sale", "restructuring", "supplier distress") matched WATCH's own
+    # words. Those words now live in DIRECT's list, and WATCH's does not
+    # carry them.
+    for direct_word in ("financial distress", "or sold", "distribution-agreement change"):
+        assert direct_word not in watch, direct_word
+    assert "a material maker's or distributor's bankruptcy, restructuring, or force majeure is DIRECT, above" in watch
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    for own_word in ("Univar acquires H.M. Royal", "distribution expansion via acquisition", "channel consolidation",
+                     "Chapter 11", "supplier distress", "Trinseo files Chapter 11"):
+        assert own_word in direct, own_word
+
+
+def test_rule3_named_target_deals_carry_their_own_score_and_region():
+    """Pass 3 (2026-09-16): with the deal class named in DIRECT in the
+    model's words, the same story still split 2/2 across near-identical rows
+    and every EMEA deal stayed at 6 — the class sat on the 6/7 line. The
+    margin lever from `docs/prompt-engineering.md`: the bullet states its own
+    score, two notches above the line, and says the region does not lower it.
+    And a competitor's guidance raise is not a 'bare' result (band 4), so a
+    beat-and-raise cannot be floored before WATCH reads it."""
+    rule3 = _rule3()
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    assert "score 8 whichever region the deal is in" in direct
+    for own_word in ("distributor acquisition", "channel expansion via acquisition", "plant divestiture",
+                     "recyclate prices pressured by cheaper virgin material"):
+        assert own_word in direct, own_word
+    floor4 = rule3[rule3.index("4 — THIN"):rule3.index("The event bands are read")]
+    assert "results that report NO price, volume, capacity, or guidance change" in floor4
+
+
+def test_rule3_treats_a_distributor_deal_as_an_input_cost_event():
+    """Pass 4 (2026-09-16): three passes in, the classes that moved to 7–8
+    (supplier distress, priced inputs) all carry a cost mechanism, and the
+    one that never moved — a distributor's named acquisition — was framed,
+    in the rubric and in every rationale, as "channel dynamics". The actor
+    paragraph now files a distributor as a SUPPLIER, the deal bullet scores
+    it as the input-cost event it is, and RULE 6's example So-What for such
+    a deal names the cost exposure instead of hedging on "channel pricing"."""
+    rule3 = _rule3()
+    actor = rule3[rule3.index("VALUE-CHAIN ACTOR:"):rule3.index("The floor bands")]
+    assert "A distributor (Univar, Brenntag, Nexeo, H.M. Royal) is a SUPPLIER to Americhem" in actor
+    direct = rule3[rule3.index("7–8 — DIRECT"):rule3.index("6 — WATCH")]
+    assert "A distributor's acquisition is an input-cost and allocation event" in direct
+    rule6 = _flat(_rule_section(_insight_spec().system, "RULE 6 —", "RULE 7 —"))
+    assert "Univar's added distribution reach can shift additive channel pricing" not in rule6
+    assert "raises Americhem's additive input-price and allocation exposure" in rule6
 
 
 def test_rule6_requires_the_implied_mechanism_so_what_for_watch_events():

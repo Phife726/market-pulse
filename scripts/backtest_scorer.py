@@ -8,11 +8,15 @@ and temperature) → `insight.is_discard` / `insight.normalize`. The only
 difference from the cron is the article text: the stored `article_summary`
 stands in for the scraped markdown (see backtest/BACKTEST_README.md).
 
-    python scripts/backtest_scorer.py csv
+    python scripts/backtest_scorer.py csv [--runs 3]
         Re-scores backtest/market_pulse_scorer_backtest.csv, fills
-        revised_score / revised_rationale / pass, writes the _v2.csv next to
-        it, and prints the README's four pass criteria with every failure
-        named. Exit 1 when a criterion fails.
+        revised_score / revised_rationale / pass / band_pass, writes the
+        _v2.csv next to it, and prints the README's five pass criteria with
+        every failure named. Exit 1 when a criterion fails. Each row is scored
+        `--runs` times (default 3) and the MEDIAN run stands — the
+        majority-of-3 protocol (issue #109): at temperature 0.2 two identical
+        runs move ~28 of 150 scores, so a single-shot band gate sits inside
+        the noise.
 
     python scripts/backtest_scorer.py replay --days 5
         Re-scores the daily_intelligence rows created in the last N days
@@ -52,6 +56,11 @@ SHARE_GE5_BAND = (0.10, 0.15)   # informational: the former criterion-3 band for
 MAX_SINGLE_SCORE_SHARE = 0.50   # criterion 3: no one score value above this
 REGRESSION_FLOOR = 6     # criterion 4: surface rows originally >= 6 stay >= 6
 PASS_RATE = 0.90
+BAND_DIRECT_MIN = 7      # criterion 5: a `direct`-band row must score >= this (RULE 3's 7–8 DIRECT)
+BAND_WATCH_MAX = 6       # criterion 5: a `watch`-band row must score <= this (RULE 3's 6 WATCH)
+BAND_PASS_RATE = 0.80    # criterion 5: the recall each band must reach
+EXPECTED_BANDS = ("", "direct", "watch")   # the `expected_band` column's legal values
+DEFAULT_RUNS = 3         # the majority-of-3 protocol
 
 # A RULE 1 DISCARD is not stored in production, so it has no score. For grading
 # it counts as the lowest possible value: it satisfies `suppress` (<= 4) and
@@ -119,6 +128,25 @@ def score_article(
     }
 
 
+def majority_result(results: list[dict]) -> dict:
+    """The majority-of-N protocol: of N `score_article` results for one row,
+    the run whose score is the median stands — for three runs, the score two
+    of them agree on, else the middle one. Runs the seam failed on (score
+    None) do not vote; with an even count the LOWER median is taken (the
+    conservative pick). When every run failed, the first failed result is
+    returned so the row is excluded from the criteria as before."""
+    voting = [r for r in results if r["score"] is not None]
+    if not voting:
+        return results[0]
+    median = sorted(r["score"] for r in voting)[(len(voting) - 1) // 2]
+    return next(r for r in voting if r["score"] == median)
+
+
+def score_article_majority(config: dict, *, runs: int, **kwargs) -> dict:
+    """`score_article` run `runs` times, reduced by `majority_result`."""
+    return majority_result([score_article(config, **kwargs) for _ in range(max(1, runs))])
+
+
 # ---------------------------------------------------------------------------
 # csv mode — the labeled set
 # ---------------------------------------------------------------------------
@@ -131,6 +159,20 @@ def _grade(tier: str, score: Optional[int]) -> str:
         return str(score >= SURFACE_MIN)
     if tier == "suppress":
         return str(score <= SUPPRESS_MAX)
+    return ""
+
+
+def _grade_band(band: str, score: Optional[int]) -> str:
+    """Criterion 5's formula (issue #109): a `direct` row passes at
+    >= BAND_DIRECT_MIN, a `watch` row at <= BAND_WATCH_MAX (surfacing at all
+    is criterion 1's job). Blank for an unbanded row and for a row the seam
+    failed on."""
+    if score is None or not band:
+        return ""
+    if band == "direct":
+        return str(score >= BAND_DIRECT_MIN)
+    if band == "watch":
+        return str(score <= BAND_WATCH_MAX)
     return ""
 
 
@@ -165,9 +207,10 @@ def _prompt_fingerprint(config: dict) -> str:
     return spec.system_fingerprint
 
 
-def run_csv(path_in: str, path_out: str, workers: int) -> int:
+def run_csv(path_in: str, path_out: str, workers: int, runs: int = DEFAULT_RUNS) -> int:
     config = _load_config()
     print(f"Insight prompt fingerprint: {_prompt_fingerprint(config)}")
+    print(f"Runs per row: {runs} (the median run stands)")
     with open(path_in, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         fieldnames = list(reader.fieldnames or [])
@@ -175,8 +218,9 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
     print(f"Loaded {len(rows)} rows from {os.path.relpath(path_in, _REPO_ROOT)}")
 
     def _one(r: dict) -> dict:
-        return score_article(
+        return score_article_majority(
             config,
+            runs=runs,
             headline=r["headline"],
             summary=r["article_summary"],
             publication=r.get("source_publication", ""),
@@ -194,6 +238,7 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
         r["revised_score"] = res["score"]
         r["revised_rationale"] = res["rationale"]
         r["pass"] = _grade(r["expected_tier"], res["score"])
+        r["band_pass"] = _grade_band(r.get("expected_band", ""), res["score"])
 
     with open(path_out, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
@@ -265,6 +310,23 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
     for r in regressed:
         print(_fmt_row(r))
 
+    # 5. Band recall (issue #109): the rows RULE 3's DIRECT list names must
+    #    land in 7–8, and the named-competitor WATCH rows must not be promoted
+    #    with them — a ceiling at 6 leaves the per-segment cap nothing to rank.
+    print("\n5. BAND")
+    band_ok = True
+    for band, label in (("direct", f">= {BAND_DIRECT_MIN}"), ("watch", f"<= {BAND_WATCH_MAX}")):
+        banded = [r for r in surface if r.get("expected_band") == band]
+        hits = [r for r in banded if r["band_pass"] == "True"]
+        misses = [r for r in banded if r["band_pass"] == "False"]
+        ok = len(banded) > 0 and len(hits) / len(banded) >= BAND_PASS_RATE
+        band_ok = band_ok and ok
+        print(f"  {band:<7}{len(hits)}/{len(banded)} rows {label} "
+              f"({len(hits)/max(len(banded),1):.1%}, need >= {BAND_PASS_RATE:.0%}) -> {'PASS' if ok else 'FAIL'}")
+        for r in misses:
+            print(_fmt_row(r))
+    verdicts.append(band_ok)
+
     # Context: the per-tier means, and which unlabeled rows the rubric lifts.
     def _mean(rs: list[dict]) -> float:
         return sum(r["revised_score"] for r in rs) / len(rs) if rs else float("nan")
@@ -277,7 +339,8 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
 
     overall = all(verdicts)
     print(f"\nOVERALL: {'PASS' if overall else 'FAIL'}  "
-          f"(recall {verdicts[0]}, precision {verdicts[1]}, distribution {verdicts[2]}, threshold {verdicts[3]})")
+          f"(recall {verdicts[0]}, precision {verdicts[1]}, distribution {verdicts[2]}, "
+          f"threshold {verdicts[3]}, band {verdicts[4]})")
     return 0 if overall else 1
 
 
@@ -287,14 +350,16 @@ def run_csv(path_in: str, path_out: str, workers: int) -> int:
 
 def run_replay(days: int, path_out: str, workers: int) -> int:
     from daily_intelligence_repo import _repo
-    from run_instant import naive_utcnow
+    from run_instant import PRODUCTION_MODE, naive_utcnow, visible_modes
     from scoring import Scoring
 
     config = _load_config()
     print(f"Insight prompt fingerprint: {_prompt_fingerprint(config)}")
     scorer = Scoring.from_config(config)
     cutoff = naive_utcnow() - timedelta(days=days)
-    rows = _repo().fetch_since(cutoff)
+    # The rows the cron scored: the production run mode's visible set. A QA
+    # ingestion's test-mode rows are not what went out in an email.
+    rows = _repo().fetch_since(cutoff, modes=visible_modes(PRODUCTION_MODE))
     print(f"Fetched {len(rows)} daily_intelligence rows created after {cutoff.isoformat()}")
 
     def _one(r: dict) -> dict:
@@ -350,13 +415,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     p_csv.add_argument("--input", default=CSV_IN)
     p_csv.add_argument("--output", default=CSV_OUT)
     p_csv.add_argument("--workers", type=int, default=6)
+    p_csv.add_argument("--runs", type=int, default=DEFAULT_RUNS,
+                       help="score each row this many times and keep the median run (majority-of-3)")
     p_rep = sub.add_parser("replay", help="re-score recent daily_intelligence rows")
     p_rep.add_argument("--days", type=int, default=5)
     p_rep.add_argument("--output", default=REPLAY_OUT)
     p_rep.add_argument("--workers", type=int, default=6)
     args = parser.parse_args(argv)
     if args.mode == "csv":
-        return run_csv(args.input, args.output, args.workers)
+        return run_csv(args.input, args.output, args.workers, args.runs)
     return run_replay(args.days, args.output, args.workers)
 
 

@@ -145,6 +145,21 @@ zero-I/O purity is untouched.
   at 3 (76% of rows) and cards fell from ~22/day to ~3/day. Reversed by the
   RULE 3 recalibration above, not by reverting: the pre-#62 rubric surfaced
   market-report boilerplate at 6. `backtest/` holds the labeled acceptance set.
+- **Score-6 ceiling** — the recalibration's own compression (issue #109): in the
+  six production crons after PR #99 (2026-09-09 → 16), 136 rows scored 6, two
+  scored 7 and none 8+, with the events RULE 3's DIRECT list names verbatim
+  (named-target M&A, priced input moves, supplier distress) all at 6 — so every
+  card tied and the per-segment cap picked by storage order. Two independent
+  fixes: the caps break a score tie by recency (`report._rank_by_materiality`,
+  the ordering the Watch List and appendix already used), and the labeled set
+  carries an `expected_band` (`direct` / `watch`) that the backtest gates on
+  (criterion 5, majority-of-3) so a band above WATCH is an acceptance criterion
+  before the prompt is reworded — by band membership: DIRECT's heading names
+  the default for its own classes, WATCH's covers the rest, and a distributor
+  is filed as a supplier so its named acquisition is an input-cost event.
+  Five real-model passes (`docs/prompt-engineering.md`); the shipped prompt
+  (`6162facea570`) put 21/21 `direct` rows at 7–8, 37/37 recall, 39/39
+  precision, and the first 9 the set has seen.
 - **Relevance thresholds** — what a materiality score means for the report:
   **visible** (≥ `visible_impact_threshold`, default 6), **weak-relevance**
   (supporting context, `supporting_impact_threshold ≤ score < visible`), and the

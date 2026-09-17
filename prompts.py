@@ -250,7 +250,9 @@ relevant article and is NEVER a reason to score it low — you supply the implie
 VALUE-CHAIN ACTOR: the trigger entity, or any other company that makes, sells, or distributes
 polymers, resins, compounds, masterbatch, pigments, inks, additives, adhesives, composites,
 battery or EV materials, or their feedstocks — Americhem's customers, suppliers,
-distributors, and competitors. ABSENT TRIGGER ENTITY: a query on one company often returns
+distributors, and competitors. A distributor (Univar, Brenntag, Nexeo, H.M. Royal) is a
+SUPPLIER to Americhem: it sets the price and allocation of the additives, pigments, and
+resins Americhem buys through it, so its deals are input-cost events. ABSENT TRIGGER ENTITY: a query on one company often returns
 another's news. If the trigger entity is absent or incidental but the article is about
 ANOTHER value-chain actor's event (Siegwerk's ink capacity for a Sun Chemical query;
 Cambium's aerospace adhesive or a composites developer's hydrogen-line program for an
@@ -293,46 +295,67 @@ higher. Each floor band is a closed list: put the article in the band whose list
      never one company's settlement.
 
 4 — THIN: correct entity, real but thin. A CEO/CFO/COO change; a bare earnings beat or
-     miss — results that report NO price, volume, or capacity change (results that DO
-     report one are band 6, or DIRECT when it is an input price: Dow's "PE price up 20%"
-     is 7, never 4); results from a prior fiscal year; an end product that merely USES a
+     miss — results that report NO price, volume, capacity, or guidance change (results
+     that DO report one are band 6, or DIRECT when it is an input price: Dow's "PE price
+     up 20%" is 7, never 4); results from a prior fiscal year; an end product that merely USES a
      named polymer, however it is cleared or certified (an FDA-cleared tray made of Ultem,
      a sponge, an analyzer); a corporate spin-off or IT project; RULE 7's
      uncertain-relevance exit. Never a WATCH event that merely lacks a stated Americhem
      effect.
 
 The event bands are read in this order: DIRECT (7–8) first, then WATCH (6), then 5 — an
-article that fits DIRECT is DIRECT even if it could also be called generic.
+article that fits DIRECT is DIRECT even if it could also be called generic; STRATEGIC (9–10)
+lifts a DIRECT event that meets its bar.
 
-7–8 — DIRECT: the event is on an input Americhem buys or a company it trades through.
+7–8 — DIRECT (the default for an event that names an input price, a supplier's distress, or
+     a deal target in Americhem's supply chain or channel): the event is on an input Americhem
+     buys or a company it trades through. An event in this list is 7 or 8 — 9 or 10 when it
+     also meets STRATEGIC, below — never 6:
      - a resin, recyclate, or pigment PRICE REPORT or price-direction call — Plastics News
        monthly moves (PE / PP / PET / PS / PC / ABS, R-PET / R-PP, TiO2), "resin markets
-       swing as buyers regain leverage", "prices could go up again in August" — with or
-       without a figure: these are input prices, never macro statistics
+       swing as buyers regain leverage", "prices could go up again in August", "recyclate
+       prices pressured by cheaper virgin material" — with or without a figure: these are
+       input prices, never macro statistics
      - an announced price increase on resin, TiO2 and other pigments, carbon black, nylon /
        caprolactam, or PVC, including a supplier's quarterly results that report one (Dow:
        PE price +20%; Chemours: TiO2 +2%)
      - a feedstock or logistics disruption that names the polymers hit (Hormuz: polyester
        and spandex) — a war, strait closure, or storm counts; the geography of the
        disruption does not make it a statistic or a "generic" event
-     - M&A, divestiture, or plant sale with a NAMED target or buyer in Americhem's supply
-       chain or sales channel (Univar acquires Interpur; Sudarshan buys Clariant's dyes
-       plant; Mutares buys SABIC's ETP business; a customer buying out a JV partner)
-     - a supplier's bankruptcy, force majeure, or exit; a named customer program; a
+     - an acquisition, divestiture, plant sale, or JV buy-out with a NAMED target or buyer in
+       Americhem's supply chain or sales channel — a distributor buying a distributor or a
+       product line (Univar acquires Interpur; Univar acquires H.M. Royal), a pigment or
+       additive maker buying a plant (Sudarshan buys Clariant's dyes plant), a buyer taking a
+       supplier's business (Mutares buys SABIC's ETP business), a customer buying out a JV
+       partner: a "distributor acquisition", "channel expansion via acquisition",
+       "distribution expansion via acquisition", "channel consolidation", and a "plant
+       divestiture" that changes supply ownership are DIRECT events, score 8 whichever
+       region the deal is in — Americhem buys and sells in North America, EMEA, and Asia,
+       so an EMEA distributor deal or a Swiss plant sale is as DIRECT as a US one. A
+       distributor's acquisition is an input-cost and allocation event for the additives
+       and pigments Americhem buys through it, scored like a supplier's price increase,
+       never like a "channel dynamics" watch item
+     - a material maker's or distributor's financial distress — a Chapter 11 or other
+       bankruptcy filing, administration, a court's mediation order or ruling in the case,
+       restructuring, force majeure, allocation, or exit (Trinseo files Chapter 11; Trinseo's
+       results amid restructuring and force majeure): "supplier distress" is DIRECT, 7 or 8
+     - a customer's program award or material qualification that names the material; a
        masterbatch / compounding competitor head-to-head with a stated quantity, date, or
        plant
 
-6 — WATCH (the default for an actor's event): a VALUE-CHAIN ACTOR does something
+6 — WATCH (the default for every other actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
-     - a price change, force majeure, allocation, outage, or shortage on a polymer, resin,
-       pigment, additive, or feedstock (with a named input or a figure it is DIRECT, below)
-     - capacity opened, closed, expanded, idled, moved, or sold — a plant, line, lab, or
+     - an allocation, outage, or shortage on a polymer, resin, pigment, additive, or feedstock
+       with no price move stated (a price change, or a supplier's force majeure, is DIRECT, above)
+     - capacity opened, closed, expanded, idled, or moved — a plant, line, lab, or
        capability build — in any RULE 4 end-market (a supplier's EV battery-materials lab
-       counts)
-     - a JV, distribution-agreement change, or a deal whose counterparty is not named, in
-       Americhem's supply chain or sales channel (a NAMED target or buyer is DIRECT, below)
-     - financial distress — bankruptcy, restructuring, going-concern warning, guidance
-       cut — or a head-to-head competitor's earnings beat and guidance raise
+       counts; a plant SOLD to a named buyer is DIRECT, above)
+     - a JV formed, a new distribution agreement, or a deal whose counterparty is not
+       named, in Americhem's supply chain or sales channel (an acquisition with a NAMED
+       target or buyer is DIRECT, above)
+     - a customer's or a compounding competitor's going-concern warning or guidance cut, or
+       a head-to-head competitor's earnings beat and guidance raise (a material maker's or
+       distributor's bankruptcy, restructuring, or force majeure is DIRECT, above)
      - a launch, new grade, certification, volume milestone, partnership, or development /
        qualification program by a MATERIAL MAKER (resin, compound, masterbatch, additive,
        adhesive, ink, or composite) in a RULE 4 segment — development-stage counts when it
@@ -344,14 +367,15 @@ article that fits DIRECT is DIRECT even if it could also be called generic.
        decision (thermoplastic composite LH2 lines, 50–60% lighter, is 6)
      - quarterly results — a supplier's, customer's, or competitor's — that report a price,
        volume, or capacity change for an input or a RULE 4 end-market (an input PRICE
-       change reported in results is DIRECT, below); a head-to-head competitor's (Avient,
+       change reported in results is DIRECT, above); a head-to-head competitor's (Avient,
        Techmer PM, Teknor Apex, RTP, Penn Color, Ampacet) beat-and-raise
      - regulation binding a RULE 4 end-market in a market Americhem sells into (federal
        US, a US state, the EU or UK, or a trigger entity's home market): a rule taking
        effect, a deadline set, a fee schedule (EPR, PFAS, recycled content, food contact),
        even when reported through an explainer. NOT a guide, roundup, or explainer that
        sets no new obligation, and NOT a settlement or consent decree (band 3).
-     A named counterparty, plant, grade, input, figure, or effective date confirms 6.
+     A named counterparty, plant, grade, or effective date confirms 6 over 5; a named INPUT
+     PRICE, deal target, or supplier in distress is DIRECT, above.
 
 5 — DEMAND PRINT, or a generic event that fits neither band above. (a) The two macro prints that matter to a compounder:
      the US ISM Manufacturing PMI — a reading, a consensus preview, or a bank lifting its
@@ -372,8 +396,9 @@ Where the article supports a direct effect, identify which business unit or cost
 affected and in what direction. Where the event is a RULE 3 WATCH-or-above event (score 5+),
 the So-What states the mechanism IMPLIED by the actor's value-chain position, framed as an
 inference rather than as a fact the article reports — e.g. "As a TiO2 supplier, Chemours'
-increase raises Americhem's pigment input cost" or "Univar's added distribution reach can
-shift additive channel pricing". That is the required So-What for such articles: a
+increase raises Americhem's pigment input cost" or "Univar's purchase of H.M. Royal
+concentrates additive sourcing in one distributor and raises Americhem's additive
+input-price and allocation exposure". That is the required So-What for such articles: a
 low-exposure template on a WATCH event understates it and is wrong. Where the article
 supports no direct effect and the event is FLOOR or 4-band (RULE 3), take one of the exits
 below instead of naming a business unit speculatively.

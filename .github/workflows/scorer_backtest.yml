@@ -9,8 +9,9 @@ run-name: >-
 # the cron. Runs automatically on a pull request that touches the prompt, the
 # gate, the set, or the runner (a same-repo PR sees the secrets, and the
 # workflow file on the PR branch is the one that runs — so a branch can carry
-# its own acceptance test), and by hand for the replay. Costs ~150 nano calls
-# per csv run; no Serper, Firecrawl, Supabase writes, or email.
+# its own acceptance test), and by hand for the replay. Costs ~450 nano calls
+# per csv run (150 rows x 3 runs — the majority-of-3 protocol, issue #109);
+# no Serper, Firecrawl, Supabase writes, or email.
 on:
   pull_request:
     paths:
@@ -40,6 +41,10 @@ on:
         description: "parallel LLM calls"
         required: false
         default: "6"
+      runs:
+        description: "csv only: score each row this many times and keep the median run (majority-of-3)"
+        required: false
+        default: "3"
 
 permissions:
   contents: read
@@ -52,6 +57,7 @@ env:
   MODE: ${{ github.event.inputs.mode || 'csv' }}
   REPLAY_DAYS: ${{ github.event.inputs.replay_days || '5' }}
   WORKERS: ${{ github.event.inputs.workers || '6' }}
+  RUNS: ${{ github.event.inputs.runs || '3' }}
 
 jobs:
   backtest:
@@ -80,7 +86,7 @@ jobs:
           if [ "$MODE" = "replay" ]; then
             python scripts/backtest_scorer.py replay --days "$REPLAY_DAYS" --workers "$WORKERS" | tee backtest/report.txt
           else
-            python scripts/backtest_scorer.py csv --workers "$WORKERS" | tee backtest/report.txt
+            python scripts/backtest_scorer.py csv --workers "$WORKERS" --runs "$RUNS" | tee backtest/report.txt
           fi
 
       - name: Upload the filled-in set and the report

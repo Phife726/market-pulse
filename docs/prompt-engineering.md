@@ -55,3 +55,86 @@ article that lacks a stated Americhem effect ("a template is for articles that
 matter little", #74) turns nearly every article into a template at the band's
 floor — the score-3 floor (`CONTEXT.md`). The template must be confined to
 articles that are already in a floor band for another reason.
+
+## A band's heading label moves the classes that already read as that band; the rest follow the words in the list
+
+The score-6 ceiling (issue #109, 2026-09-16): six production crons after the
+recalibration put 136 rows at 6 and none at 8+, with the events DIRECT names
+verbatim — Univar/Interpur, Sudarshan/Clariant, AdvanSix caprolactam — all at
+6. Two passes against the labeled set, graded on the majority-of-3 protocol
+(`--runs 3`, the median run stands) with the `expected_band` labels as the
+criterion (21 `direct` rows must score ≥ 7, 11 `watch` rows ≤ 6):
+
+- **Pass 1 — the heading default** (`9ea7f27943b6`). DIRECT's heading gained
+  its own "default for …" label (only WATCH's had said "default"), WATCH's
+  bullets stopped restating DIRECT's members with carve-outs, and four
+  carve-outs that still said "DIRECT, below" — a pointer to a band that has
+  sat *above* WATCH since pass 9 — were turned round. Result: every priced
+  input moved (Dow PE, Chemours TiO2 ×2, AdvanSix, PET resin, the resin-swing
+  call; 9/21 direct, with 8s appearing for the first time), and **every
+  named-target deal and supplier bankruptcy stayed at 6** — 12/12 misses in
+  those two classes. Their rationales were WATCH's words back: "distribution
+  expansion via acquisition", "channel consolidation", "plant sale changes
+  supply ownership", "restructuring", "supplier distress". The heading label
+  was enough for a class the model already read as an input price; for a
+  class it read through another band's vocabulary, the label did nothing.
+- **Pass 2 — the model's own words** (`588c432b0f15`). Those phrases were
+  moved into DIRECT's list as members ("distribution expansion via
+  acquisition", "channel consolidation", a plant's "supply ownership change",
+  a Chapter 11 filing, a court's mediation order, "supplier distress"), with
+  the labeled rows as examples (Univar acquires H.M. Royal; Trinseo files
+  Chapter 11), and the hooks were removed from WATCH's lists ("or sold",
+  "distribution-agreement change", "financial distress — restructuring").
+  Result: **the distress class moved** (Trinseo's filing and its
+  force-majeure quarter both 8; 12/21 direct), the priced inputs held, and
+  **the named-target acquisitions did not** — the Interpur rows 0/4, the
+  H.M. Royal rows 2/4 on near-identical text, Sudarshan/Clariant 0/2 — with
+  rationales that now quoted DIRECT's new members back ("distributor
+  acquisition", "channel expansion via acquisition") and still scored 6.
+  Precision dipped to 35/39 on three one-notch flips of rows the floor names
+  verbatim (EV sales, a bus-camera trial, a trade-show exhibit): edge noise,
+  not the reword.
+- **Pass 3 — margin and region** (`23e480082652`). The deal bullet stated
+  its own score ("score 8 whichever region the deal is in"), named the
+  newest rationale words, and band 4's "bare" result gained "or guidance
+  change" so a competitor's beat-and-raise is not floored before WATCH reads
+  it. Result: 11/21 — the acquisition rows 0/8 this time, rationales
+  identical in vocabulary to the passing rows' and still at 6; precision
+  back to 37/39. **A stated score inside a bullet did not move a class the
+  model had already decided was a 6.** What the classes that did move share
+  is a cost mechanism (an input price, a supplier's supply); the one that
+  never moved was framed — by the rubric, by RULE 6's own example So-What
+  ("can shift additive channel pricing"), and by every rationale — as
+  "channel dynamics".
+- **Pass 4 — the mechanism the model already scores** (`aa6681a868fe`). The actor paragraph files a distributor (Univar, Brenntag,
+  Nexeo, H.M. Royal) as a SUPPLIER that sets the price and allocation of
+  what Americhem buys through it; the deal bullet scores a distributor's
+  acquisition "like a supplier's price increase, never like a 'channel
+  dynamics' watch item"; RULE 6's example So-What names the input-price and
+  allocation exposure. Result: **17/21 direct (81%), 39/39 precision, 36/37
+  recall, distribution 6:19 / 7:14 / 8:8** — the H.M. Royal rows 4/4, the
+  Interpur rows 2/4, and the rationales now say "allocation and input-cost
+  exposure". The two Sudarshan/Clariant rows (a pigment plant sale) and the
+  recyclate price report are the remaining misses at 6, and Avient's bare
+  beat-and-raise is the recall miss the floor keeps taking (band 4 wins over
+  WATCH by construction). The pass is one row above the 80% line — inside
+  the run-to-run noise — so the production watch in issue #109 (`direct > 0`
+  on every one of the first five crons, `surfaced_count` inside 8–15) is the
+  real acceptance, not this sample. A second run of the identical prompt
+  gave 19/21 and 11/11.
+- **Pass 5 — the review clause** (`6162facea570`, shipped). Codex review of
+  PR #112 read DIRECT's "is 7 or 8, never 6" as forbidding STRATEGIC for a
+  supplier exit or a compounder acquisition; the clause now says "9 or 10
+  when it also meets STRATEGIC, below" and the reading-order sentence says
+  STRATEGIC lifts a DIRECT event that meets its bar. Result: **21/21 direct,
+  37/37 recall, 39/39 precision, distribution 6:15 / 7:8 / 8:18 / 9:1** —
+  the first 9 any run has produced (the EU packaging rules, the whole-market
+  binding regulation STRATEGIC names). Three samples of the pass-4 wording
+  and one of pass 5 all clear the gate; the band above WATCH is open.
+
+Corollary, added to the one above: a class the model has already decided is
+a 6 is not moved by naming it in the higher band's list, by writing its
+score into the bullet, or by pointing the carve-outs the right way. It moves
+when the rubric gives it the *mechanism* the model already scores at that
+level — here, an input-cost effect — in the actor definition and in the
+So-What example, not only in the band.
