@@ -36,7 +36,7 @@ Workflows: `market_pulse.yml` (production, Mon–Fri 10:00 UTC, ingestion then d
 
 Two sequential scripts share a Supabase database:
 
-- **`ingestion_engine.py`** — load targets → discover candidates (Serper, optionally ZoomInfo) → per-candidate **gauntlet** (`process_candidate` → `Stored | Suppressed(reason) | Error`: security block, link reputation, market-report/unscrapable gates, URL-hash and fuzzy-headline dedup, Firecrawl scrape, LLM synthesis, upsert) under the **run budget** → `_finalize_run`: one macro-summary LLM call written to `daily_summaries` (an accounting-only row when nothing can be summarized), then the synthesis-outage guard.
+- **`ingestion_engine.py`** — load targets → discover candidates (Serper, optionally ZoomInfo; hand-supplied seed URLs) → per-candidate **gauntlet** (`process_candidate` → `Stored | Suppressed(reason) | Error`: security block, link reputation, market-report/unscrapable gates, URL-hash and fuzzy-headline dedup, Firecrawl scrape, LLM synthesis, upsert) under the **run budget** → `_finalize_run`: one macro-summary LLM call written to `daily_summaries` (an accounting-only row when nothing can be summarized), then the synthesis-outage guard.
 - **`delivery_engine.py`** — `resolve_summary_row(run)` (the summary row and its key) → fetch the **delivery window** → `prepare_report` (pure `report.assemble_report` + the one effectful write-back + thematic synthesis) → `renderer.render_report` → `send_email` → stamp `delivered_at`.
 
 Modules around them, by role:
@@ -50,7 +50,7 @@ Modules around them, by role:
 | **Config** | `config` (every env/YAML read; `validate_environment` fails fast at startup), `targets` (sole parser of `targets.yaml`; `TargetsError` on any shape error) |
 | **Offline tools** | `scripts/` (`enrich_targets`, `review_resolution`, `sync_zoominfo_ids`, `probe_serper`, `embed_logo`, `show_prompts`, `backtest_scorer`), `target_enricher.py` |
 
-Control files: `targets.yaml` (what to search; **group order is the degradation policy** — Tier 1 priority-segment concepts, Tier 2 entities, Tier 3 other concepts, Tier 4 `macro_*` groups last) and `market_pulse_config.yaml` (report thresholds/caps, segment taxonomy, `security.blocked_domains`). Database: `schema.sql` plus idempotent `migrations/NNN_*.sql`, applied by hand in the Supabase SQL editor.
+Control files: `targets.yaml` (what to search; **group order is the degradation policy** — Tier 0 `seed_urls` (hand-picked articles, never searched), Tier 1 priority-segment concepts, Tier 2 entities, Tier 3 other concepts, Tier 4 `macro_*` groups last) and `market_pulse_config.yaml` (report thresholds/caps, segment taxonomy, `security.blocked_domains`). Database: `schema.sql` plus idempotent `migrations/NNN_*.sql`, applied by hand in the Supabase SQL editor.
 
 ## Conventions that span files
 

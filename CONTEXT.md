@@ -61,8 +61,10 @@ production + in-memory adapters (tests inject the fake at the consumer):
   `eligible(target) -> bool`, `discover(target) -> list[dict]` (provider-neutral
   candidate dicts), `gate(candidate, target) -> Optional[GateDecision]` (an
   optional false-positive post-filter the *consumer* applies, so suppression
-  accounting stays in the ledger). Adapters: `SerperProvider` (always eligible,
-  never gates), `ZoomInfoProvider` (feature-flagged via `config`, owns the
+  accounting stays in the ledger). Adapters: `SerperProvider` (eligible for
+  every searched target, never gates), `SeedProvider` (eligible for seed
+  targets only; returns the target's `seed_url` as its one candidate),
+  `ZoomInfoProvider` (feature-flagged via `config`, owns the
   ZoomInfo relevance gate — loads `target_metadata.yaml` itself), and the fake
   `FakeDiscoveryProvider`. The consumer (`ingestion_engine.discover_candidates` +
   `execute_pipeline`) fans in `_discovery_providers()` in registry order (Serper
@@ -470,7 +472,10 @@ zero-I/O purity is untouched.
 - **Target** (`targets.py`) — one unit of discovery work the ingestion loop
   runs, as a plain dict (like Insight and candidates): an **entity target** (one
   active company under an entity-mode group — one Serper query per name) or a
-  **concept target** (one active concept-mode group — one combined OR query).
+  **concept target** (one active concept-mode group — one combined OR query) or
+  a **seed target** (one active entry under a `search_mode: seed` group's
+  `urls:` — a hand-supplied article URL, never searched, no lookback; named
+  for its `trigger_entity`).
   Carries `name`, `category` (its group key — the discovery category rows are
   stored under), `search_mode`, the pre-built `query`, the discovery settings,
   and for entities the ZoomInfo id/flag and the resolution hints
