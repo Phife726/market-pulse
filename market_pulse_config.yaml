@@ -165,8 +165,8 @@ commercial_segments:
       Medical devices, pharmaceutical packaging, diagnostics equipment, regulated
       healthcare polymer applications, biocompatible and sterilizable plastics,
       clean-room compounding. Includes FDA/EMA regulatory signals specific to
-      medical materials, and antimicrobial healthcare textiles. Do NOT use for
-      general consumer products that merely happen to be plastic.
+      medical materials. Do NOT use for general consumer products that merely
+      happen to be plastic.
 
   fibers:
     label: "Fibers"
@@ -174,9 +174,7 @@ commercial_segments:
       Synthetic fibers, textiles, nonwovens, filaments, yarn, performance fabric,
       carpet fiber, geotextiles. Polyester, nylon, polypropylene, and acrylic fiber
       chains. Includes fiber-grade resin pricing and end-market apparel/home-textiles
-      demand signals, and antimicrobial, odor-control and conductive fiber and textile
-      technology (silver-based treatments, e-textiles — Americhem's Noble Biomaterials
-      business). Route finished consumer textile products to Packaging or
+      demand signals. Route finished consumer textile products to Packaging or
       Industrial instead.
 
   transportation_automotive:

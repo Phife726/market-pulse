@@ -236,9 +236,6 @@ COMPETITOR DEFAULT: A competitor's product launch, contract win, capacity expans
 other success is "Negative" or "Neutral" for Americhem by default — it is a
 competitive threat, not an Americhem opportunity. Tag it "Positive" only if the article
 demonstrates growth in a market Americhem serves that outweighs the competitive threat.
-OWN-PORTFOLIO DEFAULT: an acquisition, launch, contract win or capacity expansion by
-Americhem or a business it owns (Noble Biomaterials) is Americhem's own success —
-"Positive" by default, never a competitive threat.
 
 Also assign sentiment_score (1–10, kept for compatibility) using the same directional logic:
 1–3 = Negative range, 4–6 = Neutral range, 7–10 = Positive range.
@@ -261,11 +258,6 @@ ANOTHER value-chain actor's event (Siegwerk's ink capacity for a Sun Chemical qu
 Cambium's aerospace adhesive or a composites developer's hydrogen-line program for an
 Advanced Composites query), score that actor's event exactly as if it were the trigger.
 RULE 1's DISCARD is for a WRONG entity, never an absent one.
-AMERICHEM'S OWN PORTFOLIO: Americhem and the businesses it owns — Noble Biomaterials
-(acquired October 2026: IONIC+, X-STATIC and CIRCUITEX antimicrobial, odor-control and
-conductive textile technology) — are the company itself, not a value-chain actor. Their
-events change Americhem's own product line, capacity, customers and integration work
-directly, so they are scored as Americhem's own business, never as a competitor's.
 
 The floor bands (1, 2, 3, 4) are checked first; an article that fits one never scores
 higher. Each floor band is a closed list: put the article in the band whose list names it.
@@ -350,9 +342,6 @@ lifts a DIRECT event that meets its bar.
      - a customer's program award or material qualification that names the material; a
        masterbatch / compounding competitor head-to-head with a stated quantity, date, or
        plant
-     - an event at Americhem itself or a business it owns — a launch, plant, capacity,
-       contract, or partnership at Americhem or Noble Biomaterials: an "own-portfolio
-       event" is DIRECT, 7 or 8
 
 6 — WATCH (the default for every other actor's event): a VALUE-CHAIN ACTOR does something
      operationally material, or regulation binds a RULE 4 end-market. Any one of:
@@ -395,9 +384,7 @@ lifts a DIRECT event that meets its bar.
      plant, grade, input, figure, or date.
 
 9–10 — STRATEGIC: Americhem must act — a key supplier's exit, a binding regulation with a
-     near deadline across a whole end-market, a major competitor acquiring a compounder,
-     an acquisition or divestiture by Americhem itself (Americhem acquires Noble
-     Biomaterials).
+     near deadline across a whole end-market, a major competitor acquiring a compounder.
 
 {rule4}
 
@@ -411,9 +398,7 @@ the So-What states the mechanism IMPLIED by the actor's value-chain position, fr
 inference rather than as a fact the article reports — e.g. "As a TiO2 supplier, Chemours'
 increase raises Americhem's pigment input cost" or "Univar's purchase of H.M. Royal
 concentrates additive sourcing in one distributor and raises Americhem's additive
-input-price and allocation exposure" or "Americhem's acquisition of Noble Biomaterials
-adds antimicrobial and conductive textile technology to its Fibers and Healthcare
-portfolio". That is the required So-What for such articles: a
+input-price and allocation exposure". That is the required So-What for such articles: a
 low-exposure template on a WATCH event understates it and is wrong. Where the article
 supports no direct effect and the event is FLOOR or 4-band (RULE 3), take one of the exits
 below instead of naming a business unit speculatively.
