@@ -138,3 +138,44 @@ score into the bullet, or by pointing the carve-outs the right way. It moves
 when the rubric gives it the *mechanism* the model already scores at that
 level — here, an input-cost effect — in the actor definition and in the
 So-What example, not only in the band.
+
+## A new class's own vocabulary can pull an existing class down
+
+The own-portfolio rule (issue: Americhem's acquisition of Noble Biomaterials,
+2026-10-27, PRs #114 / #115). The rubric had no band for Americhem's *own*
+news; every rule scored an event by its effect on Americhem from outside.
+Graded on the majority-of-3 protocol against a same-day baseline of the
+shipped prompt (`6162facea570`, run 40969602480: recall 35/37, precision
+39/39, direct 20/21, watch 10/11):
+
+- **Pass 1 — mechanism inside RULE 3's opening** (`4570ea4e3e5f`). An
+  "AMERICHEM'S OWN PORTFOLIO" paragraph directly after "RULE 1's DISCARD is
+  for a WRONG entity, never an absent one", plus an own-portfolio sentiment
+  default, a DIRECT bullet, a STRATEGIC entry and a RULE 6 example. Recall
+  **33/37 (fail)**: the new misses' rationales were the absent-trigger
+  failure that paragraph's neighbour forbids ("Sun Chemical not named",
+  "unclear Americhem linkage"). Direct 18/21.
+- **Pass 2 — mechanism moved to RULE 2** (`dc56e6bace68`). RULE 3's opening
+  byte-identical to shipped again. Recall recovered (36/37), but direct fell
+  to **14/21 (fail)**: all six extra misses were *other* companies'
+  named-target deals (Univar/Interpur ×4, Univar/H.M. Royal, Mutares/SABIC)
+  at 6, rationales in DIRECT's own words. The prompt now named Americhem's
+  own acquisitions in four places (RULE 2, DIRECT, STRATEGIC, the RULE 6
+  example). Replay ≥ 6 rose ~20–30% over the shipped prompt.
+- **Pass 3 — the new class named once** (`2111e11cf912`, run 40973374289).
+  Americhem's own acquisition appears only in the DIRECT own-portfolio
+  bullet, with the "9 or 10 when it also meets STRATEGIC" clause the other
+  DIRECT members use; RULE 2 keeps the mechanism without "acquisition", and
+  the RULE 6 example is a capacity expansion. **PASS: recall 36/37,
+  precision 39/39, direct 17/21, watch 10/11.** Direct is one row above the
+  line and three below the baseline (the Interpur rows ×3 and
+  Sudarshan/Clariant at 6), so this sits inside the noise this file warns
+  about; production is the acceptance. The labeled set has no own-portfolio
+  rows, so the backtest shows only that nothing broke.
+
+Corollary: a rule for a new class, written in an existing class's
+vocabulary, competes with it. Repeating "an acquisition by Americhem" across
+four rules read as acquisitions being *Americhem's* class, and other
+companies' deals slid back to 6. Name the new class once, in the band it
+belongs to, and keep it out of the paragraphs (the absent-trigger rule, the
+competitor default) the existing classes depend on.
