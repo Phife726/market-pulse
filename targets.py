@@ -171,10 +171,13 @@ def _load_document(text: str, *, source: str) -> dict:
 def parse_targets(text: str, *, source: str) -> list[dict]:
     """Parse `text` — the `targets.yaml` document — into the active search targets.
 
-    Two search modes:
+    Three search modes:
     - ``entity``: one Serper query per active company name under ``entities:``.
     - ``concept``: one combined OR query for the whole group (``active: true``
       required at group level).
+    - ``seed``: one target per active entry under ``urls:`` (``url``,
+      ``trigger_entity``, optional ``title``) — never searched; the
+      SeedProvider hands ``seed_url`` to the gauntlet as the only candidate.
 
     Returns:
         List of target dicts, each carrying ``name``, ``category`` (the group
@@ -314,8 +317,41 @@ def _walk(config: dict, *, source: str) -> tuple[list[dict], list[dict]]:
                 "min_article_length": min_article_length,
             })
 
+        elif mode == "seed":
+            # Hand-supplied article URLs, run through the same gauntlet as a
+            # discovered candidate (the SeedProvider hands each one over). No
+            # lookback applies, so a story a search window missed can still
+            # be ingested; URL-hash dedup makes each entry one-shot.
+            for position, seed in enumerate(_list_field(owner, group_cfg, "urls")):
+                seed_owner = f"{owner}, url #{position + 1}"
+                if not isinstance(seed, dict):
+                    raise TargetsError(f"{seed_owner}: expected a mapping (url, trigger_entity, active)")
+                url = seed.get("url")
+                if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+                    raise TargetsError(f"{seed_owner}: needs an http(s) 'url'")
+                trigger_entity = seed.get("trigger_entity")
+                if not isinstance(trigger_entity, str) or not trigger_entity:
+                    raise TargetsError(f"{seed_owner}: needs a non-empty string 'trigger_entity'")
+                title = seed.get("title", "")
+                if not isinstance(title, str):
+                    raise TargetsError(f"{seed_owner}: 'title' must be a string")
+                if not _bool_setting(seed_owner, seed, "active", False):
+                    continue
+                targets.append({
+                    "name": trigger_entity,
+                    "category": group_name,
+                    "search_mode": "seed",
+                    "query": "",  # never searched — SeedProvider returns seed_url as-is
+                    "results_per_entity": 1,
+                    "lookback_hours": lookback_hours,
+                    "min_article_length": min_article_length,
+                    "seed_url": url,
+                    "seed_title": title,
+                })
+
         else:
-            raise TargetsError(f"{owner}: unknown search_mode '{mode}' (expected 'entity' or 'concept')")
+            raise TargetsError(
+                f"{owner}: unknown search_mode '{mode}' (expected 'entity', 'concept' or 'seed')")
 
     if not targets:
         raise TargetsError(f"{source}: no active targets — nothing for a run to do")

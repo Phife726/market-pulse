@@ -1,7 +1,8 @@
 """Discovery-provider seam — how the ingestion engine consumes article sources.
 
-One Protocol (``DiscoveryProvider``) with two production adapters
-(``SerperProvider`` always on; ``ZoomInfoProvider`` feature-flagged) and an
+One Protocol (``DiscoveryProvider``) with three production adapters
+(``SerperProvider`` for every searched target; ``ZoomInfoProvider``
+feature-flagged; ``SeedProvider`` for hand-supplied ``seed`` targets) and an
 in-memory fake (``FakeDiscoveryProvider``). Matches the house pattern of the
 ``llm`` / ``daily_intelligence_repo`` seams: callers do ``from discovery import
 _discovery_providers`` and tests inject the fake at the consumer module, e.g.
@@ -117,13 +118,14 @@ def _serper_candidate(raw_url: str, title: str) -> dict:
 
 
 class SerperProvider:
-    """Always-on Serper.dev news discovery. Never gates (Serper candidates are
-    not company-linked, so the ZoomInfo false-positive gate does not apply)."""
+    """Serper.dev news discovery for every searched (entity / concept) target.
+    Never gates (Serper candidates are not company-linked, so the ZoomInfo
+    false-positive gate does not apply)."""
 
     name = "serper"
 
     def eligible(self, target: dict) -> bool:
-        return True
+        return target.get("search_mode") != "seed"
 
     def discover(self, target: dict) -> list[dict]:
         raw_results = discover_urls(
@@ -208,6 +210,37 @@ class ZoomInfoProvider:
 
 
 # ---------------------------------------------------------------------------
+# Seed
+# ---------------------------------------------------------------------------
+
+class SeedProvider:
+    """Hand-supplied article URLs (``search_mode: seed`` in targets.yaml): the
+    target's ``seed_url`` is its one candidate, with no search and no lookback.
+    Never gates — a person chose the URL."""
+
+    name = "seed"
+
+    def eligible(self, target: dict) -> bool:
+        return target.get("search_mode") == "seed"
+
+    def discover(self, target: dict) -> list[dict]:
+        return [{
+            "url": target["seed_url"],
+            "title": target.get("seed_title", ""),
+            "provider": self.name,
+            "source_publication": "",
+            "published_at": "",
+            "description": "",
+            "categories": [],
+            "zoominfo_company_id": None,
+            "raw": {},
+        }]
+
+    def gate(self, candidate: dict, target: dict) -> "Optional[relevance_gate.GateDecision]":
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Test fake + provider registry
 # ---------------------------------------------------------------------------
 
@@ -248,10 +281,11 @@ _providers_singleton: Optional[list[DiscoveryProvider]] = None
 
 def _discovery_providers() -> list[DiscoveryProvider]:
     """Return the process-wide discovery providers, in fan-in order (Serper
-    first, then ZoomInfo). Tests inject fakes at the consumer module."""
+    first, then ZoomInfo, then Seed — a seed target is eligible for Seed
+    alone). Tests inject fakes at the consumer module."""
     global _providers_singleton
     if _providers_singleton is None:
-        _providers_singleton = [SerperProvider(), ZoomInfoProvider()]
+        _providers_singleton = [SerperProvider(), ZoomInfoProvider(), SeedProvider()]
     return _providers_singleton
 
 

@@ -4,6 +4,7 @@
 # ============================================================
 # ENTITY MODE  — one Serper query per active company name
 # CONCEPT MODE — one combined OR query per group
+# SEED MODE    — hand-supplied article URLs, no search (see seed_urls below)
 #
 # To pause an entity:     set active: false (no Python change needed)
 # To add an entity:       append to entities: list
@@ -32,6 +33,26 @@ discovery:
   results_per_entity: 2
   lookback_hours: 24
   min_article_length: 500
+
+# ── TIER 0 · SEED URLS ────────────────────────────────────────
+# Hand-picked articles the search window missed. Each active entry is fed to
+# the normal gauntlet (scrape, LLM scoring, dedup) exactly once — after it is
+# stored, later runs skip it as a duplicate URL, so an old entry is harmless
+# (deactivate or delete it whenever). Keep this group first: a seed costs one
+# scrape and must run before the budget can stop the run.
+seed_urls:
+  search_mode: seed
+  urls:
+    - url: "https://www.businesswire.com/news/home/20261027511851/en/Americhem-Acquires-Noble-Biomaterials-Expanding-Its-Global-Footprint-in-Functional-Additives-and-Advanced-Materials"
+      title: "Americhem Acquires Noble Biomaterials, Expanding Its Global Footprint in Functional Additives and Advanced Materials"
+      trigger_entity: Noble Biomaterials
+      active: true  # added 2026-10-29; closed deal missed by the 24h window
+    # Backup copy of the same story — activate only if the Business Wire
+    # scrape fails (both active would likely surface two cards for one deal).
+    - url: "https://www.plasticstoday.com/medical/americhem-acquires-noble-biomaterials-in-growth-push"
+      title: "Polymer Maker Expands Antimicrobial, Conductive Portfolio"
+      trigger_entity: Noble Biomaterials
+      active: false
 
 # ── TIER 1 · PRIORITY COMMERCIAL SEGMENTS ─────────────────────
 # The eight priority commercial segments (healthcare, fibers,
@@ -224,10 +245,31 @@ engineered_resins:
     - patents
 
 # ── TIER 2 · ENTITY MODE GROUPS ───────────────────────────────
-# Competitors → customers → suppliers. Customer order is preserved as-is: no
-# authoritative priority-customer list exists in the repo, so ordering within
-# this tier is not curated. Entities are sacrificed before Tier 1 but after
-# Tier 3/macro — dedup absorbs day-over-day re-discoveries of entity news.
+# Americhem's own portfolio → competitors → customers → suppliers. Customer
+# order is preserved as-is: no authoritative priority-customer list exists in
+# the repo, so ordering within this tier is not curated. Entities are
+# sacrificed before Tier 1 but after Tier 3/macro — dedup absorbs day-over-day
+# re-discoveries of entity news.
+
+# Americhem itself and the businesses it owns — first in the tier, so its own
+# news is never the entity coverage a budget-limited run drops. Noble
+# Biomaterials (X-STATIC, IONIC+, CIRCUITEX; acquired 2026-10-27).
+americhem_portfolio:
+  search_mode: entity
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+  entities:
+    - name: Americhem
+      zoominfo_company_id: null
+      domain: americhem.com
+      active: true
+    - name: Noble Biomaterials
+      zoominfo_company_id: null
+      domain: noblebiomaterials.com
+      active: true
+
 
 competitors:
   search_mode: entity
@@ -290,6 +332,23 @@ competitors:
     - name: Grafe Advanced Polymers
       zoominfo_company_id: 347431641
       domain: grafe.com
+      active: true
+    # Noble Biomaterials' competitors in antimicrobial / odor-control textile
+    # technology (added 2026-10-29 with the acquisition).
+    - name: Polygiene
+      zoominfo_company_id: null
+      active: true
+    - name: HeiQ
+      zoominfo_company_id: null
+      active: true
+    - name: Sanitized AG
+      zoominfo_company_id: null
+      active: true
+    - name: Microban International
+      zoominfo_company_id: null
+      active: true
+    - name: Sciessent
+      zoominfo_company_id: null
       active: true
 
 customers:
@@ -748,6 +807,37 @@ electronics:
   exclude_any:
     - "video game industry"
     - "video games"
+
+# Noble Biomaterials' end of the business (added 2026-10-29): antimicrobial,
+# odor-control and conductive textile technology, Noble's distinctive brand
+# names (IONIC+ is left out — Google drops the "+" and "Ionic" alone is noise),
+# and the biocide rules that bind silver-based textile treatments. Kept out of
+# the Tier 1 fibers group so these terms do not dilute its query.
+functional_textiles:
+  search_mode: concept
+  active: true
+  include_any:
+    - "antimicrobial textile"
+    - "antimicrobial fabric"
+    - "odor control fabric"
+    - "odor control textile"
+    - "silver fiber"
+    - "conductive textile"
+    - "conductive yarn"
+    - "e-textiles"
+    - "smart textiles"
+    - "X-STATIC"
+    - "CIRCUITEX"
+    - "Noble Biomaterials"
+    - "Biocidal Products Regulation textile"
+    - "treated article exemption"
+  include_all: []
+  exclude_any:
+    - patents
+    - "securities analyst reports"
+    - "market report"
+    - "market size"
+    - CAGR
 
 # ── TIER 4 · MACROECONOMIC OUTLOOK GROUPS ─────────────────────
 # Dedicated macro-signal discovery feeding the Macroeconomic Outlook section

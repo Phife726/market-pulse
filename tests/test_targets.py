@@ -452,6 +452,52 @@ def test_stub_target_mirrors_the_loaders_key_set(tmp_path):
     assert set(stub_target("X", search_mode="concept")) == set(by_mode["concept"])
 
 
+def test_load_targets_seed_group(tmp_path):
+    """Each active `urls:` entry is one seed target, named for its trigger
+    entity and categorised by its group; an inactive entry is still validated
+    but never loaded."""
+    loaded = _load(tmp_path, """\
+        seed_urls:
+          search_mode: seed
+          urls:
+            - url: "https://news.com/a?utm=x"
+              title: "Americhem acquires Noble"
+              trigger_entity: Noble Biomaterials
+              active: true
+            - url: "https://news.com/b"
+              trigger_entity: Paused Co
+        healthcare:
+          search_mode: concept
+          active: true
+          include_any: ["medical polymers"]
+        """)
+    seed = loaded[0]
+    assert [t["name"] for t in loaded] == ["Noble Biomaterials", "healthcare"]
+    assert seed["search_mode"] == "seed"
+    assert seed["category"] == "seed_urls"
+    assert seed["seed_url"] == "https://news.com/a?utm=x"
+    assert seed["seed_title"] == "Americhem acquires Noble"
+    assert set(seed) == set(stub_target("X", search_mode="concept")) | {"seed_url", "seed_title"}
+
+
+@pytest.mark.parametrize("entry, needle", [
+    ("- just-a-string", "url #1: expected a mapping"),
+    ("- {trigger_entity: X, active: true}", "needs an http(s) 'url'"),
+    ("- {url: 'ftp://x.com/a', trigger_entity: X}", "needs an http(s) 'url'"),
+    ("- {url: 'https://x.com/a', active: true}", "needs a non-empty string 'trigger_entity'"),
+    ("- {url: 'https://x.com/a', trigger_entity: X, title: 7}", "'title' must be a string"),
+    ("- {url: 'https://x.com/a', trigger_entity: X, active: 'yes'}", "active"),
+])
+def test_load_targets_rejects_seed_shape_errors(tmp_path, entry, needle):
+    path = tmp_path / "targets.yaml"
+    path.write_text(
+        "seed_urls:\n  search_mode: seed\n  urls:\n    " + entry + "\n"
+        "healthcare:\n  search_mode: concept\n  active: true\n  include_any: [x]\n")
+    with pytest.raises(TargetsError, match="seed_urls") as excinfo:
+        load_targets(str(path))
+    assert needle in str(excinfo.value)
+
+
 def test_load_targets_ignores_a_stray_top_level_scalar(tmp_path):
     """Top-level scalars (a note, a version stamp) are not groups."""
     assert _load(tmp_path, """\
@@ -676,11 +722,25 @@ _TIER1_PRIORITY_ORDER = [
 ]
 
 
-def test_tier1_priority_segments_are_first_eight_in_order():
-    """The first eight loaded targets are the Tier 1 priority segments in the
-    exact required order — so a budget-exhausted run keeps them first."""
+def _searched(targets: list[dict]) -> list[dict]:
+    """The targets that run a search — every one but the Tier 0 seeds."""
+    return [t for t in targets if t["search_mode"] != "seed"]
+
+
+def test_seed_targets_lead_every_searched_target():
+    """Tier 0 seeds (one scrape each) run before any search, so a budget
+    stop can never drop a hand-picked article."""
     targets = _real_targets()
-    first_eight = [t["name"] for t in targets[:8]]
+    modes = [t["search_mode"] for t in targets]
+    seeds = modes.count("seed")
+    assert modes[:seeds] == ["seed"] * seeds
+    assert "seed" not in modes[seeds:]
+
+
+def test_tier1_priority_segments_are_first_eight_in_order():
+    """The first eight searched targets are the Tier 1 priority segments in the
+    exact required order — so a budget-exhausted run keeps them first."""
+    first_eight = [t["name"] for t in _searched(_real_targets())[:8]]
     assert first_eight == _TIER1_PRIORITY_ORDER
 
 
@@ -715,8 +775,8 @@ def test_known_inactive_entities_stay_absent():
 
 
 def test_all_loaded_queries_nonempty_after_reorder():
-    """Every loaded target (entity and concept) still produces a query."""
-    targets = _real_targets()
+    """Every searched target (entity and concept) still produces a query."""
+    targets = _searched(_real_targets())
     assert targets
     for t in targets:
         assert t["query"].strip(), t["name"]
@@ -729,11 +789,11 @@ def test_all_loaded_queries_nonempty_after_reorder():
 
 def test_tail_reserve_defaults_leave_headroom_for_tail_groups():
     """Against the real targets.yaml: the total concept demand is the eight
-    priority groups at 4 plus the thirteen other concept/macro groups at 2 —
+    priority groups at 4 plus the fourteen other concept/macro groups at 2 —
     the per-group override must reach the reserve — and it leaves the entity
     tier a majority of the cap; the clock reserve sits inside the deadline."""
     budget = RunBudget.for_targets(_real_targets())
-    assert budget.concept_demand_ahead[0] == 8 * 4 + 13 * 2
+    assert budget.concept_demand_ahead[0] == 8 * 4 + 14 * 2
     assert budget.concept_demand_ahead[0] < budget.max_scrapes / 2
     assert 0 < budget.tail_reserve_seconds < budget.deadline_seconds
 
@@ -859,7 +919,7 @@ _BASELINE_ACTIVE_CONCEPT_TARGETS = 10
 
 
 def _concept_targets(targets: list[dict]) -> list[dict]:
-    return [t for t in targets if "zoominfo_news" not in t]
+    return [t for t in targets if t["search_mode"] == "concept"]
 
 
 def test_targets_yaml_parses_and_discovery_settings_locked():
@@ -925,16 +985,34 @@ def test_targets_yaml_active_concept_targets_count():
     """Concept-target count = the #38 baseline (10) + 3 innovation/regional
     groups, minus the absorbed generic `economic` group, plus the 7 dedicated
     macro groups, plus 2 net from the transportation split (1 combined group
-    replaced by 3)."""
+    replaced by 3), plus `functional_textiles` (the Noble acquisition)."""
     concepts = _concept_targets(_real_targets())
-    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS) + 2
+    assert len(concepts) == _BASELINE_ACTIVE_CONCEPT_TARGETS + 3 - 1 + len(_MACRO_GROUP_KEYS) + 2 + 1
+
+
+# Entities added since the baseline (2026-10-29, the Noble acquisition):
+# Americhem and Noble Biomaterials, plus Noble's five textile competitors.
+_NOBLE_ENTITY_TARGETS = (
+    "Americhem", "Noble Biomaterials",
+    "Polygiene", "HeiQ", "Sanitized AG", "Microban International", "Sciessent",
+)
 
 
 def test_targets_yaml_entity_targets_unchanged():
-    """Coverage expansion must not touch entity monitoring."""
+    """Coverage expansion must not touch entity monitoring: the baseline plus
+    exactly the entities added deliberately since."""
     targets = _real_targets()
-    entities = [t for t in targets if "zoominfo_news" in t]
-    assert len(entities) == _BASELINE_ACTIVE_ENTITY_TARGETS
+    entities = [t["name"] for t in targets if "zoominfo_news" in t]
+    assert set(_NOBLE_ENTITY_TARGETS) <= set(entities)
+    assert len(entities) == _BASELINE_ACTIVE_ENTITY_TARGETS + len(_NOBLE_ENTITY_TARGETS)
+
+
+def test_americhem_portfolio_leads_the_entity_tier():
+    """Americhem's own businesses are the first entity targets, so a
+    tail-reserve skip never drops them before a competitor or customer."""
+    entities = [t for t in _real_targets() if t["search_mode"] == "entity"]
+    assert [t["name"] for t in entities[:2]] == ["Americhem", "Noble Biomaterials"]
+    assert {t["category"] for t in entities[:2]} == {"americhem_portfolio"}
 
 
 def test_targets_yaml_new_concept_groups_carry_no_zoominfo_ids():

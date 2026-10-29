@@ -1581,3 +1581,45 @@ def test_main_returns_normally_on_a_healthy_run(monkeypatch):
     # env's run mode rides on it, which is how a QA run keys its own row.
     assert len(seen) == 1 and isinstance(seen[0], RunInstant)
     assert seen[0].test_mode
+
+
+# ===========================================================================
+# Seed URLs — a hand-picked article through the real provider fan-in
+# ===========================================================================
+
+def test_a_seed_url_is_stored_without_any_search(monkeypatch, run_ingestion_pipeline):
+    """A `search_mode: seed` entry goes through the real loader and the real
+    provider fan-in: Serper is never called for it, and its URL is scraped,
+    synthesized under its trigger entity, and stored normalized."""
+    import discovery
+
+    real_discover_candidates = ingestion_engine.discover_candidates
+    providers = [discovery.SerperProvider(), discovery.SeedProvider()]
+
+    # Recorded, not raised: discover_candidates isolates provider failures.
+    searched: list = []
+    monkeypatch.setattr(
+        discovery, "discover_urls", lambda query, lookback, n: searched.append(query) or [])
+    synthesized: list = []
+
+    def _synthesize(text: str, url: str, entity: str, category: str) -> dict:
+        synthesized.append((url, entity, category))
+        return stub_insight(url)
+
+    run = run_ingestion_pipeline(
+        targets_yaml=(
+            "seed_urls:\n"
+            "  search_mode: seed\n"
+            "  urls:\n"
+            "    - url: 'https://news.com/noble?utm_source=x'\n"
+            "      trigger_entity: Noble Biomaterials\n"
+            "      active: true\n"
+        ),
+        candidates=lambda target: real_discover_candidates(target, providers),
+        insight=_synthesize,
+    )
+    assert searched == []
+    assert synthesized == [("https://news.com/noble", "Noble Biomaterials", "seed_urls")]
+    [payload] = run.stored
+    assert payload["trigger_entity"] == "Noble Biomaterials"
+    assert payload["category"] == "seed_urls"

@@ -3,7 +3,7 @@ Tests for the discovery-provider seam (discovery.py).
 
 Discovery is exercised by injecting providers, not by patching requests: the
 DiscoveryProvider Protocol lets a FakeDiscoveryProvider stand in for Serper /
-ZoomInfo at the consumer, and each production adapter is tested directly for
+ZoomInfo / Seed at the consumer, and each production adapter is tested directly for
 its own eligibility / discovery / gate behaviour.
 """
 from functools import partial
@@ -14,6 +14,7 @@ import discovery
 import relevance_gate
 import zoominfo_client
 from discovery import (
+    SeedProvider,
     SerperProvider,
     ZoomInfoProvider,
     FakeDiscoveryProvider,
@@ -28,16 +29,25 @@ _target = partial(
     stub_target, name="Magna International", category="customers", zoominfo_company_id=12345678)
 
 
+#: A seed target as `load_targets` maps a `search_mode: seed` entry.
+_seed_target = partial(
+    stub_target, name="Noble Biomaterials", category="seed_urls", search_mode="seed",
+    query="", results_per_entity=1,
+    seed_url="https://news.com/noble?utm_source=x", seed_title="Americhem acquires Noble")
+
+
 # ===========================================================================
 # SerperProvider
 # ===========================================================================
 
-def test_serper_provider_name_and_always_eligible():
+def test_serper_provider_name_and_eligible_for_every_searched_target():
     p = SerperProvider()
     assert p.name == "serper"
     assert p.eligible(_target()) is True
     # Even a concept target with no company id is Serper-eligible.
     assert p.eligible(stub_target("Anything", search_mode="concept")) is True
+    # A seed target is never searched.
+    assert p.eligible(_seed_target()) is False
 
 
 def test_serper_provider_discover_builds_neutral_shape(monkeypatch):
@@ -236,11 +246,41 @@ def test_fake_provider_can_be_ineligible_and_can_raise():
 
 def test_discovery_providers_registry_order_and_singleton():
     providers = discovery._discovery_providers()
-    assert [p.name for p in providers] == ["serper", "zoominfo"]
+    assert [p.name for p in providers] == ["serper", "zoominfo", "seed"]
     # Cached singleton — same list instance across calls.
     assert discovery._discovery_providers() is providers
     discovery._reset_discovery_providers()
     assert discovery._discovery_providers() is not providers
+
+
+# ===========================================================================
+# SeedProvider
+# ===========================================================================
+
+def test_seed_provider_is_eligible_for_seed_targets_only():
+    p = SeedProvider()
+    assert p.name == "seed"
+    assert p.eligible(_seed_target()) is True
+    assert p.eligible(_target()) is False
+    assert p.eligible(stub_target("Anything", search_mode="concept")) is False
+
+
+def test_seed_provider_returns_the_seed_url_as_its_one_candidate():
+    [c] = SeedProvider().discover(_seed_target())
+    # The raw URL — normalization is the gauntlet's job, before hashing.
+    assert c["url"] == "https://news.com/noble?utm_source=x"
+    assert c["title"] == "Americhem acquires Noble"
+    assert c["provider"] == "seed"
+    assert c["zoominfo_company_id"] is None
+
+
+def test_seed_provider_never_gates():
+    assert SeedProvider().gate({"title": "anything"}, _seed_target()) is None
+
+
+def test_zoominfo_is_ineligible_for_seed_targets(monkeypatch):
+    monkeypatch.setenv("ZOOMINFO_NEWS_ENABLED", "true")
+    assert ZoomInfoProvider().eligible(_seed_target()) is False
 
 
 # ── Serper time window ────────────────────────────────────────────────────────
